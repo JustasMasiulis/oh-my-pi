@@ -299,7 +299,9 @@ export class InspectorPanel implements Component {
 
 	/** A name-only catalog (MCP resources/prompts) under its budget until expanded. */
 	#nativeNameList(head: string, noun: string, entries: MCPRuntimeCatalogItem[]): NativeNode {
-		const limit = this.#expanded ? entries.length : cappedRowCount(entries.length, MCP_TOOL_BUDGET);
+		const limit = this.#expanded
+			? entries.length
+			: cappedRowCount(entries.length, MCP_TOOL_BUDGET, Infinity, () => entries[MCP_TOOL_BUDGET]!.name);
 		const { shown, hidden } = visibleMcpTools(entries, limit);
 		const children: NativeChild[] = shown.map(entry => text([span(entry.name, "accent mono")]));
 		if (hidden > 0) children.push(this.#nativeMore(hidden, noun));
@@ -433,7 +435,11 @@ export class InspectorPanel implements Component {
 	/** A pattern list for a `kv` value, capped until expanded. */
 	#nativeList(items: string[] | undefined): TspSpan[] | undefined {
 		if (!items || items.length === 0) return undefined;
-		const cap = this.#expanded ? items.length : cappedRowCount(items.length, PREVIEW_LIMITS.COLLAPSED_LINES);
+		const cap = this.#expanded
+			? items.length
+			: cappedRowCount(items.length, PREVIEW_LIMITS.COLLAPSED_LINES, Infinity, () =>
+					sanitizeDisplayText(items[PREVIEW_LIMITS.COLLAPSED_LINES]!),
+				);
 		const shown = items.slice(0, cap).map(item => sanitizeDisplayText(item));
 		const hidden = items.length - shown.length;
 		const spans: TspSpan[] = [span(shown.join("\n"), "accent")];
@@ -610,7 +616,14 @@ export class InspectorPanel implements Component {
 			const resourcesBody: string[] = [];
 			const { shown, hidden } = visibleMcpTools(
 				snap.resources,
-				this.#expanded ? snap.resources.length : cappedRowCount(snap.resources.length, MCP_TOOL_BUDGET),
+				this.#expanded
+					? snap.resources.length
+					: cappedRowCount(
+							snap.resources.length,
+							MCP_TOOL_BUDGET,
+							width,
+							() => `  ${theme.fg("accent", snap.resources[MCP_TOOL_BUDGET]!.name)}`,
+						),
 			);
 			for (const resource of shown) {
 				resourcesBody.push(`  ${theme.fg("accent", resource.name)}`);
@@ -624,7 +637,14 @@ export class InspectorPanel implements Component {
 			const promptsBody: string[] = [];
 			const { shown, hidden } = visibleMcpTools(
 				snap.prompts,
-				this.#expanded ? snap.prompts.length : cappedRowCount(snap.prompts.length, MCP_TOOL_BUDGET),
+				this.#expanded
+					? snap.prompts.length
+					: cappedRowCount(
+							snap.prompts.length,
+							MCP_TOOL_BUDGET,
+							width,
+							() => `  ${theme.fg("accent", snap.prompts[MCP_TOOL_BUDGET]!.name)}`,
+						),
 			);
 			for (const prompt of shown) {
 				promptsBody.push(`  ${theme.fg("accent", prompt.name)}`);
@@ -912,10 +932,17 @@ export class InspectorPanel implements Component {
 			this.#pushLabeled(lines, label, items[0], width);
 			return;
 		}
-		const cap = this.#expanded ? items.length : cappedRowCount(items.length, PREVIEW_LIMITS.COLLAPSED_LINES);
+		const indent = "             ";
+		const cap = this.#expanded
+			? items.length
+			: cappedRowCount(
+					items.length,
+					PREVIEW_LIMITS.COLLAPSED_LINES,
+					width,
+					() => `${indent}${items[PREVIEW_LIMITS.COLLAPSED_LINES]!}`,
+				);
 		const shown = items.slice(0, cap);
 		const hidden = items.length - shown.length;
-		const indent = "             ";
 		if (hidden > 0) {
 			this.#pushLabeled(lines, label, `${items.length} patterns`, width, "dim");
 			for (const item of shown) this.#pushWrapped(lines, item, width, indent);

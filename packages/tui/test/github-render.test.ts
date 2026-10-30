@@ -47,4 +47,45 @@ describe("github search result card", () => {
 		expect(expanded).toContain("https://github.com/oh-my-pi/pi/pull/12");
 		expect(expanded).not.toContain(expandKeyHint());
 	});
+
+	it("shows a single result's lone hidden field outright instead of offering Ctrl+O", async () => {
+		const theme = (await getThemeByName("dark"))!;
+		const text = ["Results: 1", "", "- #12 fix: retry on 529", "  URL: https://github.com/oh-my-pi/pi/pull/12"].join(
+			"\n",
+		);
+		const collapsed = Bun.stripANSI(
+			githubToolRenderer
+				.renderResult({ content: [{ type: "text", text }] }, { expanded: false, isPartial: false }, theme, {
+					op: "search_prs",
+					query: "is:open",
+				})
+				.render(120)
+				.join("\n"),
+		);
+		expect(collapsed).toContain("https://github.com/oh-my-pi/pi/pull/12");
+		expect(collapsed).not.toContain(expandKeyHint());
+	});
+});
+
+describe("github fallback output card", () => {
+	it("shows one line past the collapsed cap instead of a `… 1 more line` row", async () => {
+		const theme = (await getThemeByName("dark"))!;
+		const rows = Array.from({ length: 9 }, (_, i) => `row ${i}`).join("\n");
+		const render = (text: string) =>
+			Bun.stripANSI(
+				githubToolRenderer
+					.renderResult({ content: [{ type: "text", text }] }, { expanded: false, isPartial: false }, theme, {
+						op: "repo_view",
+					})
+					.render(120)
+					.join("\n"),
+			);
+		const single = render(rows);
+		expect(single).toContain("row 8");
+		expect(single).not.toContain("more line");
+
+		const capped = render(`${rows}\nrow 9`);
+		expect(capped).not.toContain("row 8");
+		expect(capped).toContain("2 more lines");
+	});
 });

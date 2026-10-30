@@ -10,10 +10,13 @@ import { Memo } from "../native/memo";
 import { colorTone } from "../native/tone";
 
 const NO_LINES: readonly string[] = [];
+const NOTICE_PADDING_X = 1;
 
 /** Render-time state supplied to a notice presentation. */
 export interface MessageNoticeContext {
 	readonly expanded: boolean;
+	/** Columns the body draws in; 0 until the notice first renders. */
+	readonly width: number;
 }
 
 /** Header and optional detail rows rendered inside a notice box. */
@@ -60,6 +63,7 @@ export class MessageNoticeComponent extends Container {
 	readonly #options: MessageNoticeOptions;
 	readonly #box: Box;
 	#expanded = false;
+	#width = 0;
 	#toolActivityVisible = true;
 	#version = 0;
 	readonly #native = new Memo();
@@ -68,7 +72,7 @@ export class MessageNoticeComponent extends Container {
 		super();
 		this.#options = options;
 		const severity = options.severity ?? "warning";
-		this.#box = new Box(1, 1, options.background ?? (text => theme.inverse(theme.fg(severity, text))));
+		this.#box = new Box(NOTICE_PADDING_X, 1, options.background ?? (text => theme.inverse(theme.fg(severity, text))));
 		this.#box.setIgnoreTight(true);
 		if (options.leadingSpace !== false) this.addChild(new Spacer(1));
 		this.addChild(this.#box);
@@ -96,7 +100,7 @@ export class MessageNoticeComponent extends Container {
 		this.#version++;
 		for (const child of this.#box.children) child.dispose?.();
 		this.#box.clear();
-		const presentation = this.#options.presentation({ expanded: this.#expanded });
+		const presentation = this.#options.presentation({ expanded: this.#expanded, width: this.#width });
 		const header = presentation.icon ? `${presentation.icon} ${presentation.header}` : presentation.header;
 		this.#box.addChild(new Text(header, 0, 0));
 		const body = presentation.body
@@ -123,6 +127,12 @@ export class MessageNoticeComponent extends Container {
 
 	override render(width: number): readonly string[] {
 		if (!this.#toolActivityVisible) return NO_LINES;
+		// The presentation may fit its body to the width, so a new width rebuilds it.
+		const bodyWidth = Math.max(0, width - 2 * NOTICE_PADDING_X);
+		if (bodyWidth !== this.#width) {
+			this.#width = bodyWidth;
+			this.refresh();
+		}
 		return super.render(width);
 	}
 

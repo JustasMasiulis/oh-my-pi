@@ -10,7 +10,7 @@ import { prompt } from "@oh-my-pi/pi-utils";
 import taskSummaryTemplate from "../../coding-agent/src/prompts/tools/task-summary.md" with { type: "text" };
 import type { NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { type CoordinationDetails, waitToolRenderer } from "@oh-my-pi/pi-tui/tools/wait";
-import { formatMoreItems, formatStatusIcon, PREVIEW_LIMITS } from "@oh-my-pi/pi-tui/render/render-utils";
+import { expandKeyHint, formatMoreItems, formatStatusIcon, PREVIEW_LIMITS } from "@oh-my-pi/pi-tui/render/render-utils";
 import { decodeBench } from "./fixtures/job-widget-views";
 
 /** Every described node under `children`, depth first. */
@@ -388,6 +388,31 @@ describe("job renderer task-result preview", () => {
 			const lines = (component.render(100) as readonly string[]).map(line => Bun.stripANSI(line));
 			expect(lines[1]).toContain(`${Bun.stripANSI(formatStatusIcon("error", theme))} bg_11`);
 			expect(lines.at(-1)!.trim()).toBe(formatMoreItems(jobs.length - PREVIEW_LIMITS.COLLAPSED_ITEMS, "job", theme));
+		});
+
+		it("shows a settled job's one-line output outright instead of offering Ctrl+O", () => {
+			const render = (resultText: string) => {
+				const jobs = [
+					{
+						id: "bg_0",
+						type: "bash" as const,
+						status: "completed" as const,
+						label: "bench",
+						durationMs: 1_000,
+						resultText,
+					},
+				];
+				const result = { content: [{ type: "text" as const, text: "" }], details: { op: "wait" as const, jobs } };
+				const component = waitToolRenderer.renderResult(result, { expanded: false, isPartial: false }, theme);
+				return (component.render(100) as readonly string[]).map(line => Bun.stripANSI(line)).join("\n");
+			};
+			const single = render("42 pass, 0 fail");
+			expect(single).toContain("42 pass, 0 fail");
+			expect(single).not.toContain(expandKeyHint());
+
+			const multi = render("line one\nline two\nline three");
+			expect(multi).not.toContain("line one");
+			expect(multi).toContain(expandKeyHint());
 		});
 
 		it("caps live widget tiles on the collapsed card and counts the rest", () => {

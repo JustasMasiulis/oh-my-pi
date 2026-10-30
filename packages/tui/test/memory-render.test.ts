@@ -103,6 +103,20 @@ describe("recallToolRenderer", () => {
 		expect(expanded.some(line => line.includes("beta memory"))).toBe(true);
 	});
 
+	it("shows a lone recalled memory outright instead of hiding one row behind Ctrl+O", async () => {
+		const uiTheme = await theme();
+		const result = {
+			content: [{ type: "text", text: "Found 1 relevant memory (as of 2026-05-30 UTC):\n\n- alpha memory" }],
+		};
+		const collapsed = lines(
+			recallToolRenderer.renderResult(result as never, { expanded: false, isPartial: false }, uiTheme, {
+				query: "find stuff",
+			}),
+		);
+		expect(collapsed.some(line => line.includes("alpha memory"))).toBe(true);
+		expect(collapsed.some(line => line.includes("Expand"))).toBe(false);
+	});
+
 	it("flags an empty recall as a single warning line", async () => {
 		const uiTheme = await theme();
 		const result = { content: [{ type: "text", text: "No relevant memories found." }] };

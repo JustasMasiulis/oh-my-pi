@@ -44,6 +44,8 @@ export class EvalExecutionComponent extends Container {
 	// transcript's width-epoch resolution and committed-render bypass must
 	// observe that.
 	#blockVersion = 0;
+	// Width of the last render (0 before the first): a lone hidden line is revealed only once it is known to fit.
+	#renderWidth = 0;
 	#contentContainer: Container;
 	#outputPane: OutputPane;
 	readonly #code: string;
@@ -198,12 +200,26 @@ export class EvalExecutionComponent extends Container {
 		super.dispose();
 	}
 
+	override render(width: number): readonly string[] {
+		if (width !== this.#renderWidth) {
+			this.#renderWidth = width;
+			this.#updateDisplay();
+		}
+		return super.render(width);
+	}
+
 	#updateDisplay(): void {
 		// Only the collapsed preview hides lines; when expanded the footer must
 		// not keep advertising hidden lines / ctrl+o.
-		// A settled run's footer marker takes its own row: a lone hidden line shows instead.
+		// A settled run's footer marker takes its own row: a lone hidden line shows instead when it
+		// draws as one row (the earliest line, above the tail window).
 		const lineCount = this.#outputPane.lineCount;
-		const collapsedLines = this.#status === "running" ? PREVIEW_LINES : cappedRowCount(lineCount, PREVIEW_LINES);
+		const collapsedLines =
+			this.#status === "running"
+				? PREVIEW_LINES
+				: cappedRowCount(lineCount, PREVIEW_LINES, this.#outputPane.contentWidth(this.#renderWidth), () =>
+						this.#outputPane.lineAt(0),
+					);
 		const hiddenLineCount = this.#expanded ? 0 : Math.max(0, lineCount - collapsedLines);
 		this.#outputPane.configure({ collapsedMaxLines: Math.max(PREVIEW_LINES, collapsedLines) });
 

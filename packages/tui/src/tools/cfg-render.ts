@@ -55,7 +55,7 @@ export function renderCfgRead(
 	options: RenderResultOptions,
 	theme: Theme,
 ): Component {
-	return card((_width, expanded) => {
+	return card((width, expanded) => {
 		const meta: string[] = [];
 		if (details) {
 			meta.push(details.count === 1 ? "1 setting" : `${details.count} settings`);
@@ -72,7 +72,14 @@ export function renderCfgRead(
 		const body = firstText(result).trimEnd().split("\n");
 		const shown = cappedHeadLines(
 			body,
-			expanded ? body.length : cappedRowCount(body.length, PREVIEW_LIMITS.COLLAPSED_ITEMS),
+			expanded
+				? body.length
+				: cappedRowCount(
+						body.length,
+						PREVIEW_LIMITS.COLLAPSED_ITEMS,
+						width,
+						() => `  ${safe(body[PREVIEW_LIMITS.COLLAPSED_ITEMS])}`,
+					),
 		);
 		const rows = highlightCode(safe(shown.lines.join("\n")), "yaml", theme).map(line => `  ${line}`);
 		if (shown.hidden) rows.push(`  ${formatMoreRow(shown.hidden, "line", theme, { expanded })}`);

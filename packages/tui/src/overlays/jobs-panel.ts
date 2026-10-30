@@ -210,7 +210,12 @@ export class JobsSheet implements Component {
 					shortenEmbeddedPaths(replaceTabs(sanitizeText(detail.command))),
 					Math.max(1, width - 3),
 				);
-				const shownCount = cappedRowCount(commandRows.length, PREVIEW_LIMITS.EXPANDED_LINES);
+				const shownCount = cappedRowCount(
+					commandRows.length,
+					PREVIEW_LIMITS.EXPANDED_LINES,
+					width,
+					() => `   ${commandRows[PREVIEW_LIMITS.EXPANDED_LINES]!}`,
+				);
 				for (const line of commandRows.slice(0, shownCount)) lines.push(`   ${line}`);
 				const hidden = commandRows.length - shownCount;
 				if (hidden > 0) lines.push(truncateToWidth(`   … ${hidden} more command lines`, width));

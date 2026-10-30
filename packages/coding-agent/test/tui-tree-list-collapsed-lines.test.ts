@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { renderTreeList } from "@oh-my-pi/pi-tui/render/tree-list";
-import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
+import { Ellipsis, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 
 const stubTheme = {
 	fg: (_color: string, text: string) => text,
@@ -22,10 +22,12 @@ describe("renderTreeList maxCollapsedLines", () => {
 			const lines = renderTreeList(
 				{
 					items: ["first item with long details", "second item with long details"],
+					width: 200,
 					trailingSummary,
+					// Pin the ellipsis: the default follows whatever symbol preset an earlier test left active.
 					renderItem: (item, context) => [
-						truncateToWidth(item, 18 - (context.prefixWidth ?? 0)),
-						truncateToWidth("continued details", 18 - (context.prefixWidth ?? 0)),
+						truncateToWidth(item, 18 - (context.prefixWidth ?? 0), Ellipsis.Unicode),
+						truncateToWidth("continued details", 18 - (context.prefixWidth ?? 0), Ellipsis.Unicode),
 					],
 				},
 				customTheme,
@@ -45,6 +47,7 @@ describe("renderTreeList maxCollapsedLines", () => {
 		const collapsed = renderTreeList(
 			{
 				items: [largeGroup, smallGroup],
+				width: 200,
 				expanded: false,
 				maxCollapsedLines: 6,
 				itemType: "match",
@@ -64,6 +67,7 @@ describe("renderTreeList maxCollapsedLines", () => {
 		const collapsed = renderTreeList(
 			{
 				items,
+				width: 200,
 				expanded: false,
 				maxCollapsedLines: 4,
 				itemType: "match",
@@ -85,6 +89,7 @@ describe("renderTreeList maxCollapsedLines", () => {
 		const expanded = renderTreeList(
 			{
 				items: [largeGroup],
+				width: 200,
 				expanded: true,
 				maxCollapsedLines: 6,
 				itemType: "match",
@@ -107,6 +112,7 @@ describe("renderTreeList maxCollapsedLines", () => {
 		const collapsed = renderTreeList(
 			{
 				items,
+				width: 200,
 				expanded: false,
 				maxCollapsedLines: 4,
 				itemType: "change",
@@ -126,6 +132,7 @@ describe("renderTreeList maxCollapsedLines", () => {
 		const collapsed = renderTreeList(
 			{
 				items,
+				width: 200,
 				expanded: false,
 				maxCollapsedLines: 2,
 				itemType: "item",
@@ -148,6 +155,7 @@ describe("renderTreeList maxCollapsedLines", () => {
 		const collapsed = renderTreeList(
 			{
 				items,
+				width: 200,
 				expanded: false,
 				maxCollapsedLines: 10,
 				itemType: "item",
@@ -167,6 +175,7 @@ describe("renderTreeList maxCollapsedLines", () => {
 		const collapsed = renderTreeList(
 			{
 				items,
+				width: 200,
 				expanded: false,
 				maxCollapsedLines: 0,
 				itemType: "item",
@@ -184,6 +193,7 @@ describe("renderTreeList maxCollapsedLines", () => {
 		const collapsed = renderTreeList(
 			{
 				items,
+				width: 200,
 				expanded: false,
 				maxCollapsedLines: 3,
 				itemType: "item",
@@ -202,6 +212,7 @@ describe("renderTreeList maxCollapsedLines", () => {
 		const collapsed = renderTreeList(
 			{
 				items,
+				width: 200,
 				expanded: false,
 				maxCollapsedLines: 10,
 				itemType: "item",
@@ -220,6 +231,7 @@ describe("renderTreeList maxCollapsedLines", () => {
 		const collapsed = renderTreeList(
 			{
 				items,
+				width: 200,
 				expanded: false,
 				maxCollapsed: 2,
 				maxCollapsedLines: 100,
@@ -239,6 +251,7 @@ describe("renderTreeList maxCollapsedLines", () => {
 		const collapsed = renderTreeList(
 			{
 				items,
+				width: 200,
 				expanded: false,
 				maxCollapsed: 3,
 				itemType: "todo",
@@ -271,6 +284,7 @@ describe("renderTreeList maxCollapsedLines", () => {
 		const collapsed = renderTreeList(
 			{
 				items,
+				width: 200,
 				expanded: false,
 				maxCollapsedLines: 5,
 				itemType: "todo",

@@ -571,7 +571,7 @@ function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
 }
 
 /** Format status event with expanded detail lines. */
-function formatStatusEventExpanded(event: EvalStatusEvent, theme: Theme): string[] {
+function formatStatusEventExpanded(event: EvalStatusEvent, theme: Theme, width: number): string[] {
 	const lines: string[] = [];
 	const { op, ...data } = event;
 
@@ -579,9 +579,10 @@ function formatStatusEventExpanded(event: EvalStatusEvent, theme: Theme): string
 
 	const addItems = (items: unknown[], formatter: (item: unknown) => string, max = 5) => {
 		const arr = Array.isArray(items) ? items : [];
-		const shown = cappedRowCount(arr.length, max);
+		const itemRow = (i: number) => `  ${theme.fg("dim", formatter(arr[i]))}`;
+		const shown = cappedRowCount(arr.length, max, width, () => itemRow(max));
 		for (let i = 0; i < shown; i++) {
-			lines.push(`  ${theme.fg("dim", formatter(arr[i]))}`);
+			lines.push(itemRow(i));
 		}
 		if (arr.length > shown) {
 			lines.push(`  ${theme.fg("dim", formatMoreItems(arr.length - shown, "item", theme))}`);
@@ -590,9 +591,11 @@ function formatStatusEventExpanded(event: EvalStatusEvent, theme: Theme): string
 
 	const addPreview = (preview: string, maxLines = 3) => {
 		const sourceLines = String(preview).split("\n");
-		const previewLines = cappedHeadLines(sourceLines, cappedRowCount(sourceLines.length, maxLines));
+		const previewRow = (line: string) => `  ${theme.fg("toolOutput", truncateToWidth(replaceTabs(line), 80))}`;
+		const shownCount = cappedRowCount(sourceLines.length, maxLines, width, () => previewRow(sourceLines[maxLines]));
+		const previewLines = cappedHeadLines(sourceLines, shownCount);
 		for (const line of previewLines.lines) {
-			lines.push(`  ${theme.fg("toolOutput", truncateToWidth(replaceTabs(line), 80))}`);
+			lines.push(previewRow(line));
 		}
 		if (previewLines.hidden > 0) {
 			lines.push(`  ${theme.fg("dim", formatMoreItems(previewLines.hidden, "line", theme))}`);
@@ -638,27 +641,50 @@ function formatStatusEventExpanded(event: EvalStatusEvent, theme: Theme): string
  * the live edge for `log()` progress loops) behind an "… N earlier" marker,
  * matching the code/output tail-window convention. Collapsed keeps a small
  * fixed window; expanded widens to the viewport-sized preview window and
- * nests each event's detail rows under it.
+ * nests each event's detail rows under it. A collapsed log whose expansion
+ * draws in no more rows (its `… N earlier` row included) renders expanded.
  * `elided` counts events already dropped from the log's front.
  */
-function renderStatusEvents(events: EvalStatusEvent[], theme: Theme, expanded: boolean, elided = 0): string[] {
+function renderStatusEvents(
+	events: EvalStatusEvent[],
+	theme: Theme,
+	expanded: boolean,
+	width: number,
+	elided = 0,
+): string[] {
 	if (events.length === 0 && elided === 0) return [];
+	const full = statusEventRows(events, theme, true, width, elided);
+	if (expanded) return full;
+	const collapsed = statusEventRows(events, theme, false, width, elided);
+	return full.length <= collapsed.length ? full : collapsed;
+}
 
+/** {@link renderStatusEvents} for one expansion state: the `… N earlier` row, then the event rows. */
+function statusEventRows(
+	events: EvalStatusEvent[],
+	theme: Theme,
+	expanded: boolean,
+	width: number,
+	elided: number,
+): string[] {
 	const cap = expanded ? Math.max(10, previewWindowRows()) : 3;
-	// Collapsed events are one row each, so a lone hidden one renders instead of its marker.
-	// Elided events are gone from the log and expanded events carry detail rows.
-	const max = expanded || elided > 0 ? cap : cappedRowCount(events.length, cap);
+	// A lone hidden collapsed event that draws as one row renders instead of its marker; elided events
+	// are gone from the log, and the expanded window is viewport-sized with multi-row events.
+	const max =
+		expanded || elided > 0
+			? cap
+			: cappedRowCount(events.length, cap, width, () => formatStatusEvent(events[events.length - cap - 1], theme));
 	const shownFrom = Math.max(0, events.length - max);
 	const hidden = shownFrom + elided;
 	const visible = shownFrom > 0 ? events.slice(shownFrom) : events;
 
-	const lines: string[] = [];
-	if (hidden > 0) lines.push(theme.fg("dim", formatMoreItems(hidden, "event", theme, "earlier")));
+	const rows: string[] = [];
+	if (hidden > 0) rows.push(theme.fg("dim", formatMoreItems(hidden, "event", theme, "earlier")));
 	for (const event of visible) {
-		if (expanded) lines.push(...formatStatusEventExpanded(event, theme));
-		else lines.push(formatStatusEvent(event, theme));
+		if (expanded) rows.push(...formatStatusEventExpanded(event, theme, width));
+		else rows.push(formatStatusEvent(event, theme));
 	}
-	return lines;
+	return rows;
 }
 
 function formatCellOutputLines(
@@ -690,9 +716,6 @@ function formatCellOutputLines(
 	);
 	if (parts.some(part => part.kind === "view")) {
 		// Printed text keeps its place; json and markdown views replace theirs with a tree / rendered Markdown.
-		const treeDepth = expanded ? JSON_TREE_MAX_DEPTH_EXPANDED : JSON_TREE_MAX_DEPTH_COLLAPSED;
-		const treeLineCap = expanded ? JSON_TREE_MAX_LINES_EXPANDED : JSON_TREE_MAX_LINES_COLLAPSED;
-		const treeScalarLen = expanded ? JSON_TREE_SCALAR_LEN_EXPANDED : JSON_TREE_SCALAR_LEN_COLLAPSED;
 		const allLines: string[] = [];
 		for (const part of parts) {
 			if (part.kind === "text") {
@@ -701,9 +724,7 @@ function formatCellOutputLines(
 			}
 			const view = part.view;
 			if (view.kind === "json") {
-				const tree = renderJsonTreeLines(view.value, theme, treeDepth, treeLineCap, treeScalarLen);
-				allLines.push(...tree.lines);
-				if (tree.truncated) allLines.push(theme.fg("dim", theme.format.ellipsis));
+				allLines.push(...evalJsonTreeLines(view.value, expanded, theme));
 			} else if (view.kind === "markdown") {
 				allLines.push(...new Markdown(view.text, 0, 0, getMarkdownTheme()).render(innerWidth));
 			}
@@ -736,6 +757,38 @@ function formatCellOutputLines(
 		theme,
 	);
 	return { lines: formatted.lines, hiddenCount: formatted.hiddenCount };
+}
+
+/**
+ * A json view's tree rows, closed by a dim `…` row when a cap cut it. A
+ * collapsed tree whose expansion draws in no more rows (its `…` row
+ * included) renders expanded.
+ */
+function evalJsonTreeLines(value: unknown, expanded: boolean, theme: Theme): string[] {
+	const full = jsonTreeRows(value, theme, true);
+	if (expanded) return full;
+	const collapsed = jsonTreeRows(value, theme, false);
+	return full.length <= collapsed.length ? full : collapsed;
+}
+
+/** {@link evalJsonTreeLines} for one expansion state. */
+function jsonTreeRows(value: unknown, theme: Theme, expanded: boolean): string[] {
+	const tree = expanded
+		? renderJsonTreeLines(
+				value,
+				theme,
+				JSON_TREE_MAX_DEPTH_EXPANDED,
+				JSON_TREE_MAX_LINES_EXPANDED,
+				JSON_TREE_SCALAR_LEN_EXPANDED,
+			)
+		: renderJsonTreeLines(
+				value,
+				theme,
+				JSON_TREE_MAX_DEPTH_COLLAPSED,
+				JSON_TREE_MAX_LINES_COLLAPSED,
+				JSON_TREE_SCALAR_LEN_COLLAPSED,
+			);
+	return tree.truncated ? [...tree.lines, theme.fg("dim", theme.format.ellipsis)] : tree.lines;
 }
 
 /** Display cells a status field value keeps on its one-line summary. */
@@ -902,7 +955,11 @@ function evalStatusSection(log: StatusEventLog, expanded: boolean): NativeNode |
 	const events = log.statusEvents ?? [];
 	const elided = log.statusEventsElided ?? 0;
 	if (events.length === 0 && elided === 0) return undefined;
-	const shownFrom = expanded ? 0 : Math.max(0, events.length - RUN_STATUS_TAIL);
+	// A lone hidden event renders instead of its `1 earlier` line; elided events are gone from the log.
+	// The host lays native text out; a collapsed status event is always a single line.
+	const tail =
+		elided > 0 ? RUN_STATUS_TAIL : cappedRowCount(events.length, RUN_STATUS_TAIL, Infinity, () => "status event");
+	const shownFrom = expanded ? 0 : Math.max(0, events.length - tail);
 	const hidden = shownFrom + elided;
 	const lines = events
 		.slice(shownFrom)
@@ -1067,7 +1124,13 @@ export const evalToolRenderer = {
 					const lines = displayCells.flatMap(({ cell, code, language, agentEvents, otherEvents }, index) => {
 						const outputContent = formatCellOutputLines(cell, expanded, previewLines, uiTheme, width);
 						const outputLines = [...outputContent.lines];
-						const statusLines = renderStatusEvents(otherEvents, uiTheme, expanded, cell.statusEventsElided);
+						const statusLines = renderStatusEvents(
+							otherEvents,
+							uiTheme,
+							expanded,
+							outputBlockContentWidth(width),
+							cell.statusEventsElided,
+						);
 						if (statusLines.length > 0) {
 							if (outputLines.length > 0) outputLines.push(uiTheme.fg("dim", "Status"));
 							outputLines.push(...statusLines);
@@ -1138,7 +1201,13 @@ export const evalToolRenderer = {
 				uiTheme,
 			);
 			const lines = [...formatted.lines];
-			const statusLines = renderStatusEvents(statusEvents, uiTheme, expanded, details?.statusEventsElided);
+			const statusLines = renderStatusEvents(
+				statusEvents,
+				uiTheme,
+				expanded,
+				outputBlockContentWidth(width),
+				details?.statusEventsElided,
+			);
 			if (statusLines.length > 0) {
 				if (lines.length > 0) lines.push(uiTheme.fg("dim", "Status"));
 				lines.push(...statusLines);

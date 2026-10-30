@@ -1165,11 +1165,17 @@ export class AgentsHubComponent implements Component {
 				for (const w of wrapTextWithAnsi(replaceTabs(raw), promptWidth)) wrapped.push(w);
 			}
 			const budget = Math.max(3, rows - lines.length - 3);
-			for (const line of wrapped.slice(0, cappedRowCount(wrapped.length, budget))) {
+			const shownCount = cappedRowCount(
+				wrapped.length,
+				budget,
+				width,
+				() => `   ${theme.fg("dim", wrapped[budget]!)}`,
+			);
+			for (const line of wrapped.slice(0, shownCount)) {
 				lines.push(truncateToWidth(`   ${theme.fg("dim", line)}`, width));
 			}
-			if (wrapped.length > budget + 1) {
-				lines.push(theme.fg("dim", `   … ${wrapped.length - budget} more lines`));
+			if (wrapped.length > shownCount) {
+				lines.push(theme.fg("dim", `   … ${wrapped.length - shownCount} more lines`));
 			}
 		} else {
 			lines.push(truncateToWidth(theme.bold(theme.fg("accent", " Create new agent")), width));

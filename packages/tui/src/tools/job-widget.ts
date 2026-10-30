@@ -504,7 +504,10 @@ function tileVisual(block: JobWidgetBlock | undefined): NativeNode | undefined {
 		case "meter":
 			return tileMeter(block.value, block.tone);
 		case "bars": {
-			const rows = block.items.slice(0, cappedRowCount(block.items.length, TILE_BARS)).map((item, index) =>
+			const shownBars = cappedRowCount(block.items.length, TILE_BARS, Infinity, () =>
+				plainLine(block.items[TILE_BARS].label),
+			);
+			const rows = block.items.slice(0, shownBars).map((item, index) =>
 				keyed(
 					row(
 						[

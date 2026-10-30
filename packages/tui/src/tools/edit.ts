@@ -221,9 +221,8 @@ export function renderStreamingFallback(editMode: EditMode, args: unknown, theme
 				? record.newText
 				: undefined;
 	if (!newString) return "";
-	let preview = plainTextPreview(newString, theme, CALL_TEXT_PREVIEW_LINES);
-	// The marker takes a row of its own: one hidden line renders in its place.
-	if (preview.hidden === 1) preview = plainTextPreview(newString, theme, CALL_TEXT_PREVIEW_LINES + 1);
+	// A live preview built without a width: it keeps its fixed window, marker included.
+	const preview = plainTextPreview(newString, theme, CALL_TEXT_PREVIEW_LINES);
 	if (preview.hidden > 0) preview.lines.push(theme.fg("dim", formatMoreItems(preview.hidden, "line", theme)));
 	return preview.lines.join("\n");
 }
@@ -891,54 +890,30 @@ function renderDiffSection(
 	renderCache: RenderedStringCache | undefined,
 	markerOwnRow: boolean,
 ): DiffSection {
-	if (expanded) {
-		const renderedDiff = cachedRenderedString(renderCache, uiTheme, expanded, rawPath, diff, () =>
+	const fullRows = (): string[] => {
+		const renderedDiff = cachedRenderedString(renderCache, uiTheme, true, rawPath, diff, () =>
 			renderDiffFn(diff, { filePath: rawPath }),
 		);
-		return { lines: renderedDiff.split("\n").flatMap(line => wrapEditRendererLine(line, innerWidth)) };
-	}
-	const collapsedLines = PREVIEW_LIMITS.DIFF_COLLAPSED_LINES;
-	let section = collapsedDiffSection(diff, rawPath, collapsedLines, innerWidth, renderDiffFn, uiTheme, renderCache);
-	// A marker on its own row hiding one line: show that line instead when it fits one row.
-	if (markerOwnRow && section.hiddenLines === 1 && section.hiddenHunks === 0) {
-		const widened = collapsedDiffSection(
-			diff,
-			rawPath,
-			collapsedLines + 1,
-			innerWidth,
-			renderDiffFn,
-			uiTheme,
-			renderCache,
-		);
-		if (widened.hiddenLines === 0 && widened.hiddenHunks === 0) section = widened;
-	}
-	const { rows, hiddenLines, hiddenHunks } = section;
-	if (hiddenLines === 0 && hiddenHunks === 0) return { lines: rows };
-	const marker =
-		hiddenLines > 0 ? formatMoreRow(hiddenLines, "line", uiTheme) : formatMoreRow(hiddenHunks, "hunk", uiTheme);
-	return { lines: rows, marker };
-}
-
-/** Collapsed diff rows within `maxLines` (logical and visual), with what the window left out. */
-function collapsedDiffSection(
-	diff: string,
-	rawPath: string,
-	maxLines: number,
-	innerWidth: number,
-	renderDiffFn: (t: string, o?: { filePath?: string }) => string,
-	uiTheme: Theme,
-	renderCache?: RenderedStringCache,
-): { rows: string[]; hiddenLines: number; hiddenHunks: number } {
-	const truncated = truncateDiffByHunk(diff, PREVIEW_LIMITS.DIFF_COLLAPSED_HUNKS, maxLines);
+		return renderedDiff.split("\n").flatMap(line => wrapEditRendererLine(line, innerWidth));
+	};
+	if (expanded) return { lines: fullRows() };
+	const truncated = truncateDiffByHunk(diff, PREVIEW_LIMITS.DIFF_COLLAPSED_HUNKS, PREVIEW_LIMITS.DIFF_COLLAPSED_LINES);
 	const renderedDiff = cachedRenderedString(renderCache, uiTheme, false, rawPath, truncated.text, () =>
 		renderDiffFn(truncated.text, { filePath: rawPath }),
 	);
-	const visible = sliceCollapsedDiffRows(renderedDiff, innerWidth, maxLines);
-	return {
-		rows: visible.rows,
-		hiddenLines: truncated.hiddenLines + visible.hiddenLines,
-		hiddenHunks: truncated.hiddenHunks,
-	};
+	const visible = sliceCollapsedDiffRows(renderedDiff, innerWidth, PREVIEW_LIMITS.DIFF_COLLAPSED_LINES);
+	const hiddenLines = truncated.hiddenLines + visible.hiddenLines;
+	const hiddenHunks = truncated.hiddenHunks;
+	if (hiddenLines === 0 && hiddenHunks === 0) return { lines: visible.rows };
+	// One hidden line under a marker on its own row takes the marker's place when it draws as one row
+	// (diff lines wrap, never clip). A marker in the border costs no row, so it stays even for one line.
+	if (markerOwnRow && hiddenLines === 1 && hiddenHunks === 0) {
+		const full = fullRows();
+		if (full.length <= visible.rows.length + 1) return { lines: full };
+	}
+	const marker =
+		hiddenLines > 0 ? formatMoreRow(hiddenLines, "line", uiTheme) : formatMoreRow(hiddenHunks, "hunk", uiTheme);
+	return { lines: visible.rows, marker };
 }
 
 function wrapEditRendererLine(line: string, width: number): string[] {

@@ -360,7 +360,12 @@ export function diagnosticsSection(
 			text([span(message)], { wrap: "word", role: "omp.tool.diagnostic", key: `u${i}` }),
 		),
 	];
-	const shown = rows.slice(0, cappedRowCount(rows.length, DIAGNOSTIC_ROWS));
+	// The host lays native text out: a lone hidden diagnostic shows when its text is a single line.
+	const plainRows = [...parsed.map(d => d.message), ...unparsed];
+	const shown = rows.slice(
+		0,
+		cappedRowCount(rows.length, DIAGNOSTIC_ROWS, Infinity, () => plainRows[DIAGNOSTIC_ROWS]),
+	);
 	const hidden = rows.length - shown.length;
 	if (hidden > 0) {
 		shown.push(text([span(`+${hidden} more`, "muted")], { role: "omp.tool.stats", key: "more" }));

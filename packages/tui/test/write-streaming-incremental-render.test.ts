@@ -15,8 +15,8 @@ const hasLine = (lines: readonly string[], n: number): boolean =>
 function referenceWindow(content: string): { total: number; start: number; visible: string[] } {
 	const lines = content.replace(/\r/g, "").split("\n");
 	const total = lines.length;
-	// The `… N earlier lines` marker takes its own row, so one hidden line renders instead.
-	const start = total > 13 ? total - 12 : 0;
+	// The live tail keeps its fixed 12-row window behind the `… N earlier lines` marker.
+	const start = Math.max(0, total - 12);
 	return { total, start, visible: lines.slice(start) };
 }
 

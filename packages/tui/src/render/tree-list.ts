@@ -9,7 +9,7 @@ import type { NativeNode } from "../native/node";
 import type { Theme } from "../theme/theme";
 import { visibleWidth } from "../utils";
 import { TreeView } from "../components/tree-view";
-import { formatMoreItems, revealLoneHidden } from "./render-utils";
+import { fitsOneRow, formatMoreItems, revealLoneHidden } from "./render-utils";
 import type { TreeContext } from "./types";
 import { getTreeBranch, getTreeContinuePrefix } from "./utils";
 
@@ -21,6 +21,9 @@ export interface TreeListOptions<T> {
 	 * (the card is their container); connectors only express nesting.
 	 */
 	flush?: boolean;
+	/** Width the list draws in (including branch prefixes). A lone hidden item
+	 *  replaces its `… 1 more` row only when it is one row fitting this width. */
+	width: number;
 	expanded?: boolean;
 	maxCollapsed?: number;
 	/** Strict total-line budget for collapsed mode. When set (and not expanded),
@@ -165,11 +168,11 @@ export function renderTreeList<T>(options: TreeListOptions<T>, theme: Theme): st
 		remaining = items.length - fittingCount;
 	}
 
-	// A lone hidden one-row leaf takes no more room than its `… 1 more` row: show it instead.
+	// A lone hidden leaf that draws as one unclipped row takes no more room than its `… 1 more` row: show it instead.
 	let shownHidden: TreeListRow | undefined;
 	if (!expanded && remaining === 1 && (linesBudget === Infinity || fittedLineCount < linesBudget)) {
 		const row = toItemRow(truncateFrom === "start" ? 0 : items.length - 1);
-		if (row.kind === "item" && row.lines.length === 1) {
+		if (row.kind === "item" && row.lines.length === 1 && fitsOneRow(row.lines[0]!, options.width - prefixWidth)) {
 			shownHidden = row;
 			remaining = 0;
 		}
@@ -198,7 +201,7 @@ export function renderTreeList<T>(options: TreeListOptions<T>, theme: Theme): st
  * trailing summary) are kept as a muted "… N more" node; the visual line
  * budget (`maxCollapsedLines`) is layout and is left to the terminal.
  */
-export function describeTreeList<T>(options: TreeListOptions<T>, theme: Theme): NativeNode {
+export function describeTreeList<T>(options: Omit<TreeListOptions<T>, "width">, theme: Theme): NativeNode {
 	const { items, expanded = false, maxCollapsed = 8, itemType = "item", truncateFrom = "end", renderItem } = options;
 	const itemNode = (index: number): TspTreeNode => {
 		const rendered = renderItem(items[index], {
@@ -219,7 +222,7 @@ export function describeTreeList<T>(options: TreeListOptions<T>, theme: Theme): 
 		return node("tree", { nodes });
 	}
 	const loneIndex = truncateFrom === "start" ? 0 : items.length - 1;
-	const loneRows = (): number => {
+	const loneRow = (): string => {
 		const rendered = renderItem(items[loneIndex], {
 			index: loneIndex,
 			isLast: loneIndex === items.length - 1,
@@ -228,11 +231,11 @@ export function describeTreeList<T>(options: TreeListOptions<T>, theme: Theme): 
 			prefix: "",
 			continuePrefix: "",
 		});
-		return Array.isArray(rendered) ? rendered.length : rendered.split("\n").length;
+		return Array.isArray(rendered) ? rendered.join("\n") : rendered;
 	};
 	const shown = expanded
 		? items.length
-		: revealLoneHidden(items.length, Math.min(items.length, maxCollapsed), loneRows);
+		: revealLoneHidden(items.length, Math.min(items.length, maxCollapsed), Infinity, loneRow);
 	const hidden = items.length - shown;
 	const start = truncateFrom === "start" ? items.length - shown : 0;
 	if (hidden > 0 && truncateFrom === "start") nodes.push(summaryNode(formatMoreItems(hidden, itemType, theme)));

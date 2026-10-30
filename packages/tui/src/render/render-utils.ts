@@ -16,6 +16,7 @@ import { getKeybindings } from "../keybindings";
 import type { Theme, ThemeColor } from "../theme/theme";
 import type { Component } from "../tui";
 import { replaceTabs, sliceByColumn, truncateToWidth, visibleWidth } from "../utils";
+import { wrapGuidedLine } from "./hanging-wrap";
 import { Hasher, nestRows } from "./utils";
 
 export { Ellipsis } from "@oh-my-pi/pi-natives";
@@ -225,22 +226,90 @@ export function truncateMiddleToWidth(text: string, maxWidth: number, ellipsis =
 }
 
 /**
- * How many of `total` one-row entries to show under a cap whose overflow is
- * announced on a row of its own. Hiding a single entry is never worth it: its
- * `… 1 more` row would take the row the entry needs, so the cap gives way.
+ * Whether a rendered entry draws as exactly one row within `width`: a single
+ * line, neither wrapped nor clipped. A lone hidden entry takes the place of its
+ * own-row `… 1 more` marker only when this holds; wrapping it would cost a row
+ * and clipping it would hide that there is more to expand. `Infinity` (a native
+ * view, whose host lays the text out) checks only that it is a single line.
  */
-export function cappedRowCount(total: number, cap: number): number {
-	return total > cap + 1 ? cap : total;
+export function fitsOneRow(row: string, width: number): boolean {
+	return !row.includes("\n") && visibleWidth(row) <= width;
 }
 
 /**
- * How many of `total` entries a collapsed list shows when its cap leaves
- * `shown`: every entry when the one left out renders as a single row, since
- * its `… 1 more` row would take that row anyway. `loneRows` measures that
- * entry and runs only when exactly one is left out.
+ * How many of `total` entries a list whose visible entries the caller picked
+ * shows: all of them when exactly one was left out and it {@link fitsOneRow}
+ * in the row its `… 1 more` marker would take. `loneRow` renders that entry
+ * and runs only in that case.
  */
-export function revealLoneHidden(total: number, shown: number, loneRows: () => number): number {
-	return total - shown === 1 && loneRows() === 1 ? total : shown;
+export function revealLoneHidden(total: number, shown: number, width: number, loneRow: () => string): number {
+	return total - shown === 1 && fitsOneRow(loneRow(), width) ? total : shown;
+}
+
+/**
+ * How many of `total` entries a list capped at `cap` shows, with its overflow
+ * announced on a row of its own: the cap, or every entry when the one past the
+ * cap fits that row ({@link revealLoneHidden}).
+ */
+export function cappedRowCount(total: number, cap: number, width: number, loneRow: () => string): number {
+	return revealLoneHidden(total, Math.min(total, cap), width, loneRow);
+}
+
+/**
+ * Terminal rows `rows` take in a flush card body `width` columns wide, where
+ * each line hangs beneath its tree guides. Without a finite width nothing
+ * wraps, so each row counts once. Counting stops once it reaches `stopAfter`.
+ */
+export function wrappedRowCount(rows: readonly string[], width: number, theme: Theme, stopAfter = Infinity): number {
+	if (!Number.isFinite(width)) return Math.min(rows.length, stopAfter);
+	let count = 0;
+	for (const row of rows) {
+		for (const line of row.split("\n")) {
+			count += Math.max(1, wrapGuidedLine(line, width, theme).length);
+			if (count >= stopAfter) return count;
+		}
+	}
+	return count;
+}
+
+/**
+ * A body's rows for one expansion state. `foldRows` counts its own-row
+ * expand-hint and `… N more` rows, 0 when nothing is folded away; a marker
+ * carried in a border takes no row and does not count, and such a body is
+ * returned collapsed.
+ */
+export interface FoldableRows {
+	rows: string[];
+	foldRows: number;
+}
+
+/**
+ * Whether `full` draws in no more rows than `collapsed` at `width`, the
+ * collapsed form's own hint and marker rows included: expanding then only
+ * consumes the rows its fold notices took, so it should render expanded.
+ */
+export function expansionFits(
+	collapsed: readonly string[],
+	full: readonly string[],
+	width: number,
+	theme: Theme,
+): boolean {
+	const limit = wrappedRowCount(collapsed, width, theme);
+	return wrappedRowCount(full, width, theme, limit + 1) <= limit;
+}
+
+/** Body rows for the current expansion; a collapse whose expansion fits its rows renders expanded. */
+export function foldBody(
+	build: (expanded: boolean) => FoldableRows,
+	expanded: boolean,
+	width: number,
+	theme: Theme,
+): string[] {
+	if (expanded) return build(true).rows;
+	const collapsed = build(false);
+	if (collapsed.foldRows === 0) return collapsed.rows;
+	const full = build(true);
+	return expansionFits(collapsed.rows, full.rows, width, theme) ? full.rows : collapsed.rows;
 }
 
 /** Select a leading line window and count the lines hidden after it. */
@@ -622,7 +691,11 @@ export function formatDiagnostics(
 	expanded: boolean,
 	theme: Theme,
 	getLangIcon: (filePath: string) => string,
-	options?: { title?: string },
+	options?: {
+		title?: string;
+		/** Draw width; without it a lone hidden diagnostic keeps its marker. */
+		width?: number;
+	},
 ): string {
 	if (diag.messages.length === 0) return "";
 
@@ -653,30 +726,45 @@ export function formatDiagnostics(
 	const label = `${theme.fg("toolTitle", options?.title ?? "Diagnostics")}${summaryTag}`;
 	const rows = [label];
 
-	// The cap gives way to a lone hidden diagnostic unless it would open a new file group (two rows).
+	const formatParsed = (d: ParsedDiagnostic): string => {
+		const location = theme.fg("muted", ` :${d.line}:${d.col}`);
+		const codeTag = d.code ? theme.fg("dim", ` (${d.code})`) : "";
+		return `${formatSeverityMessage(d.severity, d.message, theme)}${location}${codeTag}`;
+	};
+	const formatUnparsed = (msg: string): string => {
+		let severity: ParsedDiagnostic["severity"] = "info";
+		if (msg.includes("[error]")) severity = "error";
+		else if (msg.includes("[warning]")) severity = "warning";
+		return formatSeverityMessage(severity, msg, theme);
+	};
+	const loneDiagnosticRow = (): string => {
+		const lastUnparsed = unparsed.at(-1);
+		if (lastUnparsed !== undefined) return formatUnparsed(lastUnparsed);
+		const lastDiagnostic = [...byFile.values()].at(-1)!.at(-1)!;
+		return nestRows([formatParsed(lastDiagnostic)], theme)[0]!;
+	};
+
+	// The cap gives way to a lone hidden diagnostic that draws as one unclipped nested row,
+	// unless it would open a new file group (header + row) or no draw width is known.
 	const total = diag.messages.length;
 	const lastOpensGroup = unparsed.length === 0 && [...byFile.values()].at(-1)?.length === 1;
-	let maxDiags = lastOpensGroup
-		? Math.min(total, COLLAPSED_DIAGNOSTICS)
-		: cappedRowCount(total, COLLAPSED_DIAGNOSTICS);
-	if (expanded) maxDiags = total;
+	let maxDiags = Math.min(total, COLLAPSED_DIAGNOSTICS);
+	if (expanded) {
+		maxDiags = total;
+	} else if (!lastOpensGroup && options?.width !== undefined) {
+		maxDiags = cappedRowCount(total, COLLAPSED_DIAGNOSTICS, options.width, () => loneDiagnosticRow());
+	}
 	let shown = 0;
 	for (const [filePath, diagnostics] of byFile) {
 		if (shown >= maxDiags) break;
 		rows.push(`${theme.fg("muted", getLangIcon(filePath))} ${formatStyledPath(filePath, theme)}`);
 		const visible = diagnostics.slice(0, maxDiags - shown);
-		const nested = visible.map(d => {
-			const location = theme.fg("muted", ` :${d.line}:${d.col}`);
-			const codeTag = d.code ? theme.fg("dim", ` (${d.code})`) : "";
-			return `${formatSeverityMessage(d.severity, d.message, theme)}${location}${codeTag}`;
-		});
-		rows.push(...nestRows(nested, theme));
+		rows.push(...nestRows(visible.map(formatParsed), theme));
 		shown += visible.length;
 	}
 	for (const msg of unparsed) {
 		if (shown >= maxDiags) break;
-		const severity = msg.includes("[error]") ? "error" : msg.includes("[warning]") ? "warning" : "info";
-		rows.push(formatSeverityMessage(severity, msg, theme));
+		rows.push(formatUnparsed(msg));
 		shown++;
 	}
 
@@ -1074,7 +1162,8 @@ export function sanitizeDisplayWarning(text: string): string {
 /** Sanitize and bound warning text before showing it in TUI. */
 export function sanitizeDisplayWarnings(warnings: readonly string[], theme: Theme): string[] {
 	const visible = warnings
-		.slice(0, cappedRowCount(warnings.length, PREVIEW_LIMITS.COLLAPSED_ITEMS))
+		// Callers mostly join warnings inline into one message: no own rows, so a plain cap.
+		.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS)
 		.map(warning => truncateToWidth(sanitizeDisplayWarning(warning), TRUNCATE_LENGTHS.LONG));
 	const hidden = warnings.length - visible.length;
 	if (hidden > 0) visible.push(formatMoreItems(hidden, "warning", theme));
@@ -1251,19 +1340,27 @@ export function cachedRenderedString(
 /**
  * Append the indented bullet list of parse errors (capped at
  * {@link PARSE_ERRORS_LIMIT}) to `lines`, with an overflow summary line if the
- * total exceeds the cap. No-op when `parseErrors` is empty.
+ * total exceeds the cap. With a draw `width`, a lone hidden issue that fits one
+ * row shows in place of the summary. No-op when `parseErrors` is empty.
  */
 export function appendParseErrorsBulletList(
 	lines: string[],
 	parseErrors: readonly string[] | undefined,
 	theme: Theme,
 	total?: number,
+	width?: number,
 ): void {
 	if (!parseErrors || parseErrors.length === 0) return;
 	const fullCount = total ?? parseErrors.length;
-	const capped = parseErrors.slice(0, cappedRowCount(fullCount, PARSE_ERRORS_LIMIT));
+	const bullet = (err: string): string => theme.fg("warning", `  - ${err}`);
+	// A lone hidden issue replaces its marker row only when it is known (in `parseErrors`) and fits `width`.
+	let shown = Math.min(fullCount, PARSE_ERRORS_LIMIT);
+	if (width !== undefined && fullCount === parseErrors.length) {
+		shown = cappedRowCount(fullCount, PARSE_ERRORS_LIMIT, width, () => bullet(parseErrors[PARSE_ERRORS_LIMIT]!));
+	}
+	const capped = parseErrors.slice(0, shown);
 	for (const err of capped) {
-		lines.push(theme.fg("warning", `  - ${err}`));
+		lines.push(bullet(err));
 	}
 	if (fullCount > capped.length) {
 		lines.push(`  ${theme.fg("dim", formatMoreItems(fullCount - capped.length, "parse issue", theme))}`);

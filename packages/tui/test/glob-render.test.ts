@@ -5,6 +5,7 @@ import { applyHyperlinkSetting } from "../src/render/hyperlink";
 import { getThemeByName } from "@oh-my-pi/pi-tui/theme";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { globToolRenderer } from "@oh-my-pi/pi-tui/tools/glob";
+import { PREVIEW_LIMITS } from "../src/render/render-utils";
 
 function extractLinkUris(text: string): string[] {
 	return [...text.matchAll(/\x1b\]8;[^;]*;([^\x1b]+)\x1b\\/g)].map(match => match[1]!);
@@ -36,6 +37,25 @@ describe("globToolRenderer", () => {
 		expect(plainLines[0]).not.toStartWith(" ");
 		expect(renderedLines[0]).not.toContain(uiTheme.fg("accent", uiTheme.symbol("icon.search")));
 		expect(renderedLines[0]).not.toContain(uiTheme.fg("accent", "Find"));
+	});
+
+	it("reveals a lone hidden file only when it draws as one unclipped row", async () => {
+		const uiTheme = (await getThemeByName("dark"))!;
+		const cap = PREVIEW_LIMITS.COLLAPSED_ITEMS;
+		const render = (last: string, width: number) => {
+			const files = [...Array.from({ length: cap }, (_, i) => `src/f${i}.ts`), last];
+			const result = { content: [{ type: "text", text: "" }], details: { fileCount: files.length, files } };
+			return sanitizeText(
+				globToolRenderer
+					.renderResult(result as never, { expanded: false, isPartial: false }, uiTheme, { paths: "src" })
+					.render(width)
+					.join("\n"),
+			);
+		};
+		expect(render("src/last.ts", 80)).toContain("src/last.ts");
+		expect(render("src/last.ts", 80)).not.toContain("1 more file");
+		const long = `src/${"deep/".repeat(30)}last.ts`;
+		expect(render(long, 80)).toContain("1 more file");
 	});
 
 	it("renders a timed-out empty scan as incomplete instead of a definitive no-files claim", async () => {

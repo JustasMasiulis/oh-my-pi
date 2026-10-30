@@ -738,7 +738,7 @@ describe("subagent HUD lines", () => {
 			const sessions = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"].map(id =>
 				makeSession({ id, progress: makeProgress({ id, currentTool: "read", currentToolArgs: `${id}.ts` }) }),
 			);
-			const layout = layoutPinnedHud(sessions.length, false);
+			const layout = layoutPinnedHud(sessions.length, false, 120, () => "");
 			const hud = new SubagentHudComponent(
 				renderSubagentHudLines(sessions, 120, false, true),
 				sessions.map(session => session.id),
@@ -901,23 +901,37 @@ describe("SubagentHudComponent click rows", () => {
 });
 
 describe("layoutPinnedHud", () => {
+	const fits = (total: number, expanded: boolean) => layoutPinnedHud(total, expanded, 80, () => "Delta: one row");
 	it("fits small lists without an expander", () => {
-		expect(layoutPinnedHud(0, false)).toEqual({ itemRows: 0, toggle: undefined, toggleRow: undefined });
-		expect(layoutPinnedHud(3, false)).toEqual({ itemRows: 3, toggle: undefined, toggleRow: undefined });
-		expect(layoutPinnedHud(3, true)).toEqual({ itemRows: 3, toggle: undefined, toggleRow: undefined });
-		// A lone overflow agent takes the expander's row instead of hiding behind it.
-		expect(layoutPinnedHud(4, false)).toEqual({ itemRows: 4, toggle: undefined, toggleRow: undefined });
-		expect(layoutPinnedHud(4, true)).toEqual({ itemRows: 4, toggle: undefined, toggleRow: undefined });
+		expect(fits(0, false)).toEqual({ itemRows: 0, toggle: undefined, toggleRow: undefined });
+		expect(fits(3, false)).toEqual({ itemRows: 3, toggle: undefined, toggleRow: undefined });
+		expect(fits(3, true)).toEqual({ itemRows: 3, toggle: undefined, toggleRow: undefined });
+		// A lone overflow agent whose row fits takes the expander's row instead of hiding behind it.
+		expect(fits(4, false)).toEqual({ itemRows: 4, toggle: undefined, toggleRow: undefined });
+		expect(fits(4, true)).toEqual({ itemRows: 4, toggle: undefined, toggleRow: undefined });
+	});
+
+	it("keeps the expander for a lone overflow agent that would be clipped or has a preview row", () => {
+		expect(layoutPinnedHud(4, false, 10, () => "Delta: a long description")).toEqual({
+			itemRows: 3,
+			toggle: "expand",
+			toggleRow: 5,
+		});
+		expect(layoutPinnedHud(4, false, 80, () => "Delta\n└ read")).toEqual({
+			itemRows: 3,
+			toggle: "expand",
+			toggleRow: 5,
+		});
 	});
 
 	it("collapses longer lists behind an expander", () => {
-		expect(layoutPinnedHud(5, false)).toEqual({ itemRows: 3, toggle: "expand", toggleRow: 5 });
-		expect(layoutPinnedHud(10, false)).toEqual({ itemRows: 3, toggle: "expand", toggleRow: 5 });
+		expect(fits(5, false)).toEqual({ itemRows: 3, toggle: "expand", toggleRow: 5 });
+		expect(fits(10, false)).toEqual({ itemRows: 3, toggle: "expand", toggleRow: 5 });
 	});
 
 	it("expands to every row with a collapse row", () => {
-		expect(layoutPinnedHud(5, true)).toEqual({ itemRows: 5, toggle: "collapse", toggleRow: 7 });
-		expect(layoutPinnedHud(10, true)).toEqual({ itemRows: 10, toggle: "collapse", toggleRow: 12 });
+		expect(fits(5, true)).toEqual({ itemRows: 5, toggle: "collapse", toggleRow: 7 });
+		expect(fits(10, true)).toEqual({ itemRows: 10, toggle: "collapse", toggleRow: 12 });
 	});
 });
 

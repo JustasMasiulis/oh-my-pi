@@ -27,6 +27,7 @@ import {
 	TRUNCATE_LENGTHS,
 	sanitizeDisplayWarning,
 	truncateToWidth as truncateVisualWidth,
+	expansionFits,
 } from "../render/render-utils";
 
 type GithubToolRenderArgs = {
@@ -238,9 +239,10 @@ function renderFailedLogs(
 	width: number,
 	theme: Theme,
 	expanded: boolean,
-): { lines: string[]; marker?: string } {
+): { lines: string[]; marker?: string; hidden: number } {
 	const lines: string[] = [];
 	let marker: string | undefined;
+	let hiddenTotal = 0;
 	failedLogs.forEach((entry, index) => {
 		const context = entry.workflowName
 			? `${entry.workflowName}${theme.sep.dot}#${entry.runId}`
@@ -254,13 +256,17 @@ function renderFailedLogs(
 		const tailLines = replaceTabs(entry.tail)
 			.split("\n")
 			.filter(line => line.length > 0);
+		// A non-last entry's marker takes its own row, so a single hidden line shows instead of it;
+		// the last entry's goes to the bottom border, which costs no row, so it keeps the plain cap.
 		const isLast = index === failedLogs.length - 1;
-		// A non-last entry's marker takes its own row; the last entry's goes to the bottom border.
 		const visibleCount = isLast
-			? PREVIEW_LIMITS.OUTPUT_COLLAPSED
-			: cappedRowCount(tailLines.length, PREVIEW_LIMITS.OUTPUT_COLLAPSED);
-		const shown = expanded ? tailLines : tailLines.slice(tailLines.length - Math.min(visibleCount, tailLines.length));
+			? Math.min(tailLines.length, PREVIEW_LIMITS.OUTPUT_COLLAPSED)
+			: cappedRowCount(tailLines.length, PREVIEW_LIMITS.OUTPUT_COLLAPSED, Math.max(8, width), () =>
+					theme.fg("toolOutput", tailLines[tailLines.length - PREVIEW_LIMITS.OUTPUT_COLLAPSED - 1]),
+				);
+		const shown = expanded ? tailLines : tailLines.slice(tailLines.length - visibleCount);
 		const hidden = tailLines.length - shown.length;
+		hiddenTotal += hidden;
 		const entryMarker =
 			hidden > 0 ? formatMoreRow(hidden, "log line", theme, { expanded, position: "earlier" }) : undefined;
 		if (entryMarker && index < failedLogs.length - 1) lines.push(entryMarker);
@@ -269,7 +275,7 @@ function renderFailedLogs(
 			lines.push(theme.fg("toolOutput", expanded ? line : truncateVisualWidth(line, Math.max(8, width))));
 		}
 	});
-	return { lines, marker };
+	return { lines, marker, hidden: hiddenTotal };
 }
 
 function extractText(content: Array<{ type: string; text?: string }>): string {
@@ -355,39 +361,49 @@ function renderSearchResults(
 	const status = githubStatus(args, "success", theme, { meta });
 	const summaryFields = SEARCH_SUMMARY_FIELDS[args.op ?? ""] ?? [];
 	return plainToolCard(theme, ({ contentWidth }) => {
-		const { expanded } = options;
-		const shown = expanded
-			? search.items
-			: search.items.slice(0, cappedRowCount(search.items.length, PREVIEW_LIMITS.COLLAPSED_ITEMS));
-		const body: string[] = [];
-		for (const item of shown) {
+		const summaryRow = (item: SearchItem): string => {
 			const title = theme.fg("toolOutput", replaceTabs(item.title));
-			if (expanded) {
-				body.push(title);
-				body.push(
-					...nestRows(
-						[...item.fields].map(
-							([key, value]) => `${theme.fg("dim", `${key}:`)} ${theme.fg("muted", displayField(value))}`,
-						),
-						theme,
-					),
-				);
-				continue;
-			}
 			const facts = summaryFields.flatMap(key => {
 				const value = item.fields.get(key);
 				return value ? [displayField(value)] : [];
 			});
-			const row = facts.length > 0 ? `${title} ${theme.fg("dim", facts.join(theme.sep.dot))}` : title;
-			body.push(truncateVisualWidth(row, contentWidth));
-		}
-		const remaining = search.items.length - shown.length;
-		if (remaining > 0) {
-			body.push(formatMoreRow(remaining, "result", theme, { expanded }));
-		} else if (!expanded && shown.some(item => [...item.fields.keys()].some(key => !summaryFields.includes(key)))) {
-			// Every result fits, but Ctrl+O still reveals the fields the summary row leaves out.
-			body.push(formatExpandHint(theme));
-		}
+			return facts.length > 0 ? `${title} ${theme.fg("dim", facts.join(theme.sep.dot))}` : title;
+		};
+		const collapsedCount = cappedRowCount(search.items.length, PREVIEW_LIMITS.COLLAPSED_ITEMS, contentWidth, () =>
+			summaryRow(search.items[PREVIEW_LIMITS.COLLAPSED_ITEMS]),
+		);
+		const buildBody = (expanded: boolean): string[] => {
+			const shown = expanded ? search.items : search.items.slice(0, collapsedCount);
+			const body: string[] = [];
+			for (const item of shown) {
+				if (expanded) {
+					body.push(theme.fg("toolOutput", replaceTabs(item.title)));
+					body.push(
+						...nestRows(
+							[...item.fields].map(
+								([key, value]) => `${theme.fg("dim", `${key}:`)} ${theme.fg("muted", displayField(value))}`,
+							),
+							theme,
+						),
+					);
+					continue;
+				}
+				body.push(truncateVisualWidth(summaryRow(item), contentWidth));
+			}
+			const remaining = search.items.length - shown.length;
+			if (remaining > 0) body.push(formatMoreRow(remaining, "result", theme, { expanded }));
+			return body;
+		};
+		if (options.expanded) return { status, phase: "success", body: buildBody(true) };
+		const body = buildBody(false);
+		const capped = collapsedCount < search.items.length;
+		const fieldsHidden = search.items.some(item => [...item.fields.keys()].some(key => !summaryFields.includes(key)));
+		if (capped || !fieldsHidden) return { status, phase: "success", body };
+		// Every result fits, but Ctrl+O still reveals the fields the summary row leaves out:
+		// shown outright when that fits in the rows the hint would take, else hinted.
+		body.push(formatExpandHint(theme));
+		const full = buildBody(true);
+		if (expansionFits(body, full, contentWidth, theme)) return { status, phase: "success", body: full };
 		return { status, phase: "success", body };
 	});
 }
@@ -415,12 +431,18 @@ function renderFallbackComponent(
 
 	const status = githubStatus(args, "success", theme);
 	return plainToolCard(theme, ({ contentWidth }) => {
-		const { expanded } = options;
-		const shown = expanded ? rows : rows.slice(0, cappedRowCount(rows.length, PREVIEW_LIMITS.COLLAPSED_ITEMS));
-		const body = shown.map(row => theme.fg("toolOutput", expanded ? row : truncateVisualWidth(row, contentWidth)));
-		const remaining = rows.length - shown.length;
-		if (remaining > 0) body.push(formatMoreRow(remaining, "line", theme, { expanded }));
-		return { status, phase: "success", body };
+		const collapsedCount = cappedRowCount(rows.length, PREVIEW_LIMITS.COLLAPSED_ITEMS, contentWidth, () =>
+			theme.fg("toolOutput", rows[PREVIEW_LIMITS.COLLAPSED_ITEMS]),
+		);
+		// Collapsed, each shown row clips to one line; a collapse whose expansion fits its rows shows everything.
+		const collapsed = rows
+			.slice(0, collapsedCount)
+			.map(row => theme.fg("toolOutput", truncateVisualWidth(row, contentWidth)));
+		const remaining = rows.length - collapsed.length;
+		if (remaining > 0) collapsed.push(formatMoreRow(remaining, "line", theme, { expanded: false }));
+		const expanded = options.expanded || expansionFits(collapsed, rows, contentWidth, theme);
+		if (!expanded) return { status, phase: "success", body: collapsed };
+		return { status, phase: "success", body: rows.map(row => theme.fg("toolOutput", row)) };
 	});
 }
 
@@ -452,7 +474,13 @@ function renderWatchResult(
 		return plainToolCard(theme, () => ({ status: statusFor(), phase: phaseFor(), body: watchRows }));
 	}
 	return framedToolCard(theme, ({ contentWidth }) => {
-		const { lines, marker } = renderFailedLogs(failedLogs, contentWidth, theme, options.expanded);
+		let logs = renderFailedLogs(failedLogs, contentWidth, theme, options.expanded);
+		if (!options.expanded && logs.hidden === 0) {
+			// Logs that hide no line only clip rows: unclipped they show outright when that takes no more rows.
+			const full = renderFailedLogs(failedLogs, contentWidth, theme, true);
+			if (expansionFits(logs.lines, full.lines, contentWidth, theme)) logs = full;
+		}
+		const { lines, marker } = logs;
 		const sections: ToolCardSection[] =
 			watchRows.length > 0 ? [{ label: theme.fg("dim", "Failed logs"), content: lines }] : [{ content: lines }];
 		return {

@@ -120,12 +120,15 @@ export function layoutFlushCard(header: string, rows: readonly string[], width: 
 	const indent = " ".repeat(FLUSH_BODY_INDENT);
 	const contentWidth = Math.max(1, width - FLUSH_BODY_INDENT);
 	const lines = wrapPrefixedLine("", indent, header, width);
-	for (const row of rows) {
-		for (const line of row.split("\n")) {
-			for (const wrapped of wrapGuidedLine(line, contentWidth, theme)) lines.push(`${indent}${wrapped}`);
-		}
-	}
+	for (const wrapped of wrapFlushBody(rows, contentWidth, theme)) lines.push(`${indent}${wrapped}`);
 	return lines;
+}
+
+/** Body rows split on newlines, each wrapped under its own tree guides. */
+function* wrapFlushBody(rows: readonly string[], contentWidth: number, theme: Theme): Generator<string> {
+	for (const row of rows) {
+		for (const line of row.split("\n")) yield* wrapGuidedLine(line, contentWidth, theme);
+	}
 }
 
 function isRenderedLines(value: readonly string[] | Component): value is readonly string[] {

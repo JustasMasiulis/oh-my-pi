@@ -18,6 +18,7 @@ import {
 	formatErrorText,
 	formatExpandHint,
 	formatMoreRow,
+	expansionFits,
 	PREVIEW_LIMITS,
 	replaceTabs,
 	type ToolUIStatus,
@@ -77,19 +78,32 @@ interface MemoryRows {
 	more?: string;
 }
 
-/** Flush card: the status line, then `rows` clipped to one line each while collapsed, then a truncation row. */
+/**
+ * Flush card: the status line, then `rows` clipped to one line each while collapsed, then a truncation row.
+ * A collapse whose expansion draws in no more rows (its truncation row included) renders expanded instead.
+ */
 function memoryCard(
 	theme: Theme,
 	status: StatusLineOptions,
 	options: RenderResultOptions,
-	buildRows?: (expanded: boolean) => MemoryRows,
+	buildRows?: (expanded: boolean, width: number) => MemoryRows,
 ): Component {
 	return plainToolCard(theme, ({ contentWidth }) => {
-		const { expanded } = options;
 		if (!buildRows) return { status };
-		const { rows, more } = buildRows(expanded);
-		const body = expanded ? [...rows] : rows.map(row => truncateToWidth(row, contentWidth));
-		if (more) body.push(more);
+		let expanded = options.expanded;
+		let view = buildRows(expanded, contentWidth);
+		if (!expanded) {
+			const full = buildRows(true, contentWidth);
+			const collapsed = view.rows.map(row => truncateToWidth(row, contentWidth));
+			if (view.more) collapsed.push(view.more);
+			const fullRows = full.more ? [...full.rows, full.more] : full.rows;
+			if (expansionFits(collapsed, fullRows, contentWidth, theme)) {
+				expanded = true;
+				view = full;
+			}
+		}
+		const body = expanded ? [...view.rows] : view.rows.map(row => truncateToWidth(row, contentWidth));
+		if (view.more) body.push(view.more);
 		return { status, body };
 	});
 }
@@ -99,25 +113,32 @@ function memoryErrorCard(theme: Theme, status: StatusLineOptions, message: strin
 	return plainToolCard(theme, () => ({ status, phase: "error", body: [formatErrorText(message, theme)] }));
 }
 
-/** The first `limit` rows, then a dim `… N more <itemType>` row with the expand hint when any are cut. */
+/**
+ * The first `limit` rows (all of them when only one more fits its own row at `width`),
+ * then a dim `… N more <itemType>` row with the expand hint when any are cut.
+ */
 function cappedRows(
 	rows: readonly string[],
 	limit: number,
 	itemType: string,
 	theme: Theme,
 	expanded: boolean,
+	width: number,
 ): MemoryRows {
-	const shown = rows.slice(0, cappedRowCount(rows.length, limit));
+	const shown = rows.slice(
+		0,
+		cappedRowCount(rows.length, limit, width, () => rows[limit]),
+	);
 	const remaining = rows.length - shown.length;
 	if (remaining <= 0) return { rows: shown };
 	return { rows: shown, more: formatMoreRow(remaining, itemType, theme, { expanded }) };
 }
 
 /** Stored memories as plain rows (no bullet: it reads as a status glyph in ASCII), clamped while collapsed. */
-function retainRows(contents: string[], theme: Theme): (expanded: boolean) => MemoryRows {
+function retainRows(contents: string[], theme: Theme): (expanded: boolean, width: number) => MemoryRows {
 	const rows = contents.map(content => theme.fg("toolOutput", content));
-	return expanded =>
-		cappedRows(rows, expanded ? rows.length : PREVIEW_LIMITS.COLLAPSED_ITEMS, "memory", theme, expanded);
+	return (expanded, width) =>
+		cappedRows(rows, expanded ? rows.length : PREVIEW_LIMITS.COLLAPSED_ITEMS, "memory", theme, expanded, width);
 }
 
 /** Count from recall's `Found N relevant …` summary line; 0 when absent. */
@@ -142,7 +163,15 @@ function describeRetain(contents: string[], summary?: string): NativeToolView {
 			contents.length > 0
 				? [list(contents.map((content, i) => item(String(i), { label: plainText(content) })))]
 				: [],
-		preview: { lines: PREVIEW_LIMITS.COLLAPSED_ITEMS },
+		preview:
+			cappedRowCount(
+				contents.length,
+				PREVIEW_LIMITS.COLLAPSED_ITEMS,
+				Infinity,
+				() => contents[PREVIEW_LIMITS.COLLAPSED_ITEMS],
+			) < contents.length
+				? { lines: PREVIEW_LIMITS.COLLAPSED_ITEMS }
+				: "none",
 	};
 }
 
@@ -273,9 +302,9 @@ export const reflectToolRenderer = {
 			.split("\n")
 			.filter(line => line.trim().length > 0)
 			.map(line => theme.fg("toolOutput", replaceTabs(line)));
-		return memoryCard(theme, status, options, expanded => {
+		return memoryCard(theme, status, options, (expanded, width) => {
 			const limit = expanded ? PREVIEW_LIMITS.OUTPUT_EXPANDED : PREVIEW_LIMITS.OUTPUT_COLLAPSED;
-			return cappedRows(answerLines, limit, "line", theme, expanded);
+			return cappedRows(answerLines, limit, "line", theme, expanded, width);
 		});
 	},
 	describeCall(args: QueryRenderArgs): NativeToolView {

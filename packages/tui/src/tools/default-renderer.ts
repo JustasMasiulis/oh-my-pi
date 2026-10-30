@@ -13,7 +13,7 @@ import {
 	plainToolCard,
 	type ToolCardPhase,
 } from "../render/tool-card";
-import { clipCollapsed, formatExpandHint } from "../render/render-utils";
+import { clipCollapsed, type FoldableRows, foldBody, formatExpandHint } from "../render/render-utils";
 import {
 	describeJsonValue,
 	formatArgsInline,
@@ -63,19 +63,41 @@ function buildDefaultToolStatus(input: DefaultToolRenderInput): { status: Status
 	return { status: { icon, spinnerFrame: options.spinnerFrame, title: input.label }, phase: icon };
 }
 
-/** Args preview plus JSON-tree/raw output body; depends only on args, output, expansion and width. */
+/**
+ * Args preview plus JSON-tree/raw output body; depends only on args, output, expansion and width.
+ * A collapsed body whose expansion would add at most one row renders expanded.
+ */
 function buildDefaultToolBody(input: DefaultToolRenderInput, uiTheme: Theme, contentWidth: number): string[] {
-	const { options, result } = input;
+	return foldBody(
+		expanded => buildDefaultToolRows(input, uiTheme, contentWidth, expanded),
+		input.options.expanded,
+		contentWidth,
+		uiTheme,
+	);
+}
+
+/** Body rows for one expansion state. */
+function buildDefaultToolRows(
+	input: DefaultToolRenderInput,
+	uiTheme: Theme,
+	contentWidth: number,
+	expanded: boolean,
+): FoldableRows {
+	const { result } = input;
 	const body: string[] = [];
+	let foldRows = 0;
 	const args = isRecord(input.args) ? input.args : undefined;
-	if (!options.expanded && args && Object.keys(args).length > 0) {
+	if (!expanded && args && Object.keys(args).length > 0) {
 		const preview = formatArgsInline(args, Math.max(20, contentWidth));
 		if (preview) body.push(uiTheme.fg("dim", preview));
 		// A clipped args line before any result: Ctrl+O shows the full args tree.
-		if (!result && preview !== formatArgsInline(args, UNCLIPPED_ARGS_WIDTH)) body.push(formatExpandHint(uiTheme));
+		if (!result && preview !== formatArgsInline(args, UNCLIPPED_ARGS_WIDTH)) {
+			body.push(formatExpandHint(uiTheme));
+			foldRows++;
+		}
 	}
 
-	if (options.expanded && input.args !== undefined) {
+	if (expanded && input.args !== undefined) {
 		body.push(uiTheme.fg("dim", "Args"));
 		const tree = renderJsonTreeLines(
 			input.args,
@@ -98,18 +120,21 @@ function buildDefaultToolBody(input: DefaultToolRenderInput, uiTheme: Theme, con
 				try {
 					const parsed = JSON.parse(textContent);
 					const tree = renderJsonTreeLines(parsed, uiTheme, {
-						maxDepth: options.expanded ? JSON_TREE_MAX_DEPTH_EXPANDED : JSON_TREE_MAX_DEPTH_COLLAPSED,
-						maxLines: options.expanded ? JSON_TREE_MAX_LINES_EXPANDED : JSON_TREE_MAX_LINES_COLLAPSED,
-						maxScalarLen: options.expanded ? JSON_TREE_SCALAR_LEN_EXPANDED : JSON_TREE_SCALAR_LEN_COLLAPSED,
+						maxDepth: expanded ? JSON_TREE_MAX_DEPTH_EXPANDED : JSON_TREE_MAX_DEPTH_COLLAPSED,
+						maxLines: expanded ? JSON_TREE_MAX_LINES_EXPANDED : JSON_TREE_MAX_LINES_COLLAPSED,
+						maxScalarLen: expanded ? JSON_TREE_SCALAR_LEN_EXPANDED : JSON_TREE_SCALAR_LEN_COLLAPSED,
 						// A result's own `i` or `__partialJson` keys are data, not call metadata.
 						hiddenRootKeys: [],
 					});
 
 					// An expanded tree that hit a cap would show less than the raw output, so
 					// Ctrl+O falls through to the uncapped raw view instead.
-					if (tree.lines.length > 0 && !(options.expanded && tree.truncated)) {
+					if (tree.lines.length > 0 && !(expanded && tree.truncated)) {
 						body.push(...tree.lines);
-						if (!options.expanded) body.push(formatExpandHint(uiTheme));
+						if (!expanded) {
+							body.push(formatExpandHint(uiTheme));
+							foldRows++;
+						}
 						renderedAsJson = true;
 					}
 				} catch {
@@ -119,24 +144,24 @@ function buildDefaultToolBody(input: DefaultToolRenderInput, uiTheme: Theme, con
 			if (!renderedAsJson) {
 				// No expanded cap: the terminal's own disclosure clamp is the only
 				// bound, so Ctrl+O reveals every row the collapsed view promised.
-				body.push(
-					...formatOutputPaneLines(
-						{
-							lines: textContent.split("\n"),
-							expanded: options.expanded,
-							collapsedMaxLines: 4,
-							styleLine: line =>
-								clipCollapsed(styleToolOutputLine(line, uiTheme), contentWidth, options.expanded),
-							showExpandHintWhenUncapped: true,
-						},
-						uiTheme,
-					).lines,
+				const pane = formatOutputPaneLines(
+					{
+						lines: textContent.split("\n"),
+						expanded,
+						collapsedMaxLines: 4,
+						styleLine: line => clipCollapsed(styleToolOutputLine(line, uiTheme), contentWidth, expanded),
+						showExpandHintWhenUncapped: true,
+					},
+					uiTheme,
 				);
+				body.push(...pane.lines);
+				// Collapsed, the pane ends in its hidden-line marker or its expand hint.
+				if (!expanded) foldRows++;
 			}
 		}
 	}
 
-	return body;
+	return { rows: body, foldRows };
 }
 
 /** Format one generic tool call/result card as flush rows; see {@link layoutFlushCard}. */

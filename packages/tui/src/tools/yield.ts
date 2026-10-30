@@ -9,7 +9,13 @@ import { compact, md } from "../native/describe";
 import { OwnerMemo } from "../native/memo";
 import type { NativeChild } from "../native/node";
 import { formatOutputPaneLines, styleToolOutputLine } from "../render/output-pane";
-import { clipCollapsed, formatExpandHint, sanitizeDisplayLines } from "../render/render-utils";
+import {
+	clipCollapsed,
+	type FoldableRows,
+	foldBody,
+	formatExpandHint,
+	sanitizeDisplayLines,
+} from "../render/render-utils";
 import type { StatusLineOptions } from "../render/status-line";
 import { CardRowsMemo, plainToolCard, type ToolCardPhase } from "../render/tool-card";
 import type { Theme } from "../theme/theme";
@@ -129,20 +135,20 @@ function describeSubmission(s: Submission, streaming: boolean, json: boolean): N
 	};
 }
 
-function dataLines(data: unknown, expanded: boolean, width: number, theme: Theme): string[] {
-	if (data === undefined) return [];
+/** Data rows for one expansion state; `foldRows` counts the hidden-line marker or expand-hint row among them. */
+function dataLines(data: unknown, expanded: boolean, width: number, theme: Theme): FoldableRows {
+	if (data === undefined) return { rows: [], foldRows: 0 };
 	if (typeof data === "string") {
-		return [
-			...formatOutputPaneLines(
-				{
-					lines: sanitizeText(data).trimEnd().split("\n"),
-					expanded,
-					collapsedMaxLines: TEXT_ROWS_COLLAPSED,
-					styleLine: line => clipCollapsed(styleToolOutputLine(line, theme), width, expanded),
-				},
-				theme,
-			).lines,
-		];
+		const pane = formatOutputPaneLines(
+			{
+				lines: sanitizeText(data).trimEnd().split("\n"),
+				expanded,
+				collapsedMaxLines: TEXT_ROWS_COLLAPSED,
+				styleLine: line => clipCollapsed(styleToolOutputLine(line, theme), width, expanded),
+			},
+			theme,
+		);
+		return { rows: [...pane.lines], foldRows: pane.hiddenCount > 0 ? 1 : 0 };
 	}
 	const tree = renderJsonTreeLines(data, theme, {
 		maxDepth: expanded ? JSON_TREE_MAX_DEPTH_EXPANDED : JSON_TREE_MAX_DEPTH_COLLAPSED,
@@ -151,8 +157,9 @@ function dataLines(data: unknown, expanded: boolean, width: number, theme: Theme
 		sanitizeText,
 		hiddenRootKeys: [],
 	});
-	if (tree.truncated) tree.lines.push(expanded ? theme.fg("dim", theme.format.ellipsis) : formatExpandHint(theme));
-	return tree.lines;
+	if (!tree.truncated) return { rows: tree.lines, foldRows: 0 };
+	if (expanded) return { rows: [...tree.lines, theme.fg("dim", theme.format.ellipsis)], foldRows: 0 };
+	return { rows: [...tree.lines, formatExpandHint(theme)], foldRows: 1 };
 }
 
 function renderSubmission(s: Submission, options: RenderResultOptions, theme: Theme): Component {
@@ -179,7 +186,14 @@ function renderSubmission(s: Submission, options: RenderResultOptions, theme: Th
 				if (s.error !== undefined) {
 					for (const line of sanitizeDisplayLines(s.error)) lines.push(theme.fg("error", line));
 				}
-				lines.push(...dataLines(s.data, options.expanded, contentWidth, theme));
+				lines.push(
+					...foldBody(
+						expanded => dataLines(s.data, expanded, contentWidth, theme),
+						options.expanded,
+						contentWidth,
+						theme,
+					),
+				);
 				if (s.note) lines.push(theme.fg("dim", s.note));
 				return lines;
 			});

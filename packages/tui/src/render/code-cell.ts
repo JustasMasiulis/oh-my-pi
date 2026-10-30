@@ -148,16 +148,38 @@ function renderCellBlock(
 	);
 }
 
+/** Widest line-number gutter (digits plus a space) any of `lineCount` code lines can draw with; 0 without numbers. */
+function codeGutterWidth(
+	lineCount: number,
+	codeStartLine: number | undefined,
+	codeLineNumbers: Array<number | null> | undefined,
+): number {
+	let maxVal = 0;
+	if (codeLineNumbers) {
+		for (const n of codeLineNumbers) if (n !== null && n !== undefined && n > maxVal) maxVal = n;
+	} else if (codeStartLine !== undefined) {
+		maxVal = codeStartLine + lineCount - 1;
+	}
+	return maxVal > 0 ? Math.max(2, String(maxVal).length) + 1 : 0;
+}
+
 /** Render a syntax-highlighted code preview and its optional output block. */
 export function renderCodeCell(options: CodeCellOptions, theme: Theme): string[] {
 	const { code, language, expanded = false, codeMaxLines = 12, width, codeStartLine, codeLineNumbers } = options;
 
 	const normalizedCode = replaceTabs(code ?? "");
 	const rawCodeLines = splitTerminalOutputLines(normalizedCode);
-	// The hidden-line marker takes its own row when tailing or above an output section; there a lone hidden line shows instead.
+	// The hidden-line marker takes its own row when tailing or above an output section; there a lone
+	// hidden line shows instead when it draws as one row beside its line-number gutter.
 	const ownRowMarker = options.codeTail === true || Boolean(options.output?.trim());
+	const loneIndex = options.codeTail === true ? rawCodeLines.length - codeMaxLines - 1 : codeMaxLines;
 	const collapsedCodeLines = ownRowMarker
-		? cappedRowCount(rawCodeLines.length, codeMaxLines)
+		? cappedRowCount(
+				rawCodeLines.length,
+				codeMaxLines,
+				outputBlockContentWidth(width) - codeGutterWidth(rawCodeLines.length, codeStartLine, codeLineNumbers),
+				() => rawCodeLines[loneIndex]!,
+			)
 		: Math.min(rawCodeLines.length, codeMaxLines);
 	const maxCodeLines = expanded ? rawCodeLines.length : collapsedCodeLines;
 	const hiddenCodeLines = rawCodeLines.length - maxCodeLines;
@@ -218,7 +240,7 @@ export function renderMarkdownCell(options: MarkdownCellOptions, theme: Theme): 
 	const innerWidth = Math.max(20, outputBlockContentWidth(width));
 	const allLines = content.trim() ? new Markdown(content, 0, 0, getMarkdownTheme()).render(innerWidth) : [];
 	const collapsedContentLines = options.output?.trim()
-		? cappedRowCount(allLines.length, contentMaxLines)
+		? cappedRowCount(allLines.length, contentMaxLines, innerWidth, () => allLines[contentMaxLines]!)
 		: Math.min(allLines.length, contentMaxLines);
 	const maxContentLines = expanded ? allLines.length : collapsedContentLines;
 

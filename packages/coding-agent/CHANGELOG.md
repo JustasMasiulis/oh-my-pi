@@ -10,7 +10,7 @@
 - Computer-use scripts can wait for a window opened by an action and read it in the same call with a window filter's optional `wait` ([#17391](https://github.com/can1357/oh-my-pi/pull/17391) by [@will-bogusz](https://github.com/will-bogusz))
 - `omp gallery` renders every transcript message kind too, from user prompts, assistant replies and full agent turns to compaction, IRC, background-job and advisor messages and transcript notices. Pick one with `--message <kind>` or all with `--surface message`.
 - `omp gallery` renders the live window around the composer too: the working row, subagent and todo HUDs, queued messages, running `!`/`$` commands, progress rows, the pinned error, side panels and the dialogs that take the composer's place (tool approval, ask, extension prompts, plan review, pause). Pick one with `--widget <name>` or all with `--surface widget`.
-- `omp gallery` adds fixtures for `bash` without output (`bash_silent`), `find`, multi-cell `eval` and the `vibe_*` tools.
+- `omp gallery` adds fixtures for `bash` without output (`bash_silent`), `grep` with skipped missing paths (`grep_missing`), `find`, multi-cell `eval` and the `vibe_*` tools.
 
 ### Changed
 

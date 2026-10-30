@@ -12,6 +12,7 @@ import { CardRowsMemo, plainToolCard } from "../render/tool-card";
 import {
 	clipRows,
 	FILE_NAME_COLOR,
+	fitsOneRow,
 	formatCount,
 	formatErrorText,
 	formatExpandHint,
@@ -315,6 +316,37 @@ export const findToolRenderer = {
 		].join(uiTheme.sep.dot);
 		if (failed) meta.push(failed);
 
+		/** Hit rows for one expansion state; `trailer` is the collapsed `… N more hits` or expand-hint row. */
+		const buildRows = (expanded: boolean, width: number): { rows: string[]; trailer?: string } => {
+			const rangeLimit = expanded ? RANGES_EXPANDED : RANGES_COLLAPSED;
+			const rows: string[] = [];
+			let shown = 0;
+			for (const [index, hit] of hits.entries()) {
+				if (!expanded && shown === COLLAPSED_HITS) break;
+				const hitRows = renderHit(hit, rangeLimit, linkTargets.cwd, linkTargets.rel(hit, index), uiTheme);
+				// Collapsed rows stay within the line budget, keeping one row for the `… N more hits` summary.
+				const reserve = index < hits.length - 1 ? 1 : 0;
+				const overBudget = rows.length + hitRows.length + reserve > COLLAPSED_LINE_BUDGET;
+				if (!expanded && shown > 0 && overBudget) break;
+				rows.push(...hitRows);
+				shown++;
+			}
+			if (expanded) return { rows: [...rows, uiTheme.fg("dim", accounting), ...failures] };
+			const lastHitRows =
+				hits.length - shown === 1
+					? renderHit(hits[shown]!, rangeLimit, linkTargets.cwd, linkTargets.rel(hits[shown]!, shown), uiTheme)
+					: undefined;
+			if (lastHitRows?.length === 1 && fitsOneRow(lastHitRows[0]!, width)) {
+				// A lone one-row hit (no range rows) that fits unclipped renders in place of its `… 1 more hit` row.
+				rows.push(...lastHitRows);
+				shown++;
+			}
+			// The search accounting (and any further ranges) only shows expanded.
+			const trailer =
+				shown < hits.length ? formatMoreRow(hits.length - shown, "hit", uiTheme) : formatExpandHint(uiTheme);
+			return { rows, trailer };
+		};
+
 		// Rows are clipped, never wrapped; recomputed only when width or expansion changes.
 		const memo = new CardRowsMemo();
 		return plainToolCard(
@@ -324,41 +356,13 @@ export const findToolRenderer = {
 				phase: failed ? "warning" : "success",
 				body: width =>
 					memo.rows(width, options.expanded, () => {
-						const expanded = options.expanded;
-						const rangeLimit = expanded ? RANGES_EXPANDED : RANGES_COLLAPSED;
-						const rows: string[] = [];
-						let shown = 0;
-						for (const [index, hit] of hits.entries()) {
-							if (!expanded && shown === COLLAPSED_HITS) break;
-							const hitRows = renderHit(hit, rangeLimit, linkTargets.cwd, linkTargets.rel(hit, index), uiTheme);
-							// Collapsed rows stay within the line budget, keeping one row for the `… N more hits` summary.
-							const reserve = index < hits.length - 1 ? 1 : 0;
-							const overBudget = rows.length + hitRows.length + reserve > COLLAPSED_LINE_BUDGET;
-							if (!expanded && shown > 0 && overBudget) break;
-							rows.push(...hitRows);
-							shown++;
-						}
-						const lastHitRows =
-							hits.length - shown === 1
-								? renderHit(
-										hits[shown]!,
-										rangeLimit,
-										linkTargets.cwd,
-										linkTargets.rel(hits[shown]!, shown),
-										uiTheme,
-									)
-								: undefined;
-						if (lastHitRows?.length === 1) {
-							// A single one-row hit renders in place of its own `… 1 more hit` row.
-							rows.push(...lastHitRows, formatExpandHint(uiTheme));
-						} else if (shown < hits.length) {
-							rows.push(formatMoreRow(hits.length - shown, "hit", uiTheme));
-						} else if (!expanded) {
-							// The search accounting (and any further ranges) only shows expanded.
-							rows.push(formatExpandHint(uiTheme));
-						}
-						if (expanded) rows.push(uiTheme.fg("dim", accounting), ...failures);
-						return clipRows(rows, width);
+						if (options.expanded) return clipRows(buildRows(true, width).rows, width);
+						const collapsedBuild = buildRows(false, width);
+						const collapsed = compact([...collapsedBuild.rows, collapsedBuild.trailer]);
+						const full = buildRows(true, width).rows;
+						// The expanded rows fit in the collapsed ones (trailer included): render expanded, without a hint.
+						if (full.length <= collapsed.length) return clipRows(full, width);
+						return clipRows(collapsed, width);
 					}),
 			}),
 			memo.cardOptions,

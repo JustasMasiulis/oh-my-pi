@@ -30,7 +30,7 @@ import {
 	isFeedModelBadgeEnabled,
 	PREVIEW_LIMITS,
 	replaceTabs,
-	revealLoneHidden,
+	cappedRowCount,
 	type ToolUIStatus,
 	cappedHeadLines,
 	createCachedComponent,
@@ -518,46 +518,52 @@ function jobsRenderResult(
 			if (aggregateArtifactError) {
 				body.push(uiTheme.fg("warning", formatArtifactErrorNotice(aggregateArtifactError)));
 			}
-			body.push(
-				...renderTreeList<JobSnapshot>(
+			const listRows = (rowsExpanded: boolean): string[] => {
+				const rows = renderTreeList<JobSnapshot>(
 					{
 						items: sortedJobs,
 						flush: true,
-						expanded,
+						expanded: rowsExpanded,
 						maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
 						itemType: "job",
-						renderItem: job => jobLines(job, expanded, rowWidth, live),
+						width: rowWidth,
+						renderItem: job => jobLines(job, rowsExpanded, rowWidth, live),
 					},
 					uiTheme,
-				),
-			);
-			if (agents.length > 0) {
-				body.push(
-					...renderTreeList<AgentActivitySnapshot>(
+				);
+				if (agents.length === 0) return rows;
+				return rows.concat(
+					renderTreeList<AgentActivitySnapshot>(
 						{
 							items: agents,
 							flush: true,
-							expanded,
+							expanded: rowsExpanded,
 							maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
 							itemType: "agent",
+							width: rowWidth,
 							renderItem: agent => agentLine(agent, rowWidth),
 						},
 						uiTheme,
 					),
 				);
-			}
+			};
+			let rows = listRows(expanded);
 			// A capped list carries the hint on its `… N more` row; otherwise say so when a row holds back detail.
 			const cap = PREVIEW_LIMITS.COLLAPSED_ITEMS;
-			const listCapped = <T>(items: readonly T[], rowsOf: (item: T) => number): boolean => {
-				const shown = revealLoneHidden(items.length, Math.min(items.length, cap), () => rowsOf(items[cap]));
-				return shown < items.length;
-			};
-			const capped =
-				listCapped(sortedJobs, job => jobLines(job, expanded, rowWidth, live).length) ||
-				listCapped(agents, () => 1);
-			if (!expanded && !capped && sortedJobs.some(job => jobHidesDetail(job, rowWidth))) {
-				body.push(formatExpandHint(uiTheme));
+			const jobsCapped =
+				cappedRowCount(sortedJobs.length, cap, rowWidth, () =>
+					jobLines(sortedJobs[cap], false, rowWidth, live).join("\n"),
+				) < sortedJobs.length;
+			const agentsCapped =
+				cappedRowCount(agents.length, cap, rowWidth, () => agentLine(agents[cap], rowWidth)) < agents.length;
+			const capped = jobsCapped || agentsCapped;
+			if (!expanded && !capped) {
+				if (sortedJobs.some(job => jobHidesDetail(job, rowWidth))) rows.push(formatExpandHint(uiTheme));
+				// A settled block whose Ctrl+O draws in no more rows (the hint's included) shows expanded.
+				const full = runningCount === 0 ? listRows(true) : undefined;
+				if (full && full.length <= rows.length) rows = full;
 			}
+			body.push(...rows);
 			const all = fitFlushRows(
 				header,
 				body.map(line => `${INDENT}${line}`),
@@ -587,12 +593,24 @@ function messageAge(ts: number | undefined): string {
 }
 
 /** Message body preview rows, indented under the header; a trailing dim row counts elided lines. */
-function bodyLines(body: string, expanded: boolean, theme: Theme, collapsedLines = BODY_LINES_COLLAPSED): string[] {
+function bodyLines(
+	body: string,
+	expanded: boolean,
+	theme: Theme,
+	width: number,
+	collapsedLines = BODY_LINES_COLLAPSED,
+): string[] {
 	const max = expanded ? BODY_LINES_EXPANDED : collapsedLines;
-	const preview = cappedHeadLines(
-		body.split("\n").filter(line => line.trim()),
+	const rows = body.split("\n").filter(line => line.trim());
+	// A lone hidden line shows only when it draws unclipped: within the width and the per-line clip.
+	const fitWidth = Math.min(width, INDENT.length + BODY_LINE_WIDTH);
+	const shownCount = cappedRowCount(
+		rows.length,
 		max,
+		fitWidth,
+		() => `${INDENT}${theme.fg("toolOutput", replaceTabs(rows[max].trim()))}`,
 	);
+	const preview = cappedHeadLines(rows, shownCount);
 	const lines = preview.lines.map(
 		line => `${INDENT}${theme.fg("toolOutput", replaceTabs(truncateToWidth(line.trim(), BODY_LINE_WIDTH)))}`,
 	);
@@ -647,7 +665,7 @@ export function createIrcMessageCard(card: IrcMessageCard, getExpanded: () => bo
 	if (age) meta.push(age);
 	const component = createCachedComponent(getExpanded, (width, expanded) => {
 		const header: StatusLineOptions = { icon: "info", title, description: subject, meta };
-		const lines = body.trim() ? bodyLines(body, expanded, uiTheme, 3) : [];
+		const lines = body.trim() ? bodyLines(body, expanded, uiTheme, width, 3) : [];
 		return fitFlushRows(header, lines, width, uiTheme);
 	});
 	// Terminal-local collapse replaces `getExpanded`; the node never changes after creation.
@@ -697,13 +715,13 @@ function describeJobsResult(
 	// One frame of tiles: each job's status, title, figure and widget together. The job's output
 	// and errors fill the card of the call that started it (`parksAsBackground`), so no previews.
 	const body: NativeNode[] = [];
-	if (sorted.length > 0) {
-		body.push(keyed(describeJobTiles(sorted.slice(0, TILES_SHOWN).map(job => jobTile(job, isPartial))), "tiles"));
+	// Tiles span several rows: a lone hidden job keeps its `+1 more` row.
+	const shownTiles = Math.min(sorted.length, TILES_SHOWN);
+	if (shownTiles > 0) {
+		body.push(keyed(describeJobTiles(sorted.slice(0, shownTiles).map(job => jobTile(job, isPartial))), "tiles"));
 	}
-	if (sorted.length > TILES_SHOWN) {
-		const rest = sorted.length - TILES_SHOWN;
-		body.push(text([span(`+${rest} more ${rest === 1 ? "job" : "jobs"} · /jobs`, "dim")], { role: "omp.wait.more" }));
-	}
+	const rest = sorted.length - shownTiles;
+	if (rest > 0) body.push(text([span(`+${rest} more jobs · /jobs`, "dim")], { role: "omp.wait.more" }));
 	for (const agent of agents) {
 		const spans: TspSpan[] = [span(plainText(agent.id), "accent")];
 		if (agent.parentId) spans.push(span(` ← ${plainText(agent.parentId)}`, "dim"));
@@ -830,7 +848,7 @@ export const waitToolRenderer = {
 						description: `${uiTheme.format.arrowLeft} ${replaceTabs(waited.from)}`,
 						meta: [messageAge(waited.ts), ...(waited.replyTo ? ["reply"] : [])],
 					},
-					bodyLines(waited.body, expanded, uiTheme),
+					bodyLines(waited.body, expanded, uiTheme, width),
 					width,
 					uiTheme,
 				),

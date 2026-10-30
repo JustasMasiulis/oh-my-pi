@@ -51,13 +51,28 @@ export type ProcWriteAction = "stdin" | "mode" | "kill";
 /** Body indent for flush proc cards. */
 const INDENT = " ".repeat(FLUSH_BODY_INDENT);
 
-function preview(body: string, expanded: boolean, theme: Theme, tone: "dim" | "toolOutput" = "dim"): string[] {
+/** Width a proc body row draws unclipped in: the card width, and the per-line clip. */
+function rowWidth(width: number): number {
+	return Math.min(width, INDENT.length + TRUNCATE_LENGTHS.LINE);
+}
+
+function preview(
+	body: string,
+	expanded: boolean,
+	theme: Theme,
+	width: number,
+	tone: "dim" | "toolOutput" = "dim",
+): string[] {
 	if (!body.trim()) return [];
 	const limit = expanded ? PREVIEW_LIMITS.EXPANDED_LINES : PREVIEW_LIMITS.COLLAPSED_LINES;
-	const shown = cappedHeadLines(
-		body.split("\n").filter(line => line.trim()),
+	const rows = body.split("\n").filter(line => line.trim());
+	const count = cappedRowCount(
+		rows.length,
 		limit,
+		rowWidth(width),
+		() => `${INDENT}${theme.fg(tone, safe(rows[limit].trim()))}`,
 	);
+	const shown = cappedHeadLines(rows, count);
 	const lines = shown.lines.map(
 		line => `${INDENT}${theme.fg(tone, truncateToWidth(safe(line.trim()), TRUNCATE_LENGTHS.LINE))}`,
 	);
@@ -108,7 +123,7 @@ export function renderAgentWrite(
 	options: RenderResultOptions,
 	theme: Theme,
 ): Component {
-	return card((_width, expanded) => {
+	return card((width, expanded) => {
 		const recipient = safe(details?.to || to || theme.format.ellipsis);
 		const receipts = details?.receipts ?? [];
 		const delivered = receipts.filter(receipt => receipt.outcome !== "failed").length;
@@ -131,7 +146,7 @@ export function renderAgentWrite(
 		}
 		const lines: string[] = [];
 		if (single?.error) lines.push(...errorRows(single.error, theme));
-		lines.push(...preview(body, expanded, theme, "toolOutput"));
+		lines.push(...preview(body, expanded, theme, width, "toolOutput"));
 		if (result && receipts.length === 0) {
 			const note = firstText(result) || "No live peers to broadcast to.";
 			lines.push(...note.split("\n").map(line => `${INDENT}${theme.fg("muted", line)}`));
@@ -144,6 +159,7 @@ export function renderAgentWrite(
 					expanded,
 					maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
 					itemType: "recipient",
+					width: width - INDENT.length,
 					renderItem: receipt => receiptRow(receipt, theme),
 				},
 				theme,
@@ -224,7 +240,7 @@ export function renderProcWrite(
 	options: RenderResultOptions,
 	theme: Theme,
 ): Component {
-	return card((_width, expanded) => {
+	return card((width, expanded) => {
 		const daemon = details && "daemon" in details ? details.daemon : undefined;
 		const header: StatusLineOptions = {
 			icon: result === undefined ? inFlightStatus(options) : result.isError ? "error" : "success",
@@ -234,7 +250,7 @@ export function renderProcWrite(
 		};
 		if (result?.isError) return [header, ...errorRows(firstText(result) || "Process operation failed.", theme)];
 		const lines: string[] = [];
-		if (content && action === "stdin") lines.push(...preview(content, expanded, theme));
+		if (content && action === "stdin") lines.push(...preview(content, expanded, theme, width));
 		if (details && "op" in details && details.op === "cancel") {
 			const jobs = details.jobs ?? [];
 			const outcomes = details.cancelled ?? [];
@@ -246,6 +262,7 @@ export function renderProcWrite(
 						flush: true,
 						maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
 						itemType: "job",
+						width: width - INDENT.length,
 						renderItem: outcome => {
 							const job = jobs.find(item => item.id === outcome.id);
 							if (job) return jobRow(job, theme, outcome.status);
@@ -268,7 +285,7 @@ export function renderProcRead(
 	options: RenderResultOptions,
 	theme: Theme,
 ): Component {
-	return card((_width, expanded) => {
+	return card((width, expanded) => {
 		const description = id ? safe(id) : "jobs & services";
 		const daemon = details?.daemon;
 		const headerFor = (icon: ToolUIStatus, meta: string[] = []): StatusLineOptions => ({
@@ -287,13 +304,19 @@ export function renderProcRead(
 					details.log ?? details.job.errorText ?? details.job.resultText ?? "",
 					expanded,
 					theme,
+					width,
 					"toolOutput",
 				),
 			];
 		if (daemon) {
 			const output = details.terminalRows ?? (details.log ?? "").split("\n").filter(Boolean);
 			const limit = expanded ? PREVIEW_LIMITS.EXPANDED_LINES : PREVIEW_LIMITS.COLLAPSED_LINES;
-			const shownCount = cappedRowCount(output.length, limit);
+			const shownCount = cappedRowCount(
+				output.length,
+				limit,
+				rowWidth(width),
+				() => `${INDENT}${styleTerminalRow(safe(output[output.length - limit - 1]), theme.fg("toolOutput", ""))}`,
+			);
 			const visible = output.slice(output.length - shownCount).map(line => {
 				const row = styleTerminalRow(
 					truncateToWidth(safe(line), TRUNCATE_LENGTHS.LINE),
@@ -308,7 +331,7 @@ export function renderProcRead(
 			return [headerFor("success", daemonMeta(daemon, theme)), ...visible];
 		}
 		if (id && !details?.jobs && !details?.daemons && !details?.agents) {
-			return [headerFor("success"), ...preview(firstText(result), expanded, theme, "toolOutput")];
+			return [headerFor("success"), ...preview(firstText(result), expanded, theme, width, "toolOutput")];
 		}
 		const jobs = details?.jobs ?? [];
 		const services = details?.daemons ?? [];
@@ -335,6 +358,7 @@ export function renderProcRead(
 					flush: true,
 					maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
 					itemType: "process",
+					width: width - INDENT.length,
 					renderItem: item => item,
 				},
 				theme,

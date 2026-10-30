@@ -75,6 +75,61 @@ export const searchFixtures: Record<string, GalleryFixture> = {
 		},
 	},
 
+	grep_missing: {
+		label: "Grep (skipped missing)",
+		renderer: "grep",
+		streamingArgs: {
+			pattern: "useState",
+		},
+		args: {
+			pattern: "useState",
+			path: "packages/tui/src/hooks;packages/tui/legacy;docs/old-hooks.md",
+		},
+		result: {
+			content: [
+				{
+					type: "text",
+					text: [
+						"# packages/tui/src/hooks/",
+						"## useDebounced.ts",
+						"9:  const [value, setValue] = useState(initial);",
+						"10:  const [pending, setPending] = useState(false);",
+						"Skipped missing paths: packages/tui/legacy, docs/old-hooks.md",
+					].join("\n"),
+				},
+			],
+			details: {
+				scopePath: "packages/tui/src/hooks",
+				searchPath: "/Users/dev/Projects/pi/packages/tui/src/hooks",
+				matchCount: 2,
+				fileCount: 1,
+				files: ["packages/tui/src/hooks/useDebounced.ts"],
+				fileMatches: [{ path: "packages/tui/src/hooks/useDebounced.ts", count: 2 }],
+				truncated: false,
+				displayContent: [
+					"# packages/tui/src/hooks/",
+					"## useDebounced.ts",
+					" *9│  const [value, setValue] = useState(initial);",
+					"*10│  const [pending, setPending] = useState(false);",
+				].join("\n"),
+				missingPaths: ["packages/tui/legacy", "docs/old-hooks.md"],
+			},
+		},
+		// Every target missing fails the call instead of skipping (`resolveToolSearchScope`).
+		errorResult: {
+			content: [
+				{
+					type: "text",
+					text: "Path not found: packages/tui/src/hooks, packages/tui/legacy, docs/old-hooks.md",
+				},
+			],
+			isError: true,
+			details: {
+				error: "Path not found: packages/tui/src/hooks, packages/tui/legacy, docs/old-hooks.md",
+			},
+		},
+	},
+
 	ast_grep: {
 		label: "AST Grep",
 		streamingArgs: {

@@ -72,13 +72,13 @@ function formatGlobRenderPaths(args: GlobRenderArgs | undefined): string | undef
  * Flush file rows (type icon, path) capped while collapsed; when cut, the
  * last row is `… N more files` with the expand hint.
  */
-function renderGlobFileRows(files: FileEntry[], expanded: boolean, theme: Theme): string[] {
+function renderGlobFileRows(files: FileEntry[], expanded: boolean, width: number, theme: Theme): string[] {
 	const rows = renderFileList(
-		{ files, expanded, maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS, hyperlinkFn: fileHyperlink },
+		{ files, expanded, maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS, hyperlinkFn: fileHyperlink, width },
 		theme,
 	);
-	// renderFileList appends its `… N more files` row exactly when it hides 2+ files past the cap.
-	if (!expanded && files.length > PREVIEW_LIMITS.COLLAPSED_ITEMS + 1) {
+	// Each file draws one row, so fewer rows than files means a trailing `… N more files` row.
+	if (!expanded && rows.length < files.length) {
 		rows[rows.length - 1] += ` ${formatExpandHint(theme)}`;
 	}
 	return rows;
@@ -193,10 +193,10 @@ export const globToolRenderer = {
 
 		const missingRows = formatMissingPathRows(details?.missingPaths ?? [], uiTheme);
 
-		// File rows wrap in the flush card; recomputed only when expansion changes (width 0: any width).
+		// File rows wrap in the flush card; recomputed when the width or expansion changes.
 		const memo = new CardRowsMemo();
-		const cachedRows = (build: (expanded: boolean) => string[]): readonly string[] =>
-			memo.rows(0, options.expanded, () => build(options.expanded));
+		const cachedRows = (width: number, build: (expanded: boolean) => string[]): readonly string[] =>
+			memo.rows(width, options.expanded, () => build(options.expanded));
 		const cardOptions = memo.cardOptions;
 
 		if (details?.fileCount === undefined) {
@@ -216,10 +216,11 @@ export const globToolRenderer = {
 				.map(entry => ({ path: entry, isDirectory: entry.endsWith("/") }));
 			return plainToolCard(
 				uiTheme,
-				() => ({
+				({ contentWidth }) => ({
 					status: status("success", [formatCount("file", files.length)]),
 					phase: "success",
-					body: () => cachedRows(expanded => renderGlobFileRows(files, expanded, uiTheme)),
+					body: () =>
+						cachedRows(contentWidth, expanded => renderGlobFileRows(files, expanded, contentWidth, uiTheme)),
 				}),
 				cardOptions,
 			);
@@ -275,10 +276,14 @@ export const globToolRenderer = {
 		});
 		return plainToolCard(
 			uiTheme,
-			() => ({
+			({ contentWidth }) => ({
 				status: status(truncated ? "warning" : "success", meta),
 				phase: truncated ? "warning" : "success",
-				body: () => cachedRows(expanded => [...renderGlobFileRows(files, expanded, uiTheme), ...extraLines]),
+				body: () =>
+					cachedRows(contentWidth, expanded => [
+						...renderGlobFileRows(files, expanded, contentWidth, uiTheme),
+						...extraLines,
+					]),
 			}),
 			cardOptions,
 		);

@@ -13,6 +13,8 @@ import type { Component } from "../tui";
 import { highlightCode as highlightThemeCode, type Theme } from "../theme/theme";
 import {
 	cappedRowCount,
+	expansionFits,
+	fitsOneRow,
 	formatCount,
 	formatErrorText,
 	formatExpandHint,
@@ -196,23 +198,26 @@ interface LspRows {
 interface LspResultView {
 	icon: "success" | "warning";
 	meta: string[];
-	rows(expanded: boolean): LspRows;
+	/** `width` is the width each row draws in. */
+	rows(expanded: boolean, width: number): LspRows;
 }
 
 /**
  * Lay out a view's rows: expanded rows stay whole (the flush card wraps them
  * under their tree guides); collapsed rows clip to one line each, and the
  * expand hint closes the body whenever the collapsed view hides anything (a
- * truncation marker or a clipped row).
+ * truncation marker or a clipped row). A collapsed view whose expansion draws
+ * in no more rows, its markers and hint included, renders expanded instead.
  */
 function layoutRows(view: LspResultView, expanded: boolean, width: number, theme: Theme): string[] {
-	const { rows, more, markerLast } = view.rows(expanded);
-	if (expanded) return rows;
+	if (expanded) return view.rows(true, width).rows;
+	const { rows, more, markerLast } = view.rows(false, width);
 	const clipped = rows.some(row => visibleWidth(row) > width);
 	const fitted = rows.map(row => truncateToWidth(row, width));
 	if (more) fitted.push(more);
 	else if (clipped && !markerLast) fitted.push(formatExpandHint(theme));
-	return fitted;
+	const full = view.rows(true, width).rows;
+	return expansionFits(fitted, full, width, theme) ? full : fitted;
 }
 
 /**
@@ -303,12 +308,14 @@ function hoverView(codeBlockMatch: RegExpMatchArray, fullText: string, theme: Th
 	return {
 		icon: "success",
 		meta: [],
-		rows(expanded) {
+		rows(expanded, width) {
 			const before = docLines(beforeCode);
 			const after = docLines(afterCode);
 			const full = [...before, ...codeLines, ...after];
-			// A single hidden line renders in place of its own `… 1 more line` row.
-			if (expanded || full.length <= 2) return { rows: full };
+			if (expanded || full.length <= 1) return { rows: full };
+			// A single hidden line that draws as one row renders in place of its own `… 1 more line` row.
+			const loneRow = before.length > 0 ? full[0] : full[1];
+			if (full.length === 2 && fitsOneRow(loneRow, width)) return { rows: full };
 			const hidden = full.length - 1;
 			return {
 				rows: [codeLines[0] ?? ""],
@@ -388,8 +395,15 @@ function diagnosticsView(
 		// Unverified files are a partial delivery; diagnostics themselves are the result.
 		icon: unreportedLines.length > 0 ? "warning" : "success",
 		meta,
-		rows(expanded) {
-			const shown = expanded ? items : items.slice(0, cappedRowCount(items.length, COLLAPSED_DIAGNOSTICS));
+		rows(expanded, width) {
+			const shown = expanded
+				? items
+				: items.slice(
+						0,
+						cappedRowCount(items.length, COLLAPSED_DIAGNOSTICS, width, () =>
+							renderItem(items[COLLAPSED_DIAGNOSTICS]),
+						),
+					);
 			const remaining = items.length - shown.length;
 			return {
 				rows: shown.map(renderItem),
@@ -431,8 +445,9 @@ function referencesView(refCount: number, lines: string[], theme: Theme): LspRes
 			files.length > 0
 				? [formatCount("reference", refCount), formatCount("file", files.length)]
 				: [formatCount("reference", refCount)],
-		rows(expanded) {
+		rows(expanded, width) {
 			const maxLocs = expanded ? Number.POSITIVE_INFINITY : COLLAPSED_REFERENCE_LOCATIONS;
+			// A file group spans its header and locations: a lone hidden one keeps its `… 1 more file` row.
 			const shownFiles = files.slice(0, expanded ? files.length : COLLAPSED_REFERENCE_FILES);
 			const hiddenFiles = files.length - shownFiles.length;
 			const rows: string[] = [];
@@ -440,7 +455,13 @@ function referencesView(refCount: number, lines: string[], theme: Theme): LspRes
 			shownFiles.forEach((file, fileIndex) => {
 				const locs = byFile.get(file)!;
 				rows.push(`${formatStyledPath(replaceTabs(file), theme)} ${theme.fg("dim", `(${locs.length})`)}`);
-				const children = locs.slice(0, cappedRowCount(locs.length, maxLocs)).map(loc => theme.fg("muted", loc));
+				const locCount = cappedRowCount(
+					locs.length,
+					maxLocs,
+					width,
+					() => nestRows([theme.fg("muted", locs[COLLAPSED_REFERENCE_LOCATIONS])], theme)[0],
+				);
+				const children = locs.slice(0, locCount).map(loc => theme.fg("muted", loc));
 				const hiddenLocs = locs.length - children.length;
 				// Only the body's final row carries the expand hint.
 				markerLast = hiddenLocs > 0 && fileIndex === shownFiles.length - 1 && hiddenFiles === 0;
@@ -522,13 +543,16 @@ function symbolsView(lines: string[], theme: Theme): LspResultView {
 	return {
 		icon: symbols.length > 0 ? "success" : "warning",
 		meta: [formatCount("symbol", symbols.length)],
-		rows(expanded) {
+		rows(expanded, width) {
 			const fullRows = symbols.map((sym, i) => `${prefixes[i]}${symbolLabel(sym)}`);
 			if (expanded) return { rows: fullRows };
 			const shown = topLevel.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS);
 			const hidden = symbols.length - shown.length;
-			// One hidden symbol renders as its own row instead of a `… 1 more symbol` row.
-			if (hidden === 1) return { rows: fullRows };
+			// One hidden symbol that draws as one row renders instead of a `… 1 more symbol` row.
+			if (hidden === 1) {
+				const loneIndex = symbols.findIndex(sym => !shown.includes(sym));
+				if (fitsOneRow(fullRows[loneIndex], width)) return { rows: fullRows };
+			}
 			return {
 				rows: shown.map(symbolLabel),
 				more: hidden > 0 ? formatMoreRow(hidden, "symbol", theme) : undefined,
@@ -551,10 +575,15 @@ function genericView(text: string, lines: string[], theme: Theme): LspResultView
 		// answer ("No definition found"), needs attention.
 		icon: (hasError && !hasSuccess) || /^no\b.*\bfound\b/i.test(text.trim()) ? "warning" : "success",
 		meta: [],
-		rows(expanded) {
+		rows(expanded, width) {
 			const shown = expanded
 				? outputLines
-				: outputLines.slice(0, cappedRowCount(outputLines.length, COLLAPSED_GENERIC_LINES));
+				: outputLines.slice(
+						0,
+						cappedRowCount(outputLines.length, COLLAPSED_GENERIC_LINES, width, () =>
+							theme.fg("toolOutput", outputLines[COLLAPSED_GENERIC_LINES]),
+						),
+					);
 			const remaining = outputLines.length - shown.length;
 			return {
 				rows: shown.map(line => theme.fg("toolOutput", line)),

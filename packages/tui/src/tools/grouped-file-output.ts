@@ -393,10 +393,12 @@ function countPreviewMatches(group: readonly number[], lines: readonly string[],
 	return count;
 }
 
-/** Line budget and expansion state for {@link renderSearchPreviewRows}. */
+/** Line budgets and expansion state for {@link renderSearchPreviewRows}. */
 export interface SearchPreviewOptions {
-	/** Rows available, including the trailing `… N more` row. */
-	maxLines: number;
+	/** Rows available while collapsed, including the trailing `… N more` row. */
+	collapsedMaxLines: number;
+	/** Rows available while expanded, including the trailing `… N more` row. */
+	expandedMaxLines: number;
 	/** Reported match total; used when the display output marks no match rows. */
 	matchCount: number;
 	expanded: boolean;
@@ -407,7 +409,8 @@ export interface SearchPreviewOptions {
  * budget. Directory headers are dropped: callers style each file header with
  * its full path ({@link formatGroupedFileHeader}). Collapsed, groups keep only
  * their headers and match rows. When rows are cut, the last row is
- * `… N more matches` (or lines) with the expand hint.
+ * `… N more matches` (or lines) with the expand hint. A collapsed preview
+ * whose expansion draws in no more rows (that marker included) renders expanded.
  */
 export function renderSearchPreviewRows(
 	groups: readonly (readonly number[])[],
@@ -416,7 +419,23 @@ export function renderSearchPreviewRows(
 	options: SearchPreviewOptions,
 	theme: Theme,
 ): string[] {
-	const { maxLines, matchCount, expanded } = options;
+	const { matchCount, expanded } = options;
+	const full = searchPreviewRows(groups, lines, styleLine, options.expandedMaxLines, matchCount, true, theme);
+	if (expanded) return full;
+	const collapsed = searchPreviewRows(groups, lines, styleLine, options.collapsedMaxLines, matchCount, false, theme);
+	return full.length <= collapsed.length ? full : collapsed;
+}
+
+/** {@link renderSearchPreviewRows} for one expansion state, its trailing `… N more` row included. */
+function searchPreviewRows(
+	groups: readonly (readonly number[])[],
+	lines: readonly string[],
+	styleLine: (index: number) => string,
+	maxLines: number,
+	matchCount: number,
+	expanded: boolean,
+	theme: Theme,
+): string[] {
 	if (maxLines <= 0) return [];
 	const renderedGroups = groups
 		.map(group => group.filter(index => !isGroupedDirHeader(lines[index]!)))
@@ -446,19 +465,18 @@ export function renderSearchPreviewRows(
 		while (visible.length > 1 && isSearchHeaderLine(lines[visible[visible.length - 1]!]!)) visible.pop();
 	}
 
-	const out = visible.map(index => replaceTabs(styleLine(index)));
+	const rows = visible.map(index => replaceTabs(styleLine(index)));
 	const visibleMatches = countPreviewMatches(visible, lines, hasMarkedMatches);
 	const totalMatches = hasMarkedMatches ? totalMarkedMatches : Math.max(matchCount, totalFallbackMatches);
 	const hiddenMatches = Math.max(totalMatches - visibleMatches, 0);
 	const hiddenLines = Math.max(totalLines - visible.length, 0);
-	if (needsSummary && (hiddenMatches > 0 || hiddenLines > 0)) {
-		out.push(
-			hiddenMatches > 0
-				? formatMoreRow(hiddenMatches, "match", theme, { expanded })
-				: formatMoreRow(hiddenLines, "line", theme, { expanded }),
-		);
-	}
-	return out;
+	if (!needsSummary || (hiddenMatches === 0 && hiddenLines === 0)) return rows;
+	rows.push(
+		hiddenMatches > 0
+			? formatMoreRow(hiddenMatches, "match", theme, { expanded })
+			: formatMoreRow(hiddenLines, "line", theme, { expanded }),
+	);
+	return rows;
 }
 
 /**

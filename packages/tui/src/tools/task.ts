@@ -43,6 +43,9 @@ import {
 	type ToolUIStatus,
 	TRUNCATE_LENGTHS,
 	truncateToWidth,
+	expansionFits,
+	type FoldableRows,
+	foldBody,
 } from "../render/render-utils";
 import type { StatusLineOptions } from "../render/status-line";
 import { framedToolCard, plainToolCard, type ToolCardSection } from "../render/tool-card";
@@ -234,21 +237,29 @@ function formatYieldPreview(item: RenderYieldItem): string {
 	}
 }
 
-function renderTypedYieldSections(value: unknown, continuePrefix: string, expanded: boolean, theme: Theme): string[] {
+function renderTypedYieldSections(
+	value: unknown,
+	continuePrefix: string,
+	expanded: boolean,
+	theme: Theme,
+	maxWidth: number,
+): string[] {
 	const typedItems: Array<{ item: RenderYieldItem; labels: string[] }> = [];
 	for (const item of normalizeYieldData(value)) {
 		const labels = getRenderYieldLabels(item.type);
 		if (labels.length === 0) continue;
 		typedItems.push({ item, labels });
 	}
-	const displayCount = expanded ? typedItems.length : cappedRowCount(typedItems.length, 3);
-	const lines: string[] = [];
-	for (const { item, labels } of typedItems.slice(-displayCount)) {
-		const terminal = !Array.isArray(item.type);
-		const prefix = terminal ? "yield" : "yield+";
+	const yieldRow = ({ item, labels }: { item: RenderYieldItem; labels: string[] }): string => {
+		const prefix = Array.isArray(item.type) ? "yield+" : "yield";
 		const label = `${prefix}[${labels.join(", ")}]`;
-		lines.push(`${continuePrefix}${theme.fg("dim", label)}: ${theme.fg("dim", formatYieldPreview(item))}`);
-	}
+		return `${continuePrefix}${theme.fg("dim", label)}: ${theme.fg("dim", formatYieldPreview(item))}`;
+	};
+	// Tail window: the lone hidden entry is the earliest one.
+	const displayCount = expanded
+		? typedItems.length
+		: cappedRowCount(typedItems.length, 3, maxWidth, () => yieldRow(typedItems[0]));
+	const lines = typedItems.slice(-displayCount).map(yieldRow);
 	if (typedItems.length > displayCount) {
 		lines.push(
 			`${continuePrefix}${theme.fg("dim", formatMoreItems(typedItems.length - displayCount, "yield", theme))}`,
@@ -362,9 +373,27 @@ function renderOutputSection(
 	warning?: string,
 	maxWidth = Number.POSITIVE_INFINITY,
 ): string[] {
+	return foldBody(
+		state => buildOutputSection(output, continuePrefix, state, theme, maxCollapsed, maxExpanded, warning, maxWidth),
+		expanded,
+		maxWidth,
+		theme,
+	);
+}
+
+function buildOutputSection(
+	output: string,
+	continuePrefix: string,
+	expanded: boolean,
+	theme: Theme,
+	maxCollapsed: number,
+	maxExpanded: number,
+	warning: string | undefined,
+	maxWidth: number,
+): FoldableRows {
 	const lines: string[] = [];
 	const trimmedOutput = sanitizeText(output).trimEnd();
-	if (!trimmedOutput && !warning) return lines;
+	if (!trimmedOutput && !warning) return { rows: lines, foldRows: 0 };
 
 	const label = `${continuePrefix}${theme.fg("dim", "Output")}`;
 	const indent = `${continuePrefix}  `;
@@ -373,7 +402,7 @@ function renderOutputSection(
 	if (warning) {
 		const warningText = theme.fg("dim", clipCollapsed(sanitizeText(warning), 80, expanded));
 		lines.push(label, `${indent}${formatStatusIcon("warning", theme)} ${warningText}`);
-		if (!trimmedOutput) return lines;
+		if (!trimmedOutput) return { rows: lines, foldRows: 0 };
 	}
 
 	if (trimmedOutput.startsWith("{") || trimmedOutput.startsWith("[")) {
@@ -383,7 +412,7 @@ function renderOutputSection(
 			// Collapsed: inline format like Args
 			if (!expanded) {
 				lines.push(`${warning ? indent : continuePrefix}${theme.fg("dim", formatOutputInline(parsed))}`);
-				return lines;
+				return { rows: lines, foldRows: 0 };
 			}
 
 			// Expanded: tree format
@@ -401,7 +430,7 @@ function renderOutputSection(
 				if (!warning) lines.push(label);
 				for (const line of tree.lines) lines.push(`${indent}${line}`);
 				if (tree.truncated) lines.push(`${indent}${theme.fg("dim", theme.format.ellipsis)}`);
-				return lines;
+				return { rows: lines, foldRows: 0 };
 			}
 		} catch {
 			// Fall back to raw output
@@ -410,14 +439,21 @@ function renderOutputSection(
 
 	if (!warning) lines.push(label);
 	const outputLines = trimmedOutput.split("\n");
-	const previewCount = cappedRowCount(outputLines.length, expanded ? maxExpanded : maxCollapsed);
+	const limit = expanded ? maxExpanded : maxCollapsed;
+	// A lone hidden line shows only when it draws as one unclipped row: collapsed rows also clip at 70 columns.
+	const fitWidth = expanded ? maxWidth : Math.min(maxWidth, visibleWidth(indent) + 70);
+	const previewCount = cappedRowCount(
+		outputLines.length,
+		limit,
+		fitWidth,
+		() => `${indent}${theme.fg("dim", replaceTabs(outputLines[limit]))}`,
+	);
 	for (const line of outputLines.slice(0, previewCount)) {
 		lines.push(...hangingRows(indent, theme.fg("dim", clipCollapsed(replaceTabs(line), 70, expanded)), maxWidth));
 	}
-	if (outputLines.length > previewCount) {
-		lines.push(`${indent}${theme.fg("dim", formatMoreItems(outputLines.length - previewCount, "line", theme))}`);
-	}
-	return lines;
+	if (outputLines.length <= previewCount) return { rows: lines, foldRows: 0 };
+	lines.push(`${indent}${theme.fg("dim", formatMoreItems(outputLines.length - previewCount, "line", theme))}`);
+	return { rows: lines, foldRows: 1 };
 }
 
 function renderTaskSection(
@@ -437,7 +473,7 @@ function renderTaskSection(
 	const taskLines = trimmed
 		.split("\n")
 		.flatMap(line => hangingRows(indent, theme.fg("dim", replaceTabs(line)), maxWidth));
-	const shownTaskLines = cappedRowCount(taskLines.length, maxExpanded);
+	const shownTaskLines = cappedRowCount(taskLines.length, maxExpanded, maxWidth, () => taskLines[maxExpanded]);
 	lines.push(...taskLines.slice(0, shownTaskLines));
 	if (taskLines.length > shownTaskLines) {
 		lines.push(`${indent}${theme.fg("dim", formatMoreItems(taskLines.length - shownTaskLines, "line", theme))}`);
@@ -516,7 +552,7 @@ export function agentTypeBadge(agent: string | undefined, theme: Theme): string 
  * Render the call preview lines for the single spawned agent. The
  * args stream in token by token, so every field access is defensive.
  */
-function renderTaskCallLines(args: Partial<TaskParams> | undefined, theme: Theme): string[] {
+function renderTaskCallLines(args: Partial<TaskParams> | undefined, theme: Theme, width: number): string[] {
 	if (!args) return [];
 	const bullet = formatStatusIcon("pending", theme);
 	const lines: string[] = [];
@@ -533,7 +569,7 @@ function renderTaskCallLines(args: Partial<TaskParams> | undefined, theme: Theme
 		line += agentTypeBadge(args.agent, theme);
 		lines.push(line);
 	}
-	lines.push(...renderTaskItemLines(args.tasks, theme));
+	lines.push(...renderTaskItemLines(args.tasks, theme, width));
 	return lines;
 }
 
@@ -549,13 +585,11 @@ const COLLAPSED_AGENT_LIMIT = 4;
  * over time and trailing entries may be partially parsed — every field access
  * is defensive.
  */
-function renderTaskItemLines(tasks: TaskItem[] | undefined, theme: Theme): string[] {
+function renderTaskItemLines(tasks: TaskItem[] | undefined, theme: Theme, width: number): string[] {
 	if (!Array.isArray(tasks) || tasks.length === 0) return [];
 
 	const bullet = formatStatusIcon("pending", theme);
-	const cap = cappedRowCount(tasks.length, COLLAPSED_AGENT_LIMIT);
-	const lines: string[] = [];
-	for (let i = 0; i < cap; i++) {
+	const itemRow = (i: number): string => {
 		const item = tasks[i] as Partial<TaskItem> | undefined;
 		const rawName = typeof item?.name === "string" ? item.name.trim() : "";
 		const idLabel = rawName ? formatTaskId(rawName) : `#${i + 1}`;
@@ -568,8 +602,11 @@ function renderTaskItemLines(tasks: TaskItem[] | undefined, theme: Theme): strin
 		if (item?.isolated === true) {
 			line += ` ${formatBadge("isolated", "muted", theme)}`;
 		}
-		lines.push(line);
-	}
+		return line;
+	};
+	const cap = cappedRowCount(tasks.length, COLLAPSED_AGENT_LIMIT, width, () => itemRow(COLLAPSED_AGENT_LIMIT));
+	const lines: string[] = [];
+	for (let i = 0; i < cap; i++) lines.push(itemRow(i));
 	if (cap < tasks.length) {
 		lines.push(theme.fg("dim", formatMoreItems(tasks.length - cap, "agent", theme)));
 	}
@@ -638,16 +675,23 @@ export function renderCall(args: TaskParams, options: TaskRenderOptions, theme: 
 	// stream in. Once a result snapshot exists, `renderResult` draws them (and
 	// the brief) itself.
 	const hasResult = options.renderContext?.hasResult === true;
-	const callLines = hasResult ? [] : renderTaskCallLines(args, theme);
 	if (hasResult || !(contextSection || assignmentSection)) {
-		return plainToolCard(theme, () => ({ status, body: callLines, phase: icon }));
+		return plainToolCard(theme, ({ contentWidth }) => ({
+			status,
+			body: hasResult ? [] : renderTaskCallLines(args, theme, contentWidth),
+			phase: icon,
+		}));
 	}
-	return framedToolCard(theme, ({ width }) => ({
+	return framedToolCard(theme, ({ width, contentWidth }) => ({
 		status,
 		// Mirror renderResult's layout (context, assignment, then the agent
 		// list) so the streaming preview grows append-only and rows do not
 		// jump when the first progress snapshot replaces the call view.
-		sections: taskSections(width, [contextSection, assignmentSection], callLines),
+		sections: taskSections(
+			width,
+			[contextSection, assignmentSection],
+			renderTaskCallLines(args, theme, contentWidth),
+		),
 		phase: icon,
 	}));
 }
@@ -852,7 +896,7 @@ function renderAgentProgress(progress: AgentProgress, options: AgentRowOptions):
 			const reviewLines = memoBySnapshot(
 				completedReviewMemo,
 				yieldValue,
-				[continuePrefix, expanded, theme],
+				[continuePrefix, expanded, theme, maxWidth],
 				(): string[] | null => {
 					const completeData = normalizeYieldData(yieldValue);
 					const incrementalReview = extractIncrementalReviewResult(completeData);
@@ -863,13 +907,21 @@ function renderAgentProgress(progress: AgentProgress, options: AgentRowOptions):
 							continuePrefix,
 							expanded,
 							theme,
+							maxWidth,
 						);
 					}
 					const reviewData = completeData
 						.map(c => c.data as SubmitReviewDetails)
 						.filter(d => d && typeof d === "object" && "overall_correctness" in d);
 					if (reviewData.length === 0) return null;
-					return renderReviewResult(reviewData[reviewData.length - 1], [], continuePrefix, expanded, theme);
+					return renderReviewResult(
+						reviewData[reviewData.length - 1],
+						[],
+						continuePrefix,
+						expanded,
+						theme,
+						maxWidth,
+					);
 				},
 			);
 			if (reviewLines) {
@@ -882,8 +934,8 @@ function renderAgentProgress(progress: AgentProgress, options: AgentRowOptions):
 			const dataArray = progress.extractedToolData[toolName];
 			if (toolName === "yield") {
 				lines.push(
-					...memoBySnapshot(yieldSectionsMemo, dataArray, [continuePrefix, expanded, theme], () =>
-						renderTypedYieldSections(dataArray, continuePrefix, expanded, theme),
+					...memoBySnapshot(yieldSectionsMemo, dataArray, [continuePrefix, expanded, theme, maxWidth], () =>
+						renderTypedYieldSections(dataArray, continuePrefix, expanded, theme, maxWidth),
 					),
 				);
 				continue;
@@ -897,13 +949,18 @@ function renderAgentProgress(progress: AgentProgress, options: AgentRowOptions):
 			const handler = getSubprocessToolRenderer(toolName);
 			if (handler?.renderInline) {
 				const items = dataArray as unknown[];
-				const displayCount = expanded ? items.length : cappedRowCount(items.length, 3);
+				const inlineRow = (data: unknown): string | undefined => {
+					const component = handler.renderInline?.(data, theme);
+					return component instanceof Text ? `${continuePrefix}${component.getText()}` : undefined;
+				};
+				// Tail window: the lone hidden entry is the earliest one; a non-text entry never fits a row.
+				const displayCount = expanded
+					? items.length
+					: cappedRowCount(items.length, 3, maxWidth, () => inlineRow(items[0]) ?? "\n");
 				const recentData = items.slice(-displayCount);
 				for (const data of recentData) {
-					const component = handler.renderInline(data, theme);
-					if (component instanceof Text) {
-						lines.push(`${continuePrefix}${component.getText()}`);
-					}
+					const row = inlineRow(data);
+					if (row !== undefined) lines.push(row);
 				}
 				if (items.length > displayCount) {
 					lines.push(
@@ -976,6 +1033,7 @@ function renderReviewResult(
 	continuePrefix: string,
 	expanded: boolean,
 	theme: Theme,
+	maxWidth: number,
 ): string[] {
 	const lines: string[] = [];
 
@@ -989,20 +1047,14 @@ function renderReviewResult(
 		)}`,
 	);
 
-	// Explanation preview (first ~80 chars when collapsed, full when expanded)
+	// Explanation preview (first sentence when collapsed, full when expanded)
 	if (summary.explanation) {
+		const full = renderExplanation(summary.explanation, continuePrefix, true, theme);
 		if (expanded) {
-			lines.push(`${continuePrefix}${theme.fg("dim", "Summary")}`);
-			const explanationLines = sanitizeText(summary.explanation).split("\n");
-			for (const line of explanationLines) {
-				lines.push(`${continuePrefix}  ${theme.fg("dim", replaceTabs(line))}`);
-			}
+			lines.push(...full);
 		} else {
-			// Preview: first sentence or ~100 chars (flatten tabs/newlines first)
-			const flat = replaceTabs(sanitizeText(summary.explanation)).replace(/[\r\n]+/g, " ");
-			const firstSentence = flat.split(/[.!?]/)[0].trim();
-			const preview = truncateToWidth(`${firstSentence}.`, 100);
-			lines.push(`${continuePrefix}${theme.fg("dim", preview)}`);
+			const preview = renderExplanation(summary.explanation, continuePrefix, false, theme);
+			lines.push(...(expansionFits(preview, full, maxWidth, theme) ? full : preview));
 		}
 	}
 
@@ -1010,23 +1062,60 @@ function renderReviewResult(
 	lines.push(`${continuePrefix}${formatFindingSummary(findings, theme)}`);
 
 	if (findings.length > 0) {
-		lines.push(...renderFindings(findings, continuePrefix, expanded, theme));
+		lines.push(
+			...foldBody(
+				state => renderFindings(findings, continuePrefix, state, theme, maxWidth),
+				expanded,
+				maxWidth,
+				theme,
+			),
+		);
 	}
 
 	return lines;
 }
 
+/** Review explanation: a `Summary` block when expanded, else its first sentence on one row. */
+function renderExplanation(explanation: string, continuePrefix: string, expanded: boolean, theme: Theme): string[] {
+	if (expanded) {
+		const lines = [`${continuePrefix}${theme.fg("dim", "Summary")}`];
+		for (const line of sanitizeText(explanation).split("\n")) {
+			lines.push(`${continuePrefix}  ${theme.fg("dim", replaceTabs(line))}`);
+		}
+		return lines;
+	}
+	// Preview: first sentence or ~100 chars (flatten tabs/newlines first)
+	const flat = replaceTabs(sanitizeText(explanation)).replace(/[\r\n]+/g, " ");
+	const firstSentence = flat.split(/[.!?]/)[0].trim();
+	return [`${continuePrefix}${theme.fg("dim", truncateToWidth(`${firstSentence}.`, 100))}`];
+}
+
 /**
  * Render review findings list.
  */
-function renderFindings(findings: FindingDetails[], continuePrefix: string, expanded: boolean, theme: Theme): string[] {
+function renderFindings(
+	findings: FindingDetails[],
+	continuePrefix: string,
+	expanded: boolean,
+	theme: Theme,
+	maxWidth: number,
+): FoldableRows {
 	const lines: string[] = [];
+	const findingRow = (finding: FindingDetails, findingPrefix: string): string => {
+		const { color } = getPriorityInfo(finding.priority);
+		const rawTitle = sanitizeText(finding.title?.replace(/^\[P\d\]\s*/, "") ?? "Untitled");
+		const titleText = replaceTabs(rawTitle).replace(/[\r\n]+/g, " ");
+		const loc = `${path.basename(sanitizeText(finding.file_path || "<unknown>"))}:${finding.line_start}`;
+		return `${continuePrefix}${findingPrefix} ${theme.fg(color, `[${finding.priority}]`)} ${titleText} ${theme.fg("dim", loc)}`;
+	};
 
 	// Sort by priority (lower = more severe) when collapsed to show most important first
 	const sortedFindings = expanded
 		? findings
 		: [...findings].sort((a, b) => getPriorityInfo(a.priority).ord - getPriorityInfo(b.priority).ord);
-	const displayCount = expanded ? sortedFindings.length : cappedRowCount(sortedFindings.length, 3);
+	const displayCount = expanded
+		? sortedFindings.length
+		: cappedRowCount(sortedFindings.length, 3, maxWidth, () => findingRow(sortedFindings[3], theme.tree.last));
 
 	for (let i = 0; i < displayCount; i++) {
 		const finding = sortedFindings[i];
@@ -1034,14 +1123,7 @@ function renderFindings(findings: FindingDetails[], continuePrefix: string, expa
 		const findingPrefix = isLastFinding ? theme.tree.last : theme.tree.branch;
 		const findingContinue = isLastFinding ? "   " : `${theme.tree.vertical}  `;
 
-		const { color } = getPriorityInfo(finding.priority);
-		const rawTitle = sanitizeText(finding.title?.replace(/^\[P\d\]\s*/, "") ?? "Untitled");
-		const titleText = replaceTabs(rawTitle).replace(/[\r\n]+/g, " ");
-		const loc = `${path.basename(sanitizeText(finding.file_path || "<unknown>"))}:${finding.line_start}`;
-
-		lines.push(
-			`${continuePrefix}${findingPrefix} ${theme.fg(color, `[${finding.priority}]`)} ${titleText} ${theme.fg("dim", loc)}`,
-		);
+		lines.push(findingRow(finding, findingPrefix));
 
 		// Show body when expanded
 		if (expanded && finding.body) {
@@ -1053,13 +1135,11 @@ function renderFindings(findings: FindingDetails[], continuePrefix: string, expa
 		}
 	}
 
-	if (displayCount < sortedFindings.length) {
-		lines.push(
-			`${continuePrefix}${theme.fg("dim", formatMoreItems(sortedFindings.length - displayCount, "finding", theme))}`,
-		);
-	}
-
-	return lines;
+	if (displayCount === sortedFindings.length) return { rows: lines, foldRows: 0 };
+	lines.push(
+		`${continuePrefix}${theme.fg("dim", formatMoreItems(sortedFindings.length - displayCount, "finding", theme))}`,
+	);
+	return { rows: lines, foldRows: 1 };
 }
 
 /**
@@ -1125,12 +1205,14 @@ function renderAgentResult(result: SingleResult, options: AgentRowOptions): stri
 	}
 
 	if (aborted && result.abortReason) {
-		lines.push(
-			`${continuePrefix}${theme.fg(
-				"dim",
-				clipCollapsed(flattenLine(sanitizeText(result.abortReason)), 80, expanded),
-			)}`,
-		);
+		const reason = flattenLine(sanitizeText(result.abortReason));
+		const full = [`${continuePrefix}${theme.fg("dim", reason)}`];
+		if (expanded) {
+			lines.push(...full);
+		} else {
+			const clipped = [`${continuePrefix}${theme.fg("dim", truncateToWidth(reason, 80))}`];
+			lines.push(...(expansionFits(clipped, full, maxWidth, theme) ? full : clipped));
+		}
 	}
 	// Check for review result from incremental yield sections.
 	// `normalizeYieldData` guards against a stray non-array `yield` slot —
@@ -1142,7 +1224,14 @@ function renderAgentResult(result: SingleResult, options: AgentRowOptions): stri
 
 	if (incrementalReview) {
 		lines.push(
-			...renderReviewResult(incrementalReview.summary, incrementalReview.findings, continuePrefix, expanded, theme),
+			...renderReviewResult(
+				incrementalReview.summary,
+				incrementalReview.findings,
+				continuePrefix,
+				expanded,
+				theme,
+				maxWidth,
+			),
 		);
 		return lines;
 	}
@@ -1156,7 +1245,7 @@ function renderAgentResult(result: SingleResult, options: AgentRowOptions): stri
 	if (submitReviewData) {
 		const summary = submitReviewData[submitReviewData.length - 1];
 		const findings: FindingDetails[] = [];
-		lines.push(...renderReviewResult(summary, findings, continuePrefix, expanded, theme));
+		lines.push(...renderReviewResult(summary, findings, continuePrefix, expanded, theme, maxWidth));
 		return lines;
 	}
 
@@ -1167,7 +1256,7 @@ function renderAgentResult(result: SingleResult, options: AgentRowOptions): stri
 		for (const toolName in result.extractedToolData) {
 			const dataArray = result.extractedToolData[toolName];
 			if (toolName === "yield") {
-				const yieldLines = renderTypedYieldSections(dataArray, continuePrefix, expanded, theme);
+				const yieldLines = renderTypedYieldSections(dataArray, continuePrefix, expanded, theme, maxWidth);
 				if (yieldLines.length > 0) {
 					hasCustomRendering = true;
 					lines.push(...yieldLines);
@@ -1221,12 +1310,15 @@ function renderAgentResult(result: SingleResult, options: AgentRowOptions): stri
 	}
 
 	if (hasCustomRendering && missingCompleteWarning) {
-		lines.push(
-			`${continuePrefix}${formatStatusIcon("warning", theme)} ${theme.fg(
-				"dim",
-				clipCollapsed(sanitizeText(missingCompleteWarning), 80, expanded),
-			)}`,
-		);
+		const lead = `${continuePrefix}${formatStatusIcon("warning", theme)} `;
+		const warning = sanitizeText(missingCompleteWarning);
+		const full = [`${lead}${theme.fg("dim", warning)}`];
+		if (expanded) {
+			lines.push(...full);
+		} else {
+			const clipped = [`${lead}${theme.fg("dim", truncateToWidth(warning, 80))}`];
+			lines.push(...(expansionFits(clipped, full, maxWidth, theme) ? full : clipped));
+		}
 	}
 
 	// Fallback to output preview if no custom rendering
@@ -1272,15 +1364,16 @@ function renderAgentResult(result: SingleResult, options: AgentRowOptions): stri
 
 	// Error message
 	if (result.error && (!success || mergeFailed) && (!aborted || result.error !== result.abortReason)) {
-		const message = clipCollapsed(flattenLine(sanitizeText(result.error)), 70, expanded);
-		lines.push(
-			...hangingRows(
-				continuePrefix,
-				// Not `formatErrorText`: it caps the text, and an expanded row must reveal all of it.
-				theme.fg(mergeFailed ? "warning" : "error", message),
-				maxWidth,
-			),
-		);
+		const message = flattenLine(sanitizeText(result.error));
+		const color = mergeFailed ? "warning" : "error";
+		// Not `formatErrorText`: it caps the text, and an expanded row must reveal all of it.
+		const full = hangingRows(continuePrefix, theme.fg(color, message), maxWidth);
+		if (expanded) {
+			lines.push(...full);
+		} else {
+			const clipped = hangingRows(continuePrefix, theme.fg(color, truncateToWidth(message, 70)), maxWidth);
+			lines.push(...(expansionFits(clipped, full, maxWidth, theme) ? full : clipped));
+		}
 	}
 
 	return lines;
@@ -1454,10 +1547,11 @@ export function renderResult(
 			// Collapsed view keeps the live edge: finished rows sort to the top of
 			// the display order, so folding from the top keeps running/pending
 			// agents (and their current-tool lines) visible.
-			const visible = expanded ? ordered : ordered.slice(Math.max(0, ordered.length - COLLAPSED_AGENT_LIMIT));
-			for (const progress of visible) lines.push(...renderProgressRows(progress));
-			if (visible.length < ordered.length) {
-				const marker = formatHiddenProgressMarker(ordered.slice(0, ordered.length - visible.length), theme);
+			// The hidden-agent marker rides the footer, costing no row: the cap holds even for one agent.
+			const hiddenCount = expanded ? 0 : Math.max(0, ordered.length - COLLAPSED_AGENT_LIMIT);
+			for (const progress of ordered.slice(hiddenCount)) lines.push(...renderProgressRows(progress));
+			if (hiddenCount > 0) {
+				const marker = formatHiddenProgressMarker(ordered.slice(0, hiddenCount), theme);
 				footer.push(`${marker} ${formatExpandHint(theme)}`);
 			}
 		} else {
@@ -1476,10 +1570,11 @@ export function renderResult(
 
 			const ordered = orderResultsForDisplay(details.results);
 			const visible = expanded ? ordered : selectCollapsedResults(ordered);
+			const rowDeps = [expanded, theme, contentWidth, isFeedModelBadgeEnabled()];
 			for (const res of visible) {
 				lines.push(
-					...memoBySnapshot(agentResultMemo, res, [expanded, theme, contentWidth, isFeedModelBadgeEnabled()], () =>
-						renderAgentResult(res, rowOptions),
+					...memoBySnapshot(agentResultMemo, res, rowDeps, () =>
+						renderAgentResult(res, { ...rowOptions, expanded }),
 					),
 				);
 			}
@@ -1602,19 +1697,6 @@ function nestedAgentRows<T>(
 	return lines;
 }
 
-/** `visible`, or every one of `ordered` when the lone agent left out renders as one row ({@link revealLoneHidden}). */
-function revealSingleHiddenRow<T>(
-	ordered: readonly T[],
-	visible: readonly T[],
-	rowsOf: (item: T) => readonly string[],
-): readonly T[] {
-	const loneRows = (): number => {
-		const lone = ordered.find(item => !visible.includes(item));
-		return lone === undefined ? 0 : rowsOf(lone).length;
-	};
-	return revealLoneHidden(ordered.length, visible.length, loneRows) === ordered.length ? ordered : visible;
-}
-
 /**
  * Render `TaskToolDetails` snapshots as a tree with bounded recursion and
  * cycle detection: settled `results[]`, else (with `includeProgress`, for the
@@ -1626,6 +1708,8 @@ function renderNestedTasks(
 	includeProgress: boolean,
 ): string[] {
 	const { expanded, theme } = context;
+	// Hosts without a layout width (plain-text final renders) check only that the lone agent is one line.
+	const rowWidth = context.maxWidth ?? Infinity;
 	const seen = context.seenNestedTasks ?? new WeakSet<object>();
 	const depth = context.nestedDepth ?? 0;
 	const child: AgentRowContext = { ...context, seenNestedTasks: seen, nestedDepth: depth + 1 };
@@ -1642,11 +1726,16 @@ function renderNestedTasks(
 		seen.add(details);
 		if (details.results && details.results.length > 0) {
 			const ordered = orderResultsForDisplay(details.results);
-			const visible = expanded
-				? ordered
-				: revealSingleHiddenRow(ordered, selectCollapsedResults(ordered), result =>
-						renderAgentResult(result, { ...child, ...nestedMarkers(false, theme) }),
-					);
+			// A lone left-out agent renders in place of its `… 1 more agent` row only when it fits that one row.
+			const picked = expanded ? ordered : selectCollapsedResults(ordered);
+			const loneMarkers = { ...child, ...nestedMarkers(true, theme) };
+			const shown = revealLoneHidden(ordered.length, picked.length, rowWidth, () =>
+				renderAgentResult(
+					ordered.find(res => !picked.includes(res))!,
+					loneMarkers,
+				).join("\n"),
+			);
+			const visible = shown === ordered.length ? ordered : picked;
 			lines.push(
 				...nestedAgentRows(visible, ordered.length - visible.length, theme, (result, markers) =>
 					renderAgentResult(result, { ...child, ...markers }),
@@ -1654,13 +1743,13 @@ function renderNestedTasks(
 			);
 		} else if (includeProgress && details.progress && details.progress.length > 0) {
 			const ordered = orderProgressForDisplay(details.progress);
-			const visible = expanded
-				? ordered
-				: revealSingleHiddenRow(
-						ordered,
-						ordered.slice(Math.max(0, ordered.length - COLLAPSED_AGENT_LIMIT)),
-						progress => renderAgentProgress(progress, { ...child, ...nestedMarkers(false, theme) }),
-					);
+			const capped = expanded ? ordered.length : Math.min(ordered.length, COLLAPSED_AGENT_LIMIT);
+			// A lone left-out agent renders in place of its `… 1 more agent` row only when it fits that one row.
+			const loneMarkers = { ...child, ...nestedMarkers(true, theme) };
+			const shown = revealLoneHidden(ordered.length, capped, rowWidth, () =>
+				renderAgentProgress(ordered[0]!, loneMarkers).join("\n"),
+			);
+			const visible = ordered.slice(ordered.length - shown);
 			lines.push(
 				...nestedAgentRows(visible, ordered.length - visible.length, theme, (progress, markers) =>
 					renderAgentProgress(progress, { ...child, ...markers }),

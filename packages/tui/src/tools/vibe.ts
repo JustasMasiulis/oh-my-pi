@@ -178,10 +178,14 @@ function vibeSubject(op: VibeOp, args: VibeRenderArgs | undefined, sep: string, 
 	}
 }
 
-/** The director's message being sent, indented as body rows. */
-function messageRows(uiTheme: Theme, message: string, expanded: boolean): string[] {
+/** The director's message being sent, indented as body rows; `width` is the card's content width. */
+function messageRows(uiTheme: Theme, message: string, expanded: boolean, width: number): string[] {
 	const rawLines = message.split(/\r?\n/).filter(line => line.trim().length > 0);
-	const maxRows = cappedRowCount(rawLines.length, expanded ? COMPOSER_ROWS_EXPANDED : COMPOSER_ROWS_COLLAPSED);
+	const limit = expanded ? COMPOSER_ROWS_EXPANDED : COMPOSER_ROWS_COLLAPSED;
+	// A lone hidden line shows only when it draws unclipped: within the width and the per-line clip.
+	const maxRows = cappedRowCount(rawLines.length, limit, Math.min(width, COMPOSER_LINE_MAX), () =>
+		uiTheme.fg("toolOutput", replaceTabs(rawLines[limit])),
+	);
 	const rows = rawLines.slice(0, maxRows).map(line => uiTheme.fg("toolOutput", frameText(line, COMPOSER_LINE_MAX)));
 	const hidden = rawLines.length - maxRows;
 	if (hidden > 0) rows.push(formatMoreRow(hidden, "line", uiTheme, { expanded }));
@@ -418,7 +422,7 @@ export function createVibeToolRenderer(op: VibeOp) {
 
 		renderCall(args: VibeRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 			const message = vibeMessage(op, args);
-			return plainToolCard(uiTheme, () => ({
+			return plainToolCard(uiTheme, ({ contentWidth }) => ({
 				status: {
 					icon: options.executionStarted ? "running" : "pending",
 					spinnerFrame: options.spinnerFrame,
@@ -426,7 +430,7 @@ export function createVibeToolRenderer(op: VibeOp) {
 					description: vibeSubject(op, args, uiTheme.sep.dot),
 				},
 				phase: options.executionStarted ? "running" : "pending",
-				body: messageRows(uiTheme, message, options.expanded),
+				body: messageRows(uiTheme, message, options.expanded, contentWidth),
 			}));
 		},
 
@@ -456,7 +460,7 @@ export function createVibeToolRenderer(op: VibeOp) {
 				const queued = details.send?.mode === "queued";
 				const jobId = op === "spawn" ? details.spawned?.jobId : details.send?.jobId;
 				const mode = op === "send" ? details.send?.mode : undefined;
-				return plainToolCard(uiTheme, () => ({
+				return plainToolCard(uiTheme, ({ contentWidth }) => ({
 					status: {
 						icon: queued ? "warning" : "success",
 						title: TITLE,
@@ -465,7 +469,7 @@ export function createVibeToolRenderer(op: VibeOp) {
 						meta: jobId ? [`job ${jobId}`] : undefined,
 					},
 					phase: queued ? "warning" : "success",
-					body: messageRows(uiTheme, message, options.expanded),
+					body: messageRows(uiTheme, message, options.expanded, contentWidth),
 				}));
 			}
 

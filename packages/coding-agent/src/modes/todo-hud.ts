@@ -6,8 +6,9 @@
 import { visibleWidth } from "@oh-my-pi/pi-tui";
 import { node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
-import { cappedRowCount, formatMoreItems, replaceTabs } from "@oh-my-pi/pi-tui/render/render-utils";
+import { cappedRowCount, fitsOneRow, formatMoreItems, replaceTabs } from "@oh-my-pi/pi-tui/render/render-utils";
 import { renderTreeList } from "@oh-my-pi/pi-tui/render/tree-list";
+import { getTreeBranch } from "@oh-my-pi/pi-tui/render/utils";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import {
 	formatPhaseDisplayName,
@@ -45,6 +46,8 @@ export interface TodoHudOptions {
 	readonly expanded: boolean;
 	/** Descriptions of running subagents; a pending todo matching one lights up. */
 	readonly activeDescriptions: readonly string[];
+	/** Columns the HUD rows draw in (inside its container's padding). */
+	readonly width: number;
 }
 
 export interface TodoHud {
@@ -94,7 +97,10 @@ function activePhase(phases: readonly TodoPhase[]): TodoPhase | undefined {
 export function renderTodoHud(allPhases: readonly TodoPhase[], options: TodoHudOptions): TodoHud | undefined {
 	const phases = allPhases.filter(phase => phase.tasks.length > 0);
 	if (phases.length === 0) return undefined;
-	const { expanded, activeDescriptions } = options;
+	const { activeDescriptions } = options;
+	// Every content row draws after a one-space indent and its spine glyph; task rows also after a tree branch.
+	const stageRowWidth = options.width - 1 - visibleWidth(`${theme.tree.branch} `);
+	const taskRowWidth = stageRowWidth - visibleWidth(`${getTreeBranch(false, theme)} `);
 	const multiPhase = phases.length > 1;
 	const activeIdx = phases.indexOf(activePhase(phases) ?? phases[0]);
 
@@ -103,6 +109,39 @@ export function renderTodoHud(allPhases: readonly TodoPhase[], options: TodoHudO
 	const isMatched = (todo: TodoItem): boolean =>
 		activeDescriptions.length > 0 && todoMatchesAnyDescription(todo.content, activeDescriptions);
 
+	const stageHeader = (phase: TodoPhase, oneBased: number, isActive: boolean): string => {
+		const label = multiPhase ? formatPhaseDisplayName(phase.name, oneBased) : phase.name;
+		// Closed, not just completed: the collapsed task window hides abandoned
+		// tasks too, so counting only completions leaves the phase reading stuck.
+		const done = phase.tasks.filter(isClosedTodo).length;
+		const progress = theme.fg("dim", ` · ${done}/${phase.tasks.length}`);
+		if (isActive) return theme.bold(theme.fg("accent", label)) + progress;
+		return theme.fg("muted", label) + progress;
+	};
+
+	// The collapsed window: the active stage's task selection plus a bounded
+	// run of following stage headers. When the expanded HUD draws in no more
+	// rows than the collapsed one (its summary and `… n more stages` rows
+	// included), the collapse buys nothing, so the HUD renders expanded.
+	const activeSelection = selectCollapsedTodos(phases[activeIdx]!.tasks, isMatched, ACTIVE_TASK_CAP, task =>
+		fitsOneRow(replaceTabs(formatTodoHudLine(task, isMatched(task))), taskRowWidth),
+	);
+	const collapsedStageCount = cappedRowCount(
+		phases.length - activeIdx,
+		1 + SUBSEQUENT_STAGE_CAP,
+		stageRowWidth,
+		() => {
+			const loneIdx = activeIdx + 1 + SUBSEQUENT_STAGE_CAP;
+			return replaceTabs(stageHeader(phases[loneIdx]!, loneIdx + 1, false));
+		},
+	);
+	const collapsedHiddenStages = phases.length - activeIdx - collapsedStageCount;
+	let collapsedRows = collapsedStageCount + activeSelection.items.length;
+	if (activeSelection.summary) collapsedRows++;
+	if (collapsedHiddenStages > 0) collapsedRows++;
+	const expandedRows = phases.reduce((sum, phase) => sum + 1 + phase.tasks.length, 0);
+	const expanded = options.expanded || expandedRows <= collapsedRows;
+
 	// Task subtree for a phase. Collapsed runs the shared walking-viewport
 	// policy (completed/abandoned omitted, active work pulled to the head,
 	// then following pending tasks) so the HUD and the transient tool result
@@ -110,16 +149,21 @@ export function renderTodoHud(allPhases: readonly TodoPhase[], options: TodoHudO
 	const renderTasks = (phase: TodoPhase): string[] => {
 		if (expanded) {
 			return renderTreeList(
-				{ items: phase.tasks, expanded: true, renderItem: todo => formatTodoHudLine(todo, isMatched(todo)) },
+				{
+					items: phase.tasks,
+					expanded: true,
+					width: stageRowWidth,
+					renderItem: todo => formatTodoHudLine(todo, isMatched(todo)),
+				},
 				theme,
 			);
 		}
-		const selection = selectCollapsedTodos(phase.tasks, isMatched, ACTIVE_TASK_CAP);
 		return renderTreeList(
 			{
-				items: selection.items,
+				items: activeSelection.items,
 				itemType: "task",
-				trailingSummary: selection.summary,
+				width: stageRowWidth,
+				trailingSummary: activeSelection.summary,
 				renderItem: todo => formatTodoHudLine(todo, isMatched(todo)),
 			},
 			theme,
@@ -130,16 +174,8 @@ export function renderTodoHud(allPhases: readonly TodoPhase[], options: TodoHudO
 	// progress; other stages render their whole row (name + progress) in the
 	// brighter muted gray. Overall progress lives in the tree spine (below).
 	const renderPhase = (phase: TodoPhase, oneBased: number, isActive: boolean): string | string[] => {
-		const label = multiPhase ? formatPhaseDisplayName(phase.name, oneBased) : phase.name;
-		// Closed, not just completed: the collapsed task window hides abandoned
-		// tasks too, so counting only completions leaves the phase reading stuck.
-		const done = phase.tasks.filter(isClosedTodo).length;
-		const progress = ` · ${done}/${phase.tasks.length}`;
-		if (!isActive) {
-			const header = theme.fg("muted", label) + theme.fg("dim", progress);
-			return expanded ? [header, ...renderTasks(phase)] : header;
-		}
-		const header = theme.bold(theme.fg("accent", label)) + theme.fg("dim", progress);
+		const header = stageHeader(phase, oneBased, isActive);
+		if (!isActive) return expanded ? [header, ...renderTasks(phase)] : header;
 		return [header, ...renderTasks(phase)];
 	};
 
@@ -147,9 +183,7 @@ export function renderTodoHud(allPhases: readonly TodoPhase[], options: TodoHudO
 	// "… n more stages" row for anything past the cap. Expanded: every stage
 	// from the top. Roman numerals stay tied to the real phase index.
 	const baseIdx = expanded ? 0 : activeIdx;
-	const stageCount = expanded
-		? phases.length - baseIdx
-		: cappedRowCount(phases.length - baseIdx, 1 + SUBSEQUENT_STAGE_CAP);
+	const stageCount = expanded ? phases.length : collapsedStageCount;
 	const phaseSlice = phases.slice(baseIdx, baseIdx + stageCount);
 	const hiddenStages = phases.length - baseIdx - phaseSlice.length;
 
@@ -220,9 +254,10 @@ export function renderTodoHud(allPhases: readonly TodoPhase[], options: TodoHudO
 	const describeTasks = (phase: TodoPhase, phaseIndex: number): TspTreeNode[] => {
 		const index = (todo: TodoItem): string => `${phaseIndex}.${phase.tasks.indexOf(todo)}`;
 		if (expanded) return phase.tasks.map(todo => describeTask(todo, index(todo)));
-		const selection = selectCollapsedTodos(phase.tasks, isMatched, ACTIVE_TASK_CAP);
-		const nodes = selection.items.map(todo => describeTask(todo, index(todo)));
-		if (selection.summary) nodes.push({ id: `${phaseIndex}.more`, label: [span(selection.summary, "dim")] });
+		const nodes = activeSelection.items.map(todo => describeTask(todo, index(todo)));
+		if (activeSelection.summary) {
+			nodes.push({ id: `${phaseIndex}.more`, label: [span(activeSelection.summary, "dim")] });
+		}
 		return nodes;
 	};
 	const phaseNodes: TspTreeNode[] = phaseSlice.map((phase, offset) => {

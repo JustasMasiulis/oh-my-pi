@@ -740,10 +740,11 @@ describe("selectCollapsedTodos walking viewport (#5873)", () => {
 			status: inProgress.includes(i + 1) ? "in_progress" : "pending",
 		}));
 	const never = () => false;
+	const fits = () => true;
 	const contents = (sel: { items: TodoItem[] }) => sel.items.map(t => t.content);
 
 	it("starts at the sole in-progress task and fills with following tasks", () => {
-		const sel = selectCollapsedTodos(mk(14, [6]), never, 8);
+		const sel = selectCollapsedTodos(mk(14, [6]), never, 8, fits);
 		expect(contents(sel)).toEqual([
 			"Task 6",
 			"Task 7",
@@ -764,7 +765,7 @@ describe("selectCollapsedTodos walking viewport (#5873)", () => {
 			{ content: "current", status: "in_progress" },
 			{ content: "next", status: "pending" },
 		];
-		const sel = selectCollapsedTodos(tasks, never, 5);
+		const sel = selectCollapsedTodos(tasks, never, 5, fits);
 		// One closed row survives so a completion is visible as it lands; earlier
 		// closed work stays hidden.
 		expect(contents(sel)).toEqual(["dropped", "current", "next"]);
@@ -777,13 +778,13 @@ describe("selectCollapsedTodos walking viewport (#5873)", () => {
 			{ content: "next", status: "pending" },
 			{ content: "finished early", status: "completed" },
 		];
-		const sel = selectCollapsedTodos(tasks, never, 5);
+		const sel = selectCollapsedTodos(tasks, never, 5, fits);
 		expect(contents(sel)).toEqual(["finished early", "current", "next"]);
 	});
 
 	it("keeps the closed lead row additive to the open-task cap", () => {
 		const tasks: TodoItem[] = [{ content: "closed", status: "completed" }, ...mk(5, [1])];
-		const sel = selectCollapsedTodos(tasks, never, 5);
+		const sel = selectCollapsedTodos(tasks, never, 5, fits);
 		// All 5 open tasks fit the cap; the closed context row does not evict one.
 		expect(contents(sel)).toEqual(["closed", "Task 1", "Task 2", "Task 3", "Task 4", "Task 5"]);
 		expect(sel.summary).toBe("");
@@ -792,7 +793,7 @@ describe("selectCollapsedTodos walking viewport (#5873)", () => {
 	it("places every subagent-matched todo at the head in todo order", () => {
 		const tasks = mk(14, []); // all pending
 		const matched = (t: TodoItem) => t.content === "Task 3" || t.content === "Task 9";
-		const sel = selectCollapsedTodos(tasks, matched, 5);
+		const sel = selectCollapsedTodos(tasks, matched, 5, fits);
 		// Both matched actives lead, then following pending fill from the first active.
 		expect(contents(sel).slice(0, 2)).toEqual(["Task 3", "Task 9"]);
 		expect(contents(sel)).toHaveLength(5);
@@ -802,7 +803,7 @@ describe("selectCollapsedTodos walking viewport (#5873)", () => {
 		const tasks = mk(10, []);
 		const matched = (t: TodoItem) =>
 			["Task 1", "Task 2", "Task 3", "Task 4", "Task 5", "Task 6", "Task 7"].includes(t.content);
-		const sel = selectCollapsedTodos(tasks, matched, 5);
+		const sel = selectCollapsedTodos(tasks, matched, 5, fits);
 		expect(contents(sel)).toEqual(["Task 1", "Task 2", "Task 3", "Task 4", "Task 5"]);
 		expect(sel.summary).toBe(`… 5 more todos${theme.sep.dot}2 active`);
 		// No unrelated pending rows leak in.
@@ -814,37 +815,41 @@ describe("selectCollapsedTodos walking viewport (#5873)", () => {
 		// must NOT swallow the hidden pending work with an empty summary (#5878).
 		const tasks = mk(7, []);
 		const matched = (t: TodoItem) => ["Task 1", "Task 2", "Task 3", "Task 4", "Task 5"].includes(t.content);
-		const sel = selectCollapsedTodos(tasks, matched, 5);
+		const sel = selectCollapsedTodos(tasks, matched, 5, fits);
 		expect(contents(sel)).toEqual(["Task 1", "Task 2", "Task 3", "Task 4", "Task 5"]);
 		expect(sel.summary).toBe("… 2 more todos");
 	});
 
-	it("renders a lone hidden todo in place of a one-item summary row", () => {
-		const pending = selectCollapsedTodos(mk(6, [1]), never, 5);
+	it("renders a lone hidden todo in place of a one-item summary row only when it fits one row", () => {
+		const pending = selectCollapsedTodos(mk(6, [1]), never, 5, fits);
 		expect(contents(pending)).toEqual(["Task 1", "Task 2", "Task 3", "Task 4", "Task 5", "Task 6"]);
 		expect(pending.summary).toBe("");
 
-		const active = selectCollapsedTodos(mk(6, []), () => true, 5);
+		const active = selectCollapsedTodos(mk(6, []), () => true, 5, fits);
 		expect(contents(active)).toEqual(["Task 1", "Task 2", "Task 3", "Task 4", "Task 5", "Task 6"]);
 		expect(active.summary).toBe("");
+
+		const long = selectCollapsedTodos(mk(6, [1]), never, 5, task => task.content !== "Task 6");
+		expect(contents(long)).toEqual(["Task 1", "Task 2", "Task 3", "Task 4", "Task 5"]);
+		expect(long.summary).toBe("… 1 more todo");
 	});
 
 	it("counts the pending work a single hidden active todo's summary row also hides", () => {
 		// 6 matched actives + 2 pending, cap 5: showing all 6 actives would hide the
 		// pending work with no summary row at all, so the row counts all 3 hidden todos.
-		const sel = selectCollapsedTodos(mk(8, []), (t: TodoItem) => Number(t.content.slice(5)) <= 6, 5);
+		const sel = selectCollapsedTodos(mk(8, []), (t: TodoItem) => Number(t.content.slice(5)) <= 6, 5, fits);
 		expect(contents(sel)).toEqual(["Task 1", "Task 2", "Task 3", "Task 4", "Task 5"]);
 		expect(sel.summary).toBe(`… 3 more todos${theme.sep.dot}1 active`);
 	});
 
 	it("names hidden todos as active when no pending work is hidden with them", () => {
-		const sel = selectCollapsedTodos(mk(8, []), () => true, 5);
+		const sel = selectCollapsedTodos(mk(8, []), () => true, 5, fits);
 		expect(contents(sel)).toEqual(["Task 1", "Task 2", "Task 3", "Task 4", "Task 5"]);
 		expect(sel.summary).toBe("… 3 more active todos");
 	});
 
 	it("returns the whole open set with no summary when it fits", () => {
-		const sel = selectCollapsedTodos(mk(3, [2]), never, 5);
+		const sel = selectCollapsedTodos(mk(3, [2]), never, 5, fits);
 		expect(contents(sel)).toEqual(["Task 1", "Task 2", "Task 3"]);
 		expect(sel.summary).toBe("");
 	});
@@ -854,7 +859,7 @@ describe("selectCollapsedTodos walking viewport (#5873)", () => {
 			{ content: "done a", status: "completed" },
 			{ content: "done b", status: "completed" },
 		];
-		const sel = selectCollapsedTodos(tasks, never, 5);
+		const sel = selectCollapsedTodos(tasks, never, 5, fits);
 		expect(contents(sel)).toEqual(["done a", "done b"]);
 	});
 });

@@ -480,11 +480,12 @@ function jsonScalarToken(value: unknown): ThemeColor {
 	return "dim";
 }
 
-/** Whether `value` renders as a single leaf row in {@link describeJsonTree} (no child rows). */
-function isOneRowJsonLeaf(value: unknown): boolean {
+/** Whether `value` renders as a single, unclipped leaf row in {@link describeJsonTree} (no child rows). */
+function isOneRowJsonLeaf(value: unknown, maxScalarLen: number): boolean {
 	if (inlineJson(value, plainText)) return true;
 	if (Array.isArray(value) || isRecord(value)) return false;
-	return typeof value !== "string" || !value.includes("\n");
+	if (typeof value !== "string") return true;
+	return !value.includes("\n") && plainText(value).length <= maxScalarLen;
 }
 
 /**
@@ -505,8 +506,8 @@ export function describeJsonTree(value: unknown, options: JsonTreeDescribeOption
 	const describeEntries = (entries: readonly JsonEntry[], depth: number): TspTreeNode[] => {
 		const out: TspTreeNode[] = [];
 		for (let index = 0; index < entries.length; index++) {
-			// A lone one-row leaf takes the marker's own row; render it instead.
-			if (budget <= 0 && !(index === entries.length - 1 && isOneRowJsonLeaf(entries[index][1]))) {
+			// A lone one-row, unclipped leaf takes the marker's own row; render it instead.
+			if (budget <= 0 && !(index === entries.length - 1 && isOneRowJsonLeaf(entries[index][1], maxScalarLen))) {
 				truncated = true;
 				out.push(leaf([span(`… ${entries.length - index} more`, "dim")]));
 				break;
@@ -541,7 +542,8 @@ export function describeJsonTree(value: unknown, options: JsonTreeDescribeOption
 			if (lines.length === 1) return { id, label: [...prefix, span(`"${first}"`, "syntaxString")] };
 			const children: TspTreeNode[] = [];
 			for (let index = 0; index < lines.length; index++) {
-				if (budget <= 0 && index < lines.length - 1) {
+				const loneLine = index === lines.length - 1 && lines[index].length <= maxScalarLen;
+				if (budget <= 0 && !loneLine) {
 					truncated = true;
 					children.push(leaf([span(`… ${lines.length - index} more lines`, "dim")]));
 					break;

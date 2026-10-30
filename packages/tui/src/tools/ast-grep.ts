@@ -113,16 +113,15 @@ export const astGrepToolRenderer = {
 		if (matchCount === 0) {
 			const meta = ["0 matches"];
 			if (filesSearched > 0) meta.push(`searched ${filesSearched}`);
-			const body: string[] = [];
-			if (details?.parseErrors?.length) {
-				body.push(uiTheme.fg("warning", "Query may be mis-scoped; narrow `path` before concluding absence"));
-				appendParseErrorsBulletList(body, details.parseErrors, uiTheme, details.parseErrorsTotal);
-			}
-			return plainToolCard(uiTheme, () => ({
-				status: status("warning", meta),
-				phase: "warning",
-				body: body.length > 0 ? body : undefined,
-			}));
+			const parseErrors = details?.parseErrors;
+			return plainToolCard(uiTheme, ({ contentWidth }) => {
+				const body: string[] = [];
+				if (parseErrors?.length) {
+					body.push(uiTheme.fg("warning", "Query may be mis-scoped; narrow `path` before concluding absence"));
+					appendParseErrorsBulletList(body, parseErrors, uiTheme, details?.parseErrorsTotal, contentWidth);
+				}
+				return { status: status("warning", meta), phase: "warning", body: body.length > 0 ? body : undefined };
+			});
 		}
 
 		const meta = [formatCount("match", matchCount), formatCount("file", fileCount), `searched ${filesSearched}`];
@@ -181,12 +180,16 @@ export const astGrepToolRenderer = {
 				body: width =>
 					memo.rows(width, options.expanded, () => {
 						const expanded = options.expanded;
-						const budget = (expanded ? EXPANDED_MATCH_LIMIT : COLLAPSED_MATCH_LIMIT) - extraLines.length;
 						const rows = renderSearchPreviewRows(
 							matchGroups,
 							allLines,
 							styleLine,
-							{ maxLines: budget, matchCount, expanded },
+							{
+								collapsedMaxLines: COLLAPSED_MATCH_LIMIT - extraLines.length,
+								expandedMaxLines: EXPANDED_MATCH_LIMIT - extraLines.length,
+								matchCount,
+								expanded,
+							},
 							uiTheme,
 						);
 						rows.push(...extraLines);

@@ -28,6 +28,8 @@ export interface FileListOptions {
 	/** When provided, called with the entry's absolute path and the ANSI-styled display string to
 	 * optionally wrap the path in an OSC 8 hyperlink. Only invoked when {@link FileEntry.absPath} is set. */
 	hyperlinkFn?: (absPath: string, displayText: string) => string;
+	/** Width the listing draws in (decides whether a lone hidden file reveals in place of its marker). */
+	width: number;
 }
 
 /**
@@ -36,7 +38,7 @@ export interface FileListOptions {
  * meta as detail. Collapsed, the list is clamped to `maxCollapsed` lines and
  * the terminal scrolls the rest.
  */
-export function describeFileList(options: Omit<FileListOptions, "hyperlinkFn">): NativeNode {
+export function describeFileList(options: Omit<FileListOptions, "hyperlinkFn" | "width">): NativeNode {
 	const { files, expanded = false, maxCollapsed = 8, showIcons = true } = options;
 	const items = files.map(entry => {
 		const isDirectory = entry.isDirectory ?? entry.path.endsWith("/");
@@ -58,7 +60,7 @@ export function describeFileList(options: Omit<FileListOptions, "hyperlinkFn">):
 
 /** Render file entries as a flush listing (a card's top-level result rows). */
 export function renderFileList(options: FileListOptions, theme: Theme): string[] {
-	const { files, expanded = false, maxCollapsed = 8, showIcons = true, hyperlinkFn } = options;
+	const { files, expanded = false, maxCollapsed = 8, showIcons = true, hyperlinkFn, width } = options;
 
 	return renderTreeList(
 		{
@@ -67,6 +69,7 @@ export function renderFileList(options: FileListOptions, theme: Theme): string[]
 			expanded,
 			maxCollapsed,
 			itemType: "file",
+			width,
 			renderItem: entry => {
 				const isDirectory = entry.isDirectory ?? entry.path.endsWith("/");
 				const displayPath = entry.path;

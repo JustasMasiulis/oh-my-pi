@@ -1429,7 +1429,10 @@ export class UsageDashboardComponent implements Component {
 		if (entry.unlimited) {
 			rows.push(text([span("No quotas reported", "muted")], { role: "omp.usage.none" }));
 		} else {
-			const shownWindows = cappedRowCount(entry.windows.length, CARD_MAX_WINDOWS);
+			// A window is a multi-cell row (label, meter, reset): one row only when the host lays it out.
+			const shownWindows = cappedRowCount(entry.windows.length, CARD_MAX_WINDOWS, Infinity, () =>
+				sanitizeDisplayLine(entry.windows[CARD_MAX_WINDOWS]!.label),
+			);
 			for (const [index, window] of entry.windows.slice(0, shownWindows).entries()) {
 				const label: TspSpan[] = [span(sanitizeDisplayLine(window.label))];
 				if (window.windowTag) label.push(span(` ${sanitizeDisplayLine(window.windowTag)}`, "dim"));

@@ -2,7 +2,7 @@ import * as os from "node:os";
 import { setFeedModelBadgeEnabled } from "../src/render/render-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { type RenderResultOptions, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
+import { getThemeByName, setThemeInstance, type Theme } from "@oh-my-pi/pi-tui/theme";
 import { taskToolRenderer } from "@oh-my-pi/pi-tui/tools/task";
 import { getSubprocessToolRenderer } from "@oh-my-pi/pi-tui/tools/subprocess";
 import type { AgentProgress, SingleResult, TaskToolDetails } from "@oh-my-pi/pi-tui/tools/task";
@@ -770,6 +770,108 @@ describe("task progress rendering", () => {
 		// The run summary footer still counts the full batch.
 		expect(collapsed).toContain("5 succeeded");
 		expect(collapsed).toContain("1 failed");
+	});
+
+	describe("collapses render expanded only when expanding draws no more rows", () => {
+		const render = (details: TaskToolDetails, expanded: boolean, theme: Theme, args?: { task: string }) =>
+			Bun.stripANSI(
+				taskToolRenderer
+					.renderResult(
+						{ content: [{ type: "text", text: "" }], details },
+						{ expanded, isPartial: false },
+						theme,
+						args,
+					)
+					.render(120)
+					.join("\n"),
+			);
+		const settled = (results: SingleResult[]): TaskToolDetails => ({
+			projectAgentsDir: null,
+			results,
+			totalDurationMs: 1000,
+		});
+		// The card's prompt block shows the brief, so agents carry no hidden Task section.
+		const brief = { task: "Shared brief." };
+
+		it("keeps the footer `… 1 more agent` even when the agent left out renders as one row", async () => {
+			const theme = (await getThemeByName("dark"))!;
+			setThemeInstance(theme);
+			const ids = ["One", "Two", "Three", "Four", "Five"];
+			const details = settled(
+				ids.map((id, index) => finishedResult({ index, id, output: "", durationMs: index * 1000 })),
+			);
+			const collapsed = render(details, false, theme, brief);
+			expect(collapsed).not.toContain("Five");
+			expect(collapsed).toContain("… 1 more agent");
+		});
+
+		it("keeps `… 1 more agent` when the agent left out spans several rows", async () => {
+			const theme = (await getThemeByName("dark"))!;
+			setThemeInstance(theme);
+			const ids = ["One", "Two", "Three", "Four", "Five"];
+			const details = settled(ids.map((id, index) => finishedResult({ index, id, durationMs: index * 1000 })));
+			const collapsed = render(details, false, theme, brief);
+			expect(collapsed).not.toContain("Five");
+			expect(collapsed).toContain("… 1 more agent");
+		});
+
+		it("shows a clipped error whole when unclipping keeps its row count", async () => {
+			const theme = (await getThemeByName("dark"))!;
+			setThemeInstance(theme);
+			const details = settled([
+				finishedResult({ id: "Clipped", output: "", exitCode: 1, error: `${"fail ".repeat(16)}ERR_END` }),
+			]);
+			const collapsed = render(details, false, theme, brief);
+			expect(collapsed).toContain("ERR_END");
+			expect(collapsed).toBe(render(details, true, theme, brief));
+		});
+
+		it("keeps the output fold and hint when expanding reveals two more lines", async () => {
+			const theme = (await getThemeByName("dark"))!;
+			setThemeInstance(theme);
+			const output = ["l1", "l2", "l3", "l4", "l5"].join("\n");
+			const collapsed = render(settled([finishedResult({ id: "Lines", output })]), false, theme, brief);
+			expect(collapsed).toContain("l3");
+			expect(collapsed).not.toContain("l4");
+			expect(collapsed).toContain("2 more lines");
+			expect(collapsed).toContain("Expand");
+		});
+
+		it("keeps a review summary folded when its full form takes more rows", async () => {
+			const theme = (await getThemeByName("dark"))!;
+			setThemeInstance(theme);
+			const review = { overall_correctness: "correct", explanation: "Looks fine. No issues.", confidence: 0.9 };
+			const details = settled([
+				finishedResult({ id: "Reviewer", extractedToolData: { yield: [{ data: review }] } }),
+			]);
+			const collapsed = render(details, false, theme, brief);
+			expect(collapsed).toContain("Looks fine.");
+			expect(collapsed).not.toContain("No issues.");
+			expect(collapsed).toContain("Expand");
+		});
+
+		it("keeps the live footer marker for a lone left-out progress row", async () => {
+			const theme = (await getThemeByName("dark"))!;
+			const progress = [
+				runningProgress({ index: 0, id: "DoneOne", status: "completed", durationMs: 1000 }),
+				runningProgress({ index: 1, id: "LiveOne" }),
+				runningProgress({ index: 2, id: "LiveTwo" }),
+				runningProgress({ index: 3, id: "LiveThree" }),
+				runningProgress({ index: 4, id: "LiveFour" }),
+			];
+			const collapsed = Bun.stripANSI(
+				taskToolRenderer
+					.renderResult(
+						{ content: [], details: { projectAgentsDir: null, results: [], totalDurationMs: 0, progress } },
+						{ expanded: false, isPartial: true, spinnerFrame: 0 },
+						theme,
+					)
+					.render(120)
+					.join("\n"),
+			);
+			expect(collapsed).not.toContain("DoneOne");
+			expect(collapsed).toContain("1 more agent");
+		});
 	});
 	it("expands tabs in task descriptions before measuring and rendering", async () => {
 		const theme = (await getThemeByName("dark"))!;

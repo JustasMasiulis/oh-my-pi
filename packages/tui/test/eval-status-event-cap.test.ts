@@ -127,13 +127,30 @@ describe("eval status event log", () => {
 				{ op: "browser", detail: "tab.evaluate two" },
 				{ op: "browser", detail: "tab.evaluate three" },
 				{ op: "browser", detail: "tab.evaluate four" },
+				{ op: "browser", detail: "tab.evaluate five" },
 			],
 			5000,
 		);
 
-		// Collapsed shows the newest 3; the 4th plus 5,000 dropped are counted.
+		// Collapsed shows the newest 3; the first 2 plus 5,000 dropped are counted.
+		expect(rendered).toContain("… 5002 earlier");
+		expect(rendered).toContain("tab.evaluate five");
+		expect(rendered).not.toContain("tab.evaluate two");
+	});
+
+	it("stays collapsed when expanding would draw one more event row than it hides", () => {
+		const rendered = renderCell(
+			[
+				{ op: "browser", detail: "tab.evaluate one" },
+				{ op: "browser", detail: "tab.evaluate two" },
+				{ op: "browser", detail: "tab.evaluate three" },
+				{ op: "browser", detail: "tab.evaluate four" },
+			],
+			5000,
+		);
+
 		expect(rendered).toContain("… 5001 earlier");
-		expect(rendered).toContain("tab.evaluate four");
+		expect(rendered).not.toContain("tab.evaluate one");
 	});
 
 	it("shows the dropped count when only agent snapshots remain", () => {

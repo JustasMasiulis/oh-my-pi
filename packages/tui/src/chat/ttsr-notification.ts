@@ -1,12 +1,13 @@
 import { Text } from "../components/text";
-import { type Component, Container } from "../tui";
+import { Container } from "../tui";
 import {
+	type MessageNoticeContext,
 	MessageNoticeComponent,
 	type MessageNoticeNativePresentation,
 	type MessageNoticePresentation,
 } from "../chrome/message-notice";
 import { theme } from "../theme";
-import { cappedRowCount, expandHintLabel, formatMoreItems } from "../render/render-utils";
+import { cappedRowCount, expandHintLabel, type FoldableRows, foldBody, formatMoreItems } from "../render/render-utils";
 import { span, text } from "../native/describe";
 import type { NativeNode } from "../native/node";
 
@@ -19,6 +20,27 @@ export interface NotificationRule {
 
 /** Collapsed view shows at most this many rules before eliding the rest. */
 const MAX_COLLAPSED_RULES = 4;
+
+/** Description lines a lone rule shows while collapsed. */
+const SINGLE_COLLAPSED_LINES = 2;
+
+function ruleDescription(rule: NotificationRule): string | undefined {
+	return (rule.description || rule.content)?.trim() || undefined;
+}
+
+/**
+ * A rule's row in a multi-rule notice: the bold name and its italic
+ * description, cut to its first line (with an ellipsis) while collapsed.
+ * fg colors conflict with the inverse banner, so styling stays bold and italic.
+ */
+function ruleRow(rule: NotificationRule, collapsed: boolean): string {
+	const name = theme.bold(rule.name);
+	const desc = ruleDescription(rule);
+	if (!desc) return name;
+	const newline = desc.indexOf("\n");
+	const shown = collapsed && newline !== -1 ? `${desc.slice(0, newline).trimEnd()}${theme.format.ellipsis}` : desc;
+	return `${name}: ${theme.italic(shown)}`;
+}
 
 /**
  * Component that renders a TTSR (Time Traveling Stream Rules) notification.
@@ -35,7 +57,7 @@ export class TtsrNotificationComponent extends Container {
 		super();
 		this.#rules = [...rules];
 		this.#notice = new MessageNoticeComponent({
-			presentation: context => this.#presentation(context.expanded),
+			presentation: context => this.#presentation(context),
 			nativePresentation: () => this.#nativePresentation(),
 			role: "omp.notice.ttsr",
 		});
@@ -94,71 +116,43 @@ export class TtsrNotificationComponent extends Container {
 		return { head, body, inline: { icon: "shield-alert" } };
 	}
 
-	#presentation(expanded: boolean): MessageNoticePresentation {
-		// fg colors conflict with inverse, so styling inside the block is limited
-		// to bold (names) and italic (descriptions).
-		if (this.#rules.length === 1) {
-			return this.#presentationSingle(this.#rules[0]!, expanded);
-		}
-		return this.#presentationMulti(expanded);
+	#presentation({ expanded, width }: MessageNoticeContext): MessageNoticePresentation {
+		const single = this.#rules.length === 1 ? this.#rules[0] : undefined;
+		const header = single ? `Injecting rule: ${theme.bold(single.name)}` : `Injecting ${this.#rules.length} rules:`;
+		// Folding is fitted to the body width, which the notice supplies once it renders.
+		if (width === 0) return { icon: theme.icon.warning, header };
+		const build = (full: boolean): FoldableRows =>
+			single ? this.#singleRows(single, full) : this.#multiRows(full, width);
+		const rows = foldBody(build, expanded, width, theme);
+		if (rows.length === 0) return { icon: theme.icon.warning, header };
+		return { icon: theme.icon.warning, header, body: rows.map(row => new Text(row, 0, 0)) };
 	}
 
-	#presentationSingle(rule: NotificationRule, expanded: boolean): MessageNoticePresentation {
-		const header = `Injecting rule: ${theme.bold(rule.name)}`;
-
-		const desc = (rule.description || rule.content)?.trim();
-		if (!desc) return { icon: theme.icon.warning, header };
-
-		let displayText = desc;
-		let truncated = false;
-		if (!expanded) {
-			const lines = desc.split("\n");
-			if (lines.length > 2) {
-				displayText = `${lines.slice(0, 2).join("\n")}${theme.format.ellipsis}`;
-				truncated = true;
-			}
-		}
-
-		const body: Component[] = [new Text(theme.italic(displayText), 0, 0)];
-		if (truncated) {
-			body.push(new Text(theme.italic(expandHintLabel(theme)), 0, 0));
-		}
-		return { icon: theme.icon.warning, header, body };
+	/** A lone rule's description: its first lines and the expand hint while collapsed. */
+	#singleRows(rule: NotificationRule, full: boolean): FoldableRows {
+		const desc = ruleDescription(rule);
+		if (!desc) return { rows: [], foldRows: 0 };
+		const lines = desc.split("\n");
+		if (full || lines.length <= SINGLE_COLLAPSED_LINES) return { rows: [theme.italic(desc)], foldRows: 0 };
+		const head = `${lines.slice(0, SINGLE_COLLAPSED_LINES).join("\n")}${theme.format.ellipsis}`;
+		return { rows: [theme.italic(head), theme.italic(expandHintLabel(theme))], foldRows: 1 };
 	}
 
-	#presentationMulti(expanded: boolean): MessageNoticePresentation {
-		const header = `Injecting ${this.#rules.length} rules:`;
-
-		const visible = expanded
-			? this.#rules
-			: this.#rules.slice(0, cappedRowCount(this.#rules.length, MAX_COLLAPSED_RULES));
-		const body: Component[] = [];
-		let elidedDetail = false;
-		for (const rule of visible) {
-			const desc = (rule.description || rule.content)?.trim();
-			let line = theme.bold(rule.name);
-			if (desc) {
-				let displayText = desc;
-				if (!expanded) {
-					// One line per rule when collapsed; full description when expanded.
-					const newline = desc.indexOf("\n");
-					if (newline !== -1) {
-						displayText = `${desc.slice(0, newline).trimEnd()}${theme.format.ellipsis}`;
-						elidedDetail = true;
-					}
-				}
-				line += `: ${theme.italic(displayText)}`;
-			}
-			body.push(new Text(line, 0, 0));
-		}
-
+	/** One row per rule, capped while collapsed, with the hint row when anything is cut. */
+	#multiRows(full: boolean, width: number): FoldableRows {
+		if (full) return { rows: this.#rules.map(rule => ruleRow(rule, false)), foldRows: 0 };
+		const shown = cappedRowCount(this.#rules.length, MAX_COLLAPSED_RULES, width, () =>
+			ruleRow(this.#rules[MAX_COLLAPSED_RULES]!, true),
+		);
+		const visible = this.#rules.slice(0, shown);
+		const rows = visible.map(rule => ruleRow(rule, true));
+		const hidden = this.#rules.length - shown;
+		const elided = visible.some(rule => ruleDescription(rule)?.includes("\n"));
+		if (hidden === 0 && !elided) return { rows, foldRows: 0 };
 		// The inverse banner would turn a dim fg into a gray band: keep the
 		// `… N more rules` row and its hint unstyled (not formatMoreRow).
-		const hidden = this.#rules.length - visible.length;
-		if (hidden > 0 || elidedDetail) {
-			const more = hidden > 0 ? `${formatMoreItems(hidden, "rule", theme)} ` : "";
-			body.push(new Text(theme.italic(`${more}${expandHintLabel(theme)}`), 0, 0));
-		}
-		return { icon: theme.icon.warning, header, body };
+		const more = hidden > 0 ? `${formatMoreItems(hidden, "rule", theme)} ` : "";
+		rows.push(theme.italic(`${more}${expandHintLabel(theme)}`));
+		return { rows, foldRows: 1 };
 	}
 }

@@ -11,6 +11,7 @@ import type { StatusLineOptions } from "../render/status-line";
 import { plainToolCard } from "../render/tool-card";
 
 import {
+	fitsOneRow,
 	formatCount,
 	formatErrorText,
 	formatMoreItems,
@@ -18,6 +19,8 @@ import {
 	replaceTabs,
 	sanitizeDisplayLines,
 } from "../render/render-utils";
+import { getTreeBranch } from "../render/utils";
+import { visibleWidth } from "../utils";
 import type { TspChecklistItem, TspChecklistPhase } from "@oh-my-pi/pi-wire";
 import { node } from "../native/describe";
 import { OwnerMemo } from "../native/memo";
@@ -170,14 +173,15 @@ const COLLAPSED_CLOSED_CONTEXT = 1;
  *    hidden todo and says how many of them are active.
  *
  * The summary occupies a row, so a summary that would hide exactly one task is
- * replaced by that task: the selection spends at most `cap + 1` rows.
+ * replaced by that task when `fitsRow` says it draws as one unclipped row.
  */
 function selectWithinCap<T extends { status: TodoStatus }>(
 	base: T[],
 	isMatched: (task: T) => boolean,
 	cap: number,
+	fitsRow: (task: T) => boolean,
 ): CollapsedTodoSelection<T> {
-	if (base.length <= cap + 1) return { items: base, summary: "" };
+	if (base.length <= cap) return { items: base, summary: "" };
 
 	const active = base.filter(task => isActiveTodo(task, isMatched));
 	// Only when active work strictly exceeds the cap do we drop pending rows and
@@ -186,6 +190,7 @@ function selectWithinCap<T extends { status: TodoStatus }>(
 	if (active.length > cap) {
 		const hiddenActive = active.length - cap;
 		const hidden = base.length - cap;
+		if (hidden === 1 && fitsRow(active[cap])) return { items: base, summary: "" };
 		const onlyActive = hidden === hiddenActive;
 		const more = formatMoreItems(hidden, onlyActive ? "active todo" : "todo", theme);
 		return {
@@ -205,6 +210,7 @@ function selectWithinCap<T extends { status: TodoStatus }>(
 	}
 	const items = [...active, ...fill];
 	const hidden = base.length - items.length;
+	if (hidden === 1 && fitsRow(base.find(task => !items.includes(task))!)) return { items: base, summary: "" };
 	return { items, summary: hidden > 0 ? formatMoreItems(hidden, "todo", theme) : "" };
 }
 
@@ -219,19 +225,21 @@ function selectWithinCap<T extends { status: TodoStatus }>(
  * sticky HUD's closed-todo persistence still has something to render.
  *
  * `summary` counts the open tasks that did not fit; the closed lead is context,
- * not part of the budget.
+ * not part of the budget. `fitsRow` tells whether a task draws as one unclipped
+ * row; only then does a lone hidden task replace its `… 1 more` summary row.
  */
 export function selectCollapsedTodos<T extends { status: TodoStatus }>(
 	tasks: T[],
 	isMatched: (task: T) => boolean,
 	cap: number,
+	fitsRow: (task: T) => boolean,
 ): CollapsedTodoSelection<T> {
 	const open = tasks.filter(task => !isClosedTodo(task));
 	// Closed tasks are never active, so a settled phase selects over itself.
-	if (open.length === 0) return selectWithinCap(tasks, isMatched, cap);
+	if (open.length === 0) return selectWithinCap(tasks, isMatched, cap, fitsRow);
 	// `done` accepts any named task, so closed tasks are not necessarily a prefix.
 	const lead = tasks.filter(isClosedTodo).slice(-COLLAPSED_CLOSED_CONTEXT);
-	const selected = selectWithinCap(open, isMatched, cap);
+	const selected = selectWithinCap(open, isMatched, cap, fitsRow);
 	return { items: [...lead, ...selected.items], summary: selected.summary };
 }
 
@@ -659,14 +667,14 @@ export const todoToolRenderer = {
 			matchByContent.clear();
 		};
 
-		return plainToolCard(uiTheme, () => {
-			const { expanded, spinnerFrame } = options;
+		return plainToolCard(uiTheme, ({ contentWidth }) => {
+			const { spinnerFrame } = options;
 			const multiPhase = phases.length > 1;
 			// Collapse phases this update didn't touch down to a one-line summary so
 			// a single task flip doesn't redraw every phase's full task list. The
 			// manual expand toggle (and the no-signal fallback) still shows all.
 			let touched: Set<string> | null = null;
-			if (!expanded && multiPhase) {
+			if (!options.expanded && multiPhase) {
 				if (!touchedComputed) {
 					touchedPhases = computeTouchedPhases(args, phases, completedTasks);
 					touchedComputed = true;
@@ -676,7 +684,7 @@ export const todoToolRenderer = {
 			// A pending todo counts as active work when an in-flight subagent is
 			// executing it — the transient result surfaces the same active set the
 			// sticky HUD does (#5873). Empty outside an interactive session.
-			const activeDescs = expanded ? [] : activeTodoDescriptionsProvider();
+			const activeDescs = options.expanded ? [] : activeTodoDescriptionsProvider();
 			if (activeDescs.length > 0) syncActiveDescs(activeDescs);
 			const isMatched = (task: TodoItem): boolean => {
 				if (activeDescs.length === 0) return false;
@@ -687,10 +695,38 @@ export const todoToolRenderer = {
 				}
 				return matched;
 			};
+			const todoLine = (todo: TodoItem, completionKeys: Set<string>): string =>
+				formatTodoLine(todo, labelFor(todo), uiTheme, "", completionKeys, spinnerFrame, isMatched(todo));
+			// Todo rows nest under their phase, so they draw in the width left after the branch glyph.
+			const todoWidth = contentWidth - visibleWidth(`${getTreeBranch(false, uiTheme)} `);
+			// Collapsed: walking viewport per touched phase — the last closed task
+			// leads, then active work (in-progress / subagent-matched), then
+			// following pending tasks (#5873); untouched phases keep only their
+			// summary row. A lone hidden todo that fits one row already replaces its
+			// `… 1 more` row, so any remaining summary keeps the collapse.
+			const selections: (CollapsedTodoSelection<TodoItem> | undefined)[] = [];
+			let expanded = options.expanded;
+			if (!expanded) {
+				let hiddenRows = 0;
+				for (const phase of phases) {
+					if (touched && !touched.has(phase.name)) {
+						hiddenRows += phase.tasks.length;
+						selections.push(undefined);
+						continue;
+					}
+					const completionKeys = completionKeysByPhase.get(phase.name) ?? EMPTY_COMPLETION_KEYS;
+					const selection = selectCollapsedTodos(phase.tasks, isMatched, PREVIEW_LIMITS.COLLAPSED_ITEMS, todo =>
+						fitsOneRow(todoLine(todo, completionKeys), todoWidth),
+					);
+					hiddenRows += phase.tasks.length - selection.items.length;
+					selections.push(selection);
+				}
+				expanded = hiddenRows === 0;
+			}
 			const bodyLines: string[] = [];
 			for (let p = 0; p < phases.length; p++) {
 				const phase = phases[p];
-				if (touched && !touched.has(phase.name)) {
+				if (!expanded && touched && !touched.has(phase.name)) {
 					bodyLines.push(formatPhaseSummary(phase, p + 1, uiTheme));
 					continue;
 				}
@@ -701,12 +737,7 @@ export const todoToolRenderer = {
 				const name = uiTheme.fg("accent", chalk.bold(formatPhaseDisplayName(phase.name, p + 1)));
 				bodyLines.push(`${name}${formatPhaseProgress(phase, uiTheme)}`);
 				const completionKeys = completionKeysByPhase.get(phase.name) ?? EMPTY_COMPLETION_KEYS;
-				// Collapsed: walking viewport — the last closed task leads, then
-				// active work (in-progress / subagent-matched), then following
-				// pending tasks (#5873). Expanded: every task in order.
-				const selection = expanded
-					? undefined
-					: selectCollapsedTodos(phase.tasks, isMatched, PREVIEW_LIMITS.COLLAPSED_ITEMS);
+				const selection = expanded ? undefined : selections[p];
 				bodyLines.push(
 					...renderTreeList(
 						{
@@ -714,16 +745,8 @@ export const todoToolRenderer = {
 							expanded,
 							itemType: "todo",
 							trailingSummary: selection?.summary,
-							renderItem: todo =>
-								formatTodoLine(
-									todo,
-									labelFor(todo),
-									uiTheme,
-									"",
-									completionKeys,
-									spinnerFrame,
-									isMatched(todo),
-								),
+							width: contentWidth,
+							renderItem: todo => todoLine(todo, completionKeys),
 						},
 						uiTheme,
 					),

@@ -3,6 +3,7 @@ import { isNativeRendering } from "../native/state";
 import { Disclosure } from "../components/disclosure";
 import { Text } from "../components/text";
 import { formatDiagnostics } from "../render/render-utils";
+import { WidthAwareText } from "../render/width-aware-text";
 import { getLanguageFromPath, getThemeEpoch, theme } from "../theme";
 import { card, span, text, withHidden } from "../native/describe";
 import { type NativeNode, type NativeUiEvent, rootToggleExpanded } from "../native/node";
@@ -145,8 +146,8 @@ export class LateDiagnosticsMessageComponent extends Container {
 		const input = this.#diagnosticInput() ?? { errored: false, summary: "", messages: [] };
 
 		this.#disclosure = new Disclosure({
-			collapsedBody: () => new Text(this.#format(input, false), 1, 0),
-			body: () => new Text(this.#format(input, true), 1, 0),
+			collapsedBody: () => new WidthAwareText(width => this.#format(input, false, width), 1, 0),
+			body: () => new Text(this.#format(input, true, Infinity), 1, 0),
 			expanded,
 		});
 		this.addChild(this.#disclosure);
@@ -166,10 +167,11 @@ export class LateDiagnosticsMessageComponent extends Container {
 		return { errored, summary: summaries.join(", "), messages };
 	}
 
-	/** Render one branch of the diagnostic tree, reusing the tool renderer. */
-	#format(input: { summary: string; messages: string[] }, expanded: boolean): string {
+	/** Render one branch of the diagnostic tree at `width`, reusing the tool renderer. */
+	#format(input: { summary: string; messages: string[] }, expanded: boolean, width: number): string {
 		return formatDiagnostics(input, expanded, theme, fp => theme.getLangIcon(getLanguageFromPath(fp)), {
 			title: "Late diagnostics",
+			width,
 		});
 	}
 }

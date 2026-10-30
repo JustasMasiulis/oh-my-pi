@@ -86,11 +86,20 @@ export function formatOutputPaneLines(options: OutputPaneFormatOptions, theme: T
 			visibleLines = visual.visualLines;
 			hiddenCount = visual.skippedCount;
 		} else if (options.visual) {
-			const rendered = new Text(styledLines.join("\n"), 0, 0).render(Math.max(1, options.width ?? 1));
-			visibleLines = rendered.slice(0, ownRowMarker ? cappedRowCount(rendered.length, boundedLimit) : boundedLimit);
+			const visualWidth = Math.max(1, options.width ?? 1);
+			const rendered = new Text(styledLines.join("\n"), 0, 0).render(visualWidth);
+			const count = ownRowMarker
+				? cappedRowCount(rendered.length, boundedLimit, visualWidth, () => rendered[boundedLimit]!)
+				: boundedLimit;
+			visibleLines = rendered.slice(0, count);
 			hiddenCount = Math.max(0, rendered.length - visibleLines.length);
 		} else if (styledLines.length > boundedLimit) {
-			const count = ownRowMarker ? cappedRowCount(styledLines.length, boundedLimit) : boundedLimit;
+			// Logical rows: a lone hidden row shows only when it fits the known draw width unclipped.
+			const loneIndex = edge === "tail" ? styledLines.length - boundedLimit - 1 : boundedLimit;
+			let count = boundedLimit;
+			if (ownRowMarker && options.width !== undefined) {
+				count = cappedRowCount(styledLines.length, boundedLimit, options.width, () => styledLines[loneIndex]!);
+			}
 			hiddenCount = styledLines.length - count;
 			visibleLines = edge === "tail" ? styledLines.slice(styledLines.length - count) : styledLines.slice(0, count);
 		}
@@ -314,9 +323,18 @@ export class OutputPane implements Component {
 		return [getWidthConfigEpoch(), getThemeEpoch(), TERMINAL.imageProtocol];
 	}
 
+	/** Width each output row draws in when the pane renders at `width`. */
+	contentWidth(width: number): number {
+		return Math.max(1, width - getPaddingX(this.#options.paddingX ?? 0) * 2);
+	}
+
+	/** The shown output row at `index` (stored, normalized form). */
+	lineAt(index: number): string {
+		return this.#shownLines()[index] ?? "";
+	}
+
 	render(width: number): readonly string[] {
-		const paddingX = getPaddingX(this.#options.paddingX ?? 0);
-		const contentWidth = Math.max(1, width - paddingX * 2);
+		const contentWidth = this.contentWidth(width);
 		const content = this.#memo.get([...this.#renderDeps(), contentWidth], () => {
 			const lines = this.#shownLines();
 			const formatted = formatOutputPaneLines({ ...this.#options, lines, width: contentWidth }, this.#theme);

@@ -1009,7 +1009,11 @@ export class CopySelectorComponent implements Component {
 		if (cached?.blocks === blocks && cached.inner === inner) return cached.previews;
 		const previews = blocks.map(block => {
 			const raw = block.content.split("\n");
-			const shown = raw.slice(0, cappedRowCount(raw.length, BLOCK_PREVIEW_LINES));
+			// Rows are cut to `inner`, so a lone hidden line shows only when it fits uncut.
+			const shownCount = cappedRowCount(raw.length, BLOCK_PREVIEW_LINES, inner, () =>
+				replaceTabs(raw[BLOCK_PREVIEW_LINES]!),
+			);
+			const shown = raw.slice(0, shownCount);
 			const styled = block.language ? highlightCode(shown.join("\n"), block.language) : shown;
 			const rows = styled.map(row => truncateToWidth(replaceTabs(row), inner));
 			if (raw.length > shown.length) {

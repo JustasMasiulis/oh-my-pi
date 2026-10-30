@@ -14,6 +14,7 @@ import {
 	splitPathAndSel,
 } from "../tools/read";
 import {
+	cappedRowCount,
 	FILE_NAME_COLOR,
 	formatBadge,
 	formatStatusIcon,
@@ -806,7 +807,10 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		}
 		const split = splitPathAndSel(entry.path);
 		const lines = (entry.contentText ?? "").split("\n");
-		const shown = this.#expanded ? lines.length : Math.min(lines.length, COLLAPSED_PREVIEW_LINES);
+		// Native host lays rows out: a lone hidden line shows when it is a single line.
+		const shown = this.#expanded
+			? lines.length
+			: cappedRowCount(lines.length, COLLAPSED_PREVIEW_LINES, Infinity, () => lines[COLLAPSED_PREVIEW_LINES]!);
 		const blocks: NativeChild[] = readContentCode(
 			lines.slice(0, shown).join("\n"),
 			entry.codeStartLine ?? firstSelectorLine(split.sel) ?? 1,

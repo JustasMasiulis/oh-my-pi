@@ -27,7 +27,14 @@ import {
 	renderJsonTreeLines,
 } from "./json-tree";
 import { formatStyledTruncationWarning, stripOutputNotice } from "./output-meta";
-import { clipCollapsed, flattenLine, formatExpandHint, shortenEmbeddedPaths } from "../render/render-utils";
+import {
+	clipCollapsed,
+	flattenLine,
+	type FoldableRows,
+	foldBody,
+	formatExpandHint,
+	shortenEmbeddedPaths,
+} from "../render/render-utils";
 import { truncateToWidth, visibleWidth } from "../utils";
 import { formatOutputPaneLines, styleToolOutputLine } from "../render/output-pane";
 import type { StatusLineOptions } from "../render/status-line";
@@ -113,7 +120,12 @@ function renderMarkdownMCPResult(
 				bodyMemo = {
 					expanded: options.expanded,
 					width: contentWidth,
-					lines: buildMarkdownMcpBody(markdown, truncationWarning, options.expanded, contentWidth, theme, args),
+					lines: foldBody(
+						expanded => buildMarkdownMcpBody(markdown, truncationWarning, expanded, contentWidth, theme, args),
+						options.expanded,
+						contentWidth,
+						theme,
+					),
 				};
 			}
 			return { ...mcpResultStatus(result, options), body: bodyMemo.lines };
@@ -128,6 +140,7 @@ function renderMarkdownMCPResult(
 	);
 }
 
+/** Markdown MCP body rows for one expansion state. */
 function buildMarkdownMcpBody(
 	markdown: Markdown,
 	truncationWarning: string | null,
@@ -135,7 +148,7 @@ function buildMarkdownMcpBody(
 	contentWidth: number,
 	theme: Theme,
 	args: Record<string, unknown> | undefined,
-): string[] {
+): FoldableRows {
 	const body: string[] = [];
 	if (expanded && args && Object.keys(args).length > 0) {
 		body.push(...buildMcpArgsSection(args, theme));
@@ -154,7 +167,8 @@ function buildMarkdownMcpBody(
 		).lines,
 	);
 	if (truncationWarning) body.push(truncationWarning);
-	return body;
+	// Collapsed, the pane ends in its hidden-line marker or its expand hint.
+	return { rows: body, foldRows: expanded ? 0 : 1 };
 }
 
 /**
@@ -195,7 +209,10 @@ export function renderMCPResult(
 		theme,
 		({ contentWidth }) => {
 			if (bodyMemo === undefined || bodyMemo.width !== contentWidth) {
-				bodyMemo = { width: contentWidth, lines: buildMcpResultBody(contentWidth) };
+				bodyMemo = {
+					width: contentWidth,
+					lines: foldBody(state => buildMcpResultBody(contentWidth, state), expanded, contentWidth, theme),
+				};
 			}
 			return { ...mcpResultStatus(result, options), body: bodyMemo.lines };
 		},
@@ -205,7 +222,8 @@ export function renderMCPResult(
 		},
 	);
 
-	function buildMcpResultBody(contentWidth: number): string[] {
+	/** MCP result body rows for one expansion state. */
+	function buildMcpResultBody(contentWidth: number, expanded: boolean): FoldableRows {
 		const body: string[] = [];
 		// Args section (when expanded)
 		if (expanded && args && typeof args === "object" && Object.keys(args).length > 0) {
@@ -217,7 +235,7 @@ export function renderMCPResult(
 
 		if (!trimmedOutput) {
 			body.push(theme.fg("dim", "(no output)"));
-			return body;
+			return { rows: body, foldRows: 0 };
 		}
 
 		// Preserve the existing structured JSON renderer regardless of the
@@ -236,7 +254,7 @@ export function renderMCPResult(
 					body.push(theme.fg("dim", theme.format.ellipsis));
 				}
 				if (truncationWarning) body.push(truncationWarning);
-				return body;
+				return { rows: body, foldRows: expanded ? 0 : 1 };
 			}
 		}
 
@@ -256,7 +274,8 @@ export function renderMCPResult(
 		);
 
 		if (truncationWarning) body.push(truncationWarning);
-		return body;
+		// Collapsed, the pane ends in its hidden-line marker or its expand hint.
+		return { rows: body, foldRows: expanded ? 0 : 1 };
 	}
 }
 

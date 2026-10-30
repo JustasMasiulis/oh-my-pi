@@ -183,7 +183,13 @@ export function renderSearchResult(
 			answerLines = [theme.fg("muted", "No answer text returned")];
 		} else if (args?.maxAnswerLines !== undefined && !expanded) {
 			// `renderedAnswer` is the Markdown component's shared cache — slice copies before appending.
-			const capped = renderedAnswer.slice(0, cappedRowCount(renderedAnswer.length, args.maxAnswerLines));
+			const shownCount = cappedRowCount(
+				renderedAnswer.length,
+				args.maxAnswerLines,
+				contentWidth,
+				() => renderedAnswer[args.maxAnswerLines ?? 0],
+			);
+			const capped = renderedAnswer.slice(0, shownCount);
 			const remaining = renderedAnswer.length - capped.length;
 			if (remaining > 0) capped.push(theme.fg("dim", formatMoreItems(remaining, "line", theme)));
 			answerLines = capped;

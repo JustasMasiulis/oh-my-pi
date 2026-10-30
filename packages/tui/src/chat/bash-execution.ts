@@ -72,6 +72,8 @@ export class BashExecutionComponent extends Container {
 	// observe that.
 	#blockVersion = 0;
 	#displayDirty = false;
+	// Width of the last render (0 before the first): a lone hidden line is revealed only once it is known to fit.
+	#renderWidth = 0;
 	#chunkGate = false;
 	#contentContainer: Container;
 	#outputPane: OutputPane;
@@ -394,8 +396,9 @@ export class BashExecutionComponent extends Container {
 	}
 
 	override render(width: number): readonly string[] {
-		if (this.#displayDirty) {
+		if (this.#displayDirty || width !== this.#renderWidth) {
 			this.#displayDirty = false;
+			this.#renderWidth = width;
 			this.#updateDisplay();
 		}
 		return super.render(width);
@@ -415,10 +418,15 @@ export class BashExecutionComponent extends Container {
 		this.#outputPane.setLines(availableLines);
 		// Only the collapsed preview hides lines; when the full output is shown
 		// the footer must not keep advertising hidden lines / ctrl+o.
-		// A settled run's footer marker takes its own row: a lone hidden line shows instead.
+		// A settled run's footer marker takes its own row: a lone hidden line shows instead when it
+		// draws as one row (the earliest line, above the tail window).
 		const lineCount = this.#outputPane.lineCount;
 		const settled = this.#status !== "running";
-		const collapsedLines = settled ? cappedRowCount(lineCount, PREVIEW_LINES) : PREVIEW_LINES;
+		const collapsedLines = settled
+			? cappedRowCount(lineCount, PREVIEW_LINES, this.#outputPane.contentWidth(this.#renderWidth), () =>
+					this.#outputPane.lineAt(0),
+				)
+			: PREVIEW_LINES;
 		const hiddenLineCount = showingAllLines ? 0 : Math.max(0, lineCount - collapsedLines);
 		this.#outputPane.configure({
 			uncapSixel: hasSixelOutput,

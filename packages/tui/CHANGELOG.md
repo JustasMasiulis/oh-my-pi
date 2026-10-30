@@ -16,7 +16,7 @@
 ### Added
 
 - Added a `maxRows` callback to `FigureMarkdown`, `SvgFigure` and `TableChartFigure` so surfaces shorter than the screen can fit their figures; zero hides a figure without delaying transcript completion ([#15661](https://github.com/can1357/oh-my-pi/issues/15661), [#15853](https://github.com/can1357/oh-my-pi/pull/15853) by [@KunoLu](https://github.com/KunoLu))
-- Added `formatMoreRow`, `clipRows`, `nestRows`, `CardRowsMemo`, `cappedRowCount` and `revealLoneHidden` for renderers: a dim `… N more` row with the expand hint, clipped flush rows, tree-nested rows, a width/expansion row memo, and list caps that never hide a single one-row entry. `DynamicBorder.setLabel` accepts a function for live labels, and `Loader.inlineText()` returns the spinner and message as one line.
+- Added `formatMoreRow`, `clipRows`, `nestRows`, `CardRowsMemo`, `fitsOneRow`, `revealLoneHidden`, `cappedRowCount`, `wrappedRowCount`, `expansionFits` and `foldBody` for renderers: a dim `… N more` row with the expand hint, clipped flush rows, tree-nested rows, a width/expansion row memo, caps that show a lone hidden entry only when it fits its marker's row, the wrapped height of card rows, and collapsed bodies that render expanded when their expansion draws in no more rows. `TreeListOptions` takes the draw `width`, notice presentations receive their body width, `DynamicBorder.setLabel` accepts a function for live labels, and `Loader.inlineText()` returns the spinner and message as one line.
 
 ### Changed
 
@@ -40,7 +40,8 @@
 - Grouped Read cards show their count as header meta (`Read 4 files`).
 - Search headers dim the `in` between the pattern and its scope (`useState in src`).
 - `… N more` rows and card footers are dim everywhere, like the expand hint; only facts the tool colors itself, such as `+2 -1` or `No output`, stand out.
-- Lists never hide a single one-row entry behind a `… 1 more` row of its own; they show the entry, which takes the same row. Footer markers and hidden multi-row entries (a file's match group, an agent with detail rows) keep their marker.
+- A list hiding a single entry behind a `… 1 more` row of its own shows that entry instead when it draws as one row at the current width, unwrapped and unclipped. Long entries that would wrap or be clipped, entries spanning several rows (a file group, an agent with detail rows, a find hit with ranges), and markers carried in a border or footer keep the marker.
+- A collapsed card or banner renders expanded when its expansion draws in no more rows than the collapsed form, counting that form's own expand-hint and `… N more` rows, so expanding only consumes the notice. Markers inside an existing row (bottom-border footers, header meta) cost no row, so they stay, even for `… 1 more line`.
 - The extension inspector and collapsed synthetic prompts use the shared `[Ctrl+O: Expand]` hint, and the inspector's `… N more` rows name what they hide.
 - A color applied over already-styled text now holds after the inner styling ends, so a footer such as `+2 -1 · … 3 more lines` stays dim past the colored counts.
 

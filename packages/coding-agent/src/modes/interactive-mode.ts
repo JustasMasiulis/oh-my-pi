@@ -222,6 +222,7 @@ import {
 } from "@oh-my-pi/pi-tui/render/extension-links";
 import { onNativeRenderingChange } from "@oh-my-pi/pi-tui/native/state";
 import { renderTreeList } from "@oh-my-pi/pi-tui/render/tree-list";
+import { getTreeBranch } from "@oh-my-pi/pi-tui/render/utils";
 import { formatStartupChangelogSummary, type StartupChangelogSelection } from "../utils/changelog";
 import { copyToClipboard } from "../utils/clipboard";
 import type { EventBus } from "../utils/event-bus";
@@ -1064,12 +1065,18 @@ export interface PinnedHudLayout {
  * Pinned jump-list layout for `runningTotal` live agents. Collapsed shows a
  * few rows plus an expander; expanded shows every row plus a collapse row.
  * An expander that would hide a single agent is replaced by that agent's row,
- * in both states, so a lone hidden agent never costs a toggle row.
+ * in both states, when that row draws as one unclipped row within `rowWidth`
+ * (`loneRow` renders it untruncated), so it never costs a toggle row.
  * Single source of truth for the renderer and the click row map, so painted
  * rows and hit-testing can never disagree.
  */
-export function layoutPinnedHud(runningTotal: number, expanded: boolean): PinnedHudLayout {
-	if (cappedRowCount(runningTotal, SUBAGENT_HUD_COLLAPSED_LIMIT) === runningTotal) {
+export function layoutPinnedHud(
+	runningTotal: number,
+	expanded: boolean,
+	rowWidth: number,
+	loneRow: () => string,
+): PinnedHudLayout {
+	if (cappedRowCount(runningTotal, SUBAGENT_HUD_COLLAPSED_LIMIT, rowWidth, loneRow) === runningTotal) {
 		return { itemRows: runningTotal, toggle: undefined, toggleRow: undefined };
 	}
 	if (!expanded) {
@@ -1085,6 +1092,30 @@ export function layoutPinnedHud(runningTotal: number, expanded: boolean): Pinned
 		toggleRow: 2 + runningTotal,
 	};
 }
+
+/** HUD row budget: the terminal columns minus the HUD's horizontal padding. */
+function subagentHudContentColumns(columns: number): number {
+	// `SubagentHudComponent` paints through `Text` with horizontal padding, so
+	// rows budgeted to the full terminal width would wrap.
+	return Math.max(0, columns - getPaddingX(1) * 2);
+}
+
+/** {@link layoutPinnedHud} for the running `running` agents drawn at `columns`. */
+export function subagentHudLayout(
+	running: readonly ObservableSession[],
+	columns: number,
+	expanded: boolean,
+	livePreview: boolean,
+): PinnedHudLayout {
+	const treePrefixWidth = visibleWidth(`${getTreeBranch(false, theme)} `);
+	const rowWidth = subagentHudContentColumns(columns) - SUBAGENT_HUD_OUTER_INDENT.length - treePrefixWidth;
+	return layoutPinnedHud(running.length, expanded, rowWidth, () => {
+		const lone = renderSubagentHudRow(running[SUBAGENT_HUD_COLLAPSED_LIMIT]!, Infinity, livePreview);
+		return Array.isArray(lone) ? lone.join("\n") : lone;
+	});
+}
+
+const SUBAGENT_HUD_OUTER_INDENT = " ";
 
 /** A running tool call earns an elapsed marker in the live preview once it outlasts this. */
 const SUBAGENT_PREVIEW_ELAPSED_MIN_MS = 5000;
@@ -1156,6 +1187,61 @@ function renderSubagentToolPreview(session: ObservableSession, width: number): s
 }
 
 /**
+ * One running agent's HUD row (plus its live-preview row when `livePreview`
+ * and the agent has called a tool), cut to `rowWidth`. `Infinity` renders
+ * it uncut, for measuring whether it fits.
+ */
+function renderSubagentHudRow(session: ObservableSession, rowWidth: number, livePreview: boolean): string | string[] {
+	const dot = formatStatusIcon("running", theme);
+	const role = session.agent ?? session.progress?.agent;
+	const displayId = truncateToWidth(formatTaskId(session.id), Math.max(0, rowWidth - visibleWidth(`${dot} `)));
+	const badge = truncateToWidth(
+		agentTypeBadge(role, theme),
+		Math.max(0, rowWidth - visibleWidth(`${dot} ${displayId}`)),
+	);
+	const titleBudget = Math.max(0, rowWidth - visibleWidth(`${dot} ${displayId}${badge}`));
+	const modelBadge = isFeedModelBadgeEnabled()
+		? formatFeedModelBadge(
+				session.progress?.resolvedModelIdentity ?? session.progress?.resolvedModel,
+				session.progress?.resolvedThinkingLevel,
+				session.progress?.advisor,
+				theme,
+				Math.min(FEED_MODEL_BADGE_WIDTH, Math.max(0, titleBudget - 1)),
+			)
+		: "";
+	const modelLead = modelBadge ? `${modelBadge} ` : "";
+	let line = `${dot} ${modelLead}${theme.fg("accent", theme.bold(displayId))}${badge}`;
+	const description = session.description?.trim() || session.progress?.description?.trim();
+	const distinctDescription = description && !labelEchoesHandle(session.id, description) ? description : undefined;
+	if (distinctDescription) {
+		const budget = Math.max(0, rowWidth - visibleWidth(line) - visibleWidth(": "));
+		const formatted = replaceTabs(distinctDescription).replace(/\s*[\r\n]+\s*/g, theme.sep.dot);
+		if (budget > 0) {
+			line += `${theme.fg("accent", ":")} ${theme.fg("accent", truncateToWidth(formatted, budget))}`;
+		}
+	} else {
+		// No spawn description: fall back to a muted preview of the raw
+		// assignment — never the rendered prompt, whose fixed template
+		// preamble would fill the row instead of the work. Every spawn
+		// that renders the template (task tool, structured/eval spawns)
+		// also records `assignment`; `task` alone is a raw message
+		// (IRC-woken or direct sends), so it is safe to preview as is.
+		const preview = (session.progress?.assignment ?? session.progress?.task)?.trim();
+		if (preview && !labelEchoesHandle(session.id, preview)) {
+			const formatted = shortenEmbeddedPaths(replaceTabs(sanitizeText(preview))).replace(
+				/\s*[\r\n]+\s*/g,
+				theme.sep.dot,
+			);
+			const budget = Math.max(0, rowWidth - visibleWidth(line) - 1);
+			if (budget > 0) line += ` ${theme.fg("muted", truncateToWidth(formatted, budget))}`;
+		}
+	}
+	const head = truncateToWidth(line, rowWidth, "");
+	const preview = livePreview ? renderSubagentToolPreview(session, rowWidth) : undefined;
+	return preview ? [head, preview] : head;
+}
+
+/**
  * Build the anchored subagent HUD block: a bold accent "Subagents · N running"
  * header (with the agent-hub key right-aligned when `hubKey` is given) plus
  * a bounded set of running-agent rows in the same `Id ⟨role⟩: description`
@@ -1178,72 +1264,21 @@ export function renderSubagentHudLines(
 ): string[] {
 	const running = sessions.filter(isHudSubagent);
 	if (running.length === 0) return [];
-	// `SubagentHudComponent` paints through `Text` with horizontal padding, so
-	// rows budgeted to the full terminal width would wrap.
-	const contentColumns = Math.max(0, columns - getPaddingX(1) * 2);
-	const layout = layoutPinnedHud(running.length, expanded);
-	const dot = formatStatusIcon("running", theme);
+	const contentColumns = subagentHudContentColumns(columns);
+	const layout = subagentHudLayout(running, columns, expanded, livePreview);
 	const items = running.slice(0, layout.itemRows);
-	const showModelBadge = isFeedModelBadgeEnabled();
-	const outerIndent = " ";
+	const outerIndent = SUBAGENT_HUD_OUTER_INDENT;
 	const itemLineCounts = new Map<ObservableSession, number>();
 	const rows = renderTreeList(
 		{
 			items,
 			expanded: true,
+			width: contentColumns - outerIndent.length,
 			renderItem: (session, context) => {
 				const rowWidth = Math.max(0, contentColumns - visibleWidth(outerIndent) - (context.prefixWidth ?? 0));
-				const role = session.agent ?? session.progress?.agent;
-				const displayId = truncateToWidth(
-					formatTaskId(session.id),
-					Math.max(0, rowWidth - visibleWidth(`${dot} `)),
-				);
-				const badge = truncateToWidth(
-					agentTypeBadge(role, theme),
-					Math.max(0, rowWidth - visibleWidth(`${dot} ${displayId}`)),
-				);
-				const titleBudget = Math.max(0, rowWidth - visibleWidth(`${dot} ${displayId}${badge}`));
-				const modelBadge = showModelBadge
-					? formatFeedModelBadge(
-							session.progress?.resolvedModelIdentity ?? session.progress?.resolvedModel,
-							session.progress?.resolvedThinkingLevel,
-							session.progress?.advisor,
-							theme,
-							Math.min(FEED_MODEL_BADGE_WIDTH, Math.max(0, titleBudget - 1)),
-						)
-					: "";
-				const modelLead = modelBadge ? `${modelBadge} ` : "";
-				let line = `${dot} ${modelLead}${theme.fg("accent", theme.bold(displayId))}${badge}`;
-				const description = session.description?.trim() || session.progress?.description?.trim();
-				const distinctDescription =
-					description && !labelEchoesHandle(session.id, description) ? description : undefined;
-				if (distinctDescription) {
-					const budget = Math.max(0, rowWidth - visibleWidth(line) - visibleWidth(": "));
-					const formatted = replaceTabs(distinctDescription).replace(/\s*[\r\n]+\s*/g, theme.sep.dot);
-					if (budget > 0) {
-						line += `${theme.fg("accent", ":")} ${theme.fg("accent", truncateToWidth(formatted, budget))}`;
-					}
-				} else {
-					// No spawn description: fall back to a muted preview of the raw
-					// assignment — never the rendered prompt, whose fixed template
-					// preamble would fill the row instead of the work. Every spawn
-					// that renders the template (task tool, structured/eval spawns)
-					// also records `assignment`; `task` alone is a raw message
-					// (IRC-woken or direct sends), so it is safe to preview as is.
-					const preview = (session.progress?.assignment ?? session.progress?.task)?.trim();
-					if (preview && !labelEchoesHandle(session.id, preview)) {
-						const formatted = shortenEmbeddedPaths(replaceTabs(sanitizeText(preview))).replace(
-							/\s*[\r\n]+\s*/g,
-							theme.sep.dot,
-						);
-						const budget = Math.max(0, rowWidth - visibleWidth(line) - 1);
-						if (budget > 0) line += ` ${theme.fg("muted", truncateToWidth(formatted, budget))}`;
-					}
-				}
-				const head = truncateToWidth(line, rowWidth, "");
-				const preview = livePreview ? renderSubagentToolPreview(session, rowWidth) : undefined;
-				itemLineCounts.set(session, preview ? 2 : 1);
-				return preview ? [head, preview] : head;
+				const row = renderSubagentHudRow(session, rowWidth, livePreview);
+				itemLineCounts.set(session, Array.isArray(row) ? row.length : 1);
+				return row;
 			},
 		},
 		theme,
@@ -4911,7 +4946,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		const activeDescriptions = this.#getActiveSubagentDescriptions();
 		this.#todoHudSubagentKey = activeDescriptions.join("\n");
 		if (this.#todoHudHidden) return;
-		const hud = renderTodoHud(this.todoPhases, { expanded: this.todoExpanded, activeDescriptions });
+		const hud = renderTodoHud(this.todoPhases, {
+			expanded: this.todoExpanded,
+			activeDescriptions,
+			// The HUD paints through `Text` with one column of horizontal padding.
+			width: Math.max(0, this.ui.terminal.columns - getPaddingX(1) * 2),
+		});
 		if (!hud) return;
 		this.todoContainer.addChild(new Text(hud.text, 1, 0));
 		this.#todoHudNative = hud.native;
@@ -5067,7 +5107,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const hubKey = appKey(this.keybindings, "app.agents.hub") || undefined;
 		const lines = renderSubagentHudLines(sessions, this.ui.terminal.columns, expanded, livePreview, hubKey);
 		if (lines.length === 0) return undefined;
-		const layout = layoutPinnedHud(running.length, expanded);
+		const layout = subagentHudLayout(running, this.ui.terminal.columns, expanded, livePreview);
 		const tickMs =
 			livePreview && !agentPauseGate.paused
 				? nextSubagentPreviewTickMs(running.slice(0, layout.itemRows), Date.now())

@@ -7,7 +7,7 @@
  * Every sample renders the production component; HUDs that live inside
  * `InteractiveMode` render through the functions it paints with.
  */
-import { Container, type Component, Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
+import { Container, type Component, getPaddingX, Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { BashExecutionComponent } from "@oh-my-pi/pi-tui/chat/bash-execution";
 import { EvalExecutionComponent } from "@oh-my-pi/pi-tui/chat/eval-execution";
@@ -231,7 +231,8 @@ function todoHud(
 	expanded: boolean,
 	activeDescriptions: string[],
 ): readonly string[] {
-	const hud = renderTodoHud(phases, { expanded, activeDescriptions });
+	// The HUD paints through `Text` with one column of padding on each side.
+	const hud = renderTodoHud(phases, { expanded, activeDescriptions, width: Math.max(0, width - getPaddingX(1) * 2) });
 	return hud ? renderBlocks([new Text(hud.text, 1, 0)], width) : [];
 }
 

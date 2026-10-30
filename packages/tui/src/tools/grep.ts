@@ -363,15 +363,16 @@ export const grepToolRenderer = {
 				phase: truncated ? "warning" : "success",
 				body: width =>
 					cachedRows(width, expanded => {
-						const budget = Math.max(
-							1,
-							(expanded ? EXPANDED_TEXT_LIMIT : COLLAPSED_TEXT_LIMIT) - missingRows.length,
-						);
 						const rows = renderSearchPreviewRows(
 							matchGroups,
 							allLines,
 							styleLine,
-							{ maxLines: budget, matchCount, expanded },
+							{
+								collapsedMaxLines: Math.max(1, COLLAPSED_TEXT_LIMIT - missingRows.length),
+								expandedMaxLines: Math.max(1, EXPANDED_TEXT_LIMIT - missingRows.length),
+								matchCount,
+								expanded,
+							},
 							uiTheme,
 						);
 						rows.push(...missingRows);
