@@ -84,6 +84,7 @@ function renderReadGroupFixtureState(state: GalleryFixtureState, width: number, 
 	}
 
 	addGroupedReadArgs(component);
+	component.setExecutionStarted();
 	if (state === "progress") return component.render(width);
 
 	component.updateResult(

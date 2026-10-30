@@ -8,7 +8,7 @@ import type { Component } from "../tui";
 import { getPaddingX, getWidthConfigEpoch } from "../utils";
 import { truncateToVisualLines } from "../chrome/visual-truncate";
 import { getSixelLineMask } from "./sixel";
-import { formatExpandHint, replaceTabs } from "./render-utils";
+import { formatExpandHint, formatMoreItems, replaceTabs } from "./render-utils";
 
 /** Which side of an output stream remains visible when the pane is capped. */
 export type OutputPaneEdge = "head" | "tail";
@@ -30,7 +30,7 @@ export interface OutputPaneFormatOptions {
 	showHiddenMarker?: boolean;
 	showExpandHint?: boolean;
 	showExpandHintWhenUncapped?: boolean;
-	formatHidden?: (hidden: number, shown: number, total: number, edge: OutputPaneEdge) => string;
+	formatHidden?: (hidden: number, edge: OutputPaneEdge) => string;
 }
 
 /** Result of formatting one bounded output pane. */
@@ -50,12 +50,6 @@ export function splitTerminalOutputLines(text: string): string[] {
 		const carriageReturn = line.lastIndexOf("\r");
 		return carriageReturn < 0 ? line : line.slice(carriageReturn + 1);
 	});
-}
-
-function defaultHiddenLabel(hidden: number, shown: number, total: number, edge: OutputPaneEdge): string {
-	return edge === "tail"
-		? `… (${hidden} earlier lines, showing ${shown} of ${total})`
-		: `… ${hidden} more line${hidden === 1 ? "" : "s"}`;
 }
 
 /**
@@ -99,12 +93,9 @@ export function formatOutputPaneLines(options: OutputPaneFormatOptions, theme: T
 
 	const lines = [...visibleLines];
 	if (hiddenCount > 0 && options.showHiddenMarker !== false) {
-		const label = (options.formatHidden ?? defaultHiddenLabel)(
-			hiddenCount,
-			visibleLines.length,
-			hiddenCount + visibleLines.length,
-			edge,
-		);
+		const label = options.formatHidden
+			? options.formatHidden(hiddenCount, edge)
+			: formatMoreItems(hiddenCount, "line", theme, edge === "tail" ? "earlier" : "more");
 		const hint = options.showExpandHint === false ? "" : formatExpandHint(theme, options.expanded, true);
 		const marker = theme.fg("dim", `${label}${hint ? ` ${hint}` : ""}`);
 		if (edge === "tail") lines.unshift(marker);

@@ -2,33 +2,47 @@
 import type { GalleryFixture } from "./types";
 
 export const interactionFixtures: Record<string, GalleryFixture> = {
-	// The resolution devices: one `reason` decides the latest staged proposal.
-	// The details carry the decision only; the proposal's own label is the
-	// staging tool's, so the renderer falls back to `pending action`.
+	// The resolution devices: one `reason` decides the latest staged proposal,
+	// which the details name by its staging tool's label.
 	resolve: {
 		streamingArgs: { action: "apply", reason: "The rename touches only" },
 		args: { action: "apply", reason: "The rename touches only tokens.ts and matches the request." },
 		result: {
 			content: [{ type: "text", text: "Applied the staged proposal." }],
-			details: { action: "apply", reason: "The rename touches only tokens.ts and matches the request." },
+			details: {
+				action: "apply",
+				reason: "The rename touches only tokens.ts and matches the request.",
+				sourceToolName: "ast_edit",
+				label: "AST Edit: 2 replacements in 1 file",
+			},
 		},
 		errorResult: {
 			content: [{ type: "text", text: "Error: the staged proposal no longer applies cleanly" }],
 			isError: true,
-			details: { action: "apply", reason: "The rename touches only tokens.ts and matches the request." },
+			details: {
+				action: "apply",
+				reason: "The rename touches only tokens.ts and matches the request.",
+				sourceToolName: "ast_edit",
+				label: "AST Edit: 2 replacements in 1 file",
+			},
 		},
 	},
 	reject: {
-		streamingArgs: { action: "reject", reason: "The patch would also" },
-		args: { action: "reject", reason: "The patch would also delete the migration script." },
+		streamingArgs: { action: "discard", reason: "The patch would also" },
+		args: { action: "discard", reason: "The patch would also delete the migration script." },
 		result: {
-			content: [{ type: "text", text: "Rejected the staged proposal." }],
-			details: { action: "reject", reason: "The patch would also delete the migration script." },
+			content: [{ type: "text", text: "Discarded the staged proposal." }],
+			details: {
+				action: "discard",
+				reason: "The patch would also delete the migration script.",
+				sourceToolName: "ast_edit",
+				label: "AST Edit: 5 replacements in 3 files",
+			},
 		},
 		errorResult: {
 			content: [{ type: "text", text: "Error: no staged proposal is pending" }],
 			isError: true,
-			details: { action: "reject", reason: "The patch would also delete the migration script." },
+			details: { action: "discard", reason: "The patch would also delete the migration script." },
 		},
 	},
 	todo: {
@@ -52,7 +66,7 @@ export const interactionFixtures: Record<string, GalleryFixture> = {
 					{
 						name: "Foundation",
 						tasks: [
-							{ content: "Scaffold crate", status: "done" },
+							{ content: "Scaffold crate", status: "completed" },
 							{ content: "Wire workspace", status: "in_progress" },
 						],
 					},

@@ -7,7 +7,7 @@ import { Container } from "../tui";
 
 /**
  * The idle recap (`recap.*`): where the session stands, written while the user
- * was away. Stays in the transcript like a thought: a dim italic `※ recap:`
+ * was away. Stays in the transcript like a thought: a dim italic `[i] recap:`
  * line in ANSI, a history icon beside the italic thought-coloured text in a
  * native terminal (`omp.recap`).
  */
@@ -18,7 +18,9 @@ export class RecapNotice extends Container {
 		super();
 		this.#recap = recap;
 		this.addChild(new Spacer(1));
-		this.addChild(new Text(`※ recap: ${recap}`, 1, 0).setStyleFn(line => theme.fg("dim", theme.italic(line))));
+		this.addChild(
+			new Text(`${theme.status.info} recap: ${recap}`, 0, 0).setStyleFn(line => theme.fg("dim", theme.italic(line))),
+		);
 	}
 
 	override describe(): NativeNode {

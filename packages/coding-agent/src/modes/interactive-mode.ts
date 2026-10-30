@@ -186,6 +186,7 @@ import {
 	FEED_MODEL_BADGE_WIDTH,
 	formatFeedModelBadge,
 	formatMoreItems,
+	formatStatusIcon,
 	isFeedModelBadgeEnabled,
 	previewLine,
 	replaceTabs,
@@ -1227,7 +1228,7 @@ export function renderSubagentHudLines(
 	// rows budgeted to the full terminal width would wrap.
 	const contentColumns = Math.max(0, columns - getPaddingX(1) * 2);
 	const layout = layoutPinnedHud(running.length, expanded);
-	const dot = theme.styledSymbol("status.done", "accent");
+	const dot = formatStatusIcon("running", theme);
 	const items = running.slice(0, layout.itemRows);
 	const showModelBadge = isFeedModelBadgeEnabled();
 	const outerIndent = " ";
@@ -1264,7 +1265,7 @@ export function renderSubagentHudLines(
 					description && !labelEchoesHandle(session.id, description) ? description : undefined;
 				if (distinctDescription) {
 					const budget = Math.max(0, rowWidth - visibleWidth(line) - visibleWidth(": "));
-					const formatted = replaceTabs(distinctDescription).replace(/\s*[\r\n]+\s*/g, " ↵ ");
+					const formatted = replaceTabs(distinctDescription).replace(/\s*[\r\n]+\s*/g, theme.sep.dot);
 					if (budget > 0) {
 						line += `${theme.fg("accent", ":")} ${theme.fg("accent", truncateToWidth(formatted, budget))}`;
 					}
@@ -1279,7 +1280,7 @@ export function renderSubagentHudLines(
 					if (preview && !labelEchoesHandle(session.id, preview)) {
 						const formatted = shortenEmbeddedPaths(replaceTabs(sanitizeText(preview))).replace(
 							/\s*[\r\n]+\s*/g,
-							" ↵ ",
+							theme.sep.dot,
 						);
 						const budget = Math.max(0, rowWidth - visibleWidth(line) - 1);
 						if (budget > 0) line += ` ${theme.fg("muted", truncateToWidth(formatted, budget))}`;
@@ -1300,7 +1301,9 @@ export function renderSubagentHudLines(
 					truncateToWidth(
 						`${outerIndent}${theme.fg(
 							"dim",
-							layout.toggle === "expand" ? `… ${running.length - layout.itemRows} more — expand` : "… show less",
+							layout.toggle === "expand"
+								? `${formatMoreItems(running.length - layout.itemRows, "agent", theme)}${theme.sep.dot}expand`
+								: `${theme.format.ellipsis} show less`,
 						)}`,
 						contentColumns,
 						"",
@@ -5080,7 +5083,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			pushBlock(renderPhase(phaseSlice[i], baseIdx + i + 1, baseIdx + i === activeIdx));
 		}
 		if (hiddenStages > 0) {
-			pushBlock(theme.fg("muted", formatMoreItems(hiddenStages, "stage")));
+			pushBlock(theme.fg("muted", formatMoreItems(hiddenStages, "stage", theme)));
 		}
 
 		// Closing tail: hook + a few horizontals. Every tail cell is 1 column in
@@ -5147,7 +5150,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			};
 		});
 		if (hiddenStages > 0) {
-			phaseNodes.push({ id: "more", label: [span(formatMoreItems(hiddenStages, "stage"), "muted")] });
+			phaseNodes.push({ id: "more", label: [span(formatMoreItems(hiddenStages, "stage", theme), "muted")] });
 		}
 		const fallback = node(
 			"col",

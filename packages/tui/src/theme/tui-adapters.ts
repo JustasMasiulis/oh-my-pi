@@ -13,7 +13,7 @@ import type { SymbolTheme } from "../symbols";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import { resolveMermaidAscii } from "./mermaid-cache";
-import type { SlashCommandIconName } from "./symbols";
+import { roundBoxSymbols, sharpBoxSymbols, type SlashCommandIconName, SPINNER_FRAMES, SYMBOL_PRESETS } from "./symbols";
 import { ensureThemeSync, theme } from "./theme";
 import type { Theme } from "./theme-class";
 
@@ -141,29 +141,17 @@ export function getSymbolTheme(): SymbolTheme {
 	// plugin calls). Fall back to the ASCII preset so the returned symbols are
 	// usable instead of crashing. See #2998.
 	if (typeof theme === "undefined") {
-		const box = {
-			topLeft: "+",
-			topRight: "+",
-			bottomLeft: "+",
-			bottomRight: "+",
-			horizontal: "-",
-			vertical: "|",
-			cross: "+",
-			teeDown: "+",
-			teeUp: "+",
-			teeLeft: "+",
-			teeRight: "+",
-		};
+		const ascii = SYMBOL_PRESETS.ascii;
 		return {
-			cursor: ">",
+			cursor: ascii["nav.cursor"],
 			inputCursor: "|",
-			boxRound: box,
-			boxSharp: box,
-			table: box,
-			quoteBorder: "|",
-			hrChar: "-",
-			colorSwatch: "[]",
-			spinnerFrames: ["-", "\\", "|", "/"],
+			boxRound: roundBoxSymbols(ascii),
+			boxSharp: sharpBoxSymbols(ascii),
+			table: sharpBoxSymbols(ascii),
+			quoteBorder: ascii["md.quoteBorder"],
+			hrChar: ascii["md.hrChar"],
+			colorSwatch: ascii["md.colorSwatch"],
+			spinnerFrames: SPINNER_FRAMES.ascii.activity,
 		};
 	}
 	const preset = theme.getSymbolPreset();

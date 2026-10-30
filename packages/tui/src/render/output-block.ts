@@ -73,6 +73,17 @@ export function outputBlockContentWidth(
 	return Math.max(1, width - 2 - left - right);
 }
 
+/**
+ * Columns a header gets inside {@link renderOutputBlock}'s top border at outer
+ * `width`: the corner, the three-glyph cap, the spaces around the label and
+ * one fill glyph before the closing corner.
+ */
+export function outputBlockHeaderWidth(width: number, theme: Theme): number {
+	const box = theme.boxRound;
+	const frame = visibleWidth(`${box.topLeft}${box.horizontal.repeat(4)}${box.topRight}`);
+	return Math.max(1, width - frame - 2);
+}
+
 /** Render a bordered output block with optional header and sections. */
 export function renderOutputBlock(options: OutputBlockOptions, theme: Theme): string[] {
 	const { header, headerMeta, state, sections = [], width, applyBg = true } = options;
@@ -162,7 +173,8 @@ export function renderOutputBlock(options: OutputBlockOptions, theme: Theme): st
 	// Footer facts ride the bottom border only when they fit whole; a clipped
 	// border would silently drop trailing facts (exit code, artifact id), so an
 	// overflowing footer wraps into body rows above a plain border instead.
-	const footerMeta = options.footerMeta;
+	// Facts are dim unless the caller colored them (`+2 -1`, `No output`).
+	const footerMeta = options.footerMeta === undefined ? undefined : theme.fg("dim", options.footerMeta);
 	const footerFits =
 		footerMeta === undefined ||
 		visibleWidth(` ${footerMeta} `) <=

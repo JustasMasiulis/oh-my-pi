@@ -396,9 +396,7 @@ export class ChatTranscriptBuilder {
 				break;
 			}
 			case "fileMention": {
-				// Indent one column to match the transcript's other rows (the viewer renders
-				// body rows without an outer gutter; rows own their left pad).
-				const block = buildFileMentionBlock(message.files, 1);
+				const block = buildFileMentionBlock(message.files);
 				if (block.children.length > 0) this.container.addChild(block);
 				break;
 			}

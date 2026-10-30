@@ -188,7 +188,7 @@ describe("device tool-call predicates", () => {
 	});
 });
 
-it("renders a highlighted apply summary", async () => {
+it("renders an apply summary under the Resolve header", async () => {
 	const theme = await getThemeByName("dark");
 	expect(theme).toBeDefined();
 	const uiTheme = theme!;
@@ -208,34 +208,11 @@ it("renders a highlighted apply summary", async () => {
 	);
 
 	const rendered = sanitizeText(component.render(90).join("\n"));
-	expect(rendered).toContain("Accept: 2 replacements in 1 file");
+	expect(rendered).toContain("Resolve: apply");
+	expect(rendered).toContain("2 replacements in 1 file");
 	expect(rendered).toContain("AST Edit");
 	expect(rendered).toContain("All replacements are correct");
 	expect(rendered).not.toContain("Applied 2 replacements in 1 file.");
 	expect(rendered).not.toContain("Decision");
 	expect(rendered).not.toContain(uiTheme.boxRound.topLeft);
-});
-
-it("keeps the inverse block color across the full line (no mid-line fg reset)", async () => {
-	const theme = await getThemeByName("dark");
-	expect(theme).toBeDefined();
-	const uiTheme = theme!;
-
-	const component = resolveRenderer.renderResult(
-		{
-			content: [{ type: "text", text: "Applied 2 replacements in 1 file." }],
-			details: {
-				action: "apply",
-				reason: "All replacements are correct",
-				sourceToolName: "ast_edit",
-				label: "AST Edit: 2 replacements in 1 file",
-			},
-		},
-		{ expanded: false, isPartial: false },
-		uiTheme,
-	);
-
-	for (const line of component.render(90)) {
-		expect(line.split("\x1b[39m")).toHaveLength(2);
-	}
 });

@@ -14,7 +14,6 @@ import type { StatusLineOptions } from "../render/status-line";
 import { plainToolCard, type ToolCardPhase } from "../render/tool-card";
 import type { Theme } from "../theme/theme";
 import type { Component } from "../tui";
-import { wrapTextWithAnsi } from "../utils";
 import {
 	describeJsonValue,
 	JSON_TREE_MAX_DEPTH_COLLAPSED,
@@ -152,7 +151,8 @@ function dataLines(data: unknown, expanded: boolean, width: number, theme: Theme
 		sanitizeText,
 		hiddenRootKeys: [],
 	});
-	if (tree.truncated) tree.lines.push(expanded ? theme.fg("dim", "…") : formatExpandHint(theme, false, true));
+	if (tree.truncated)
+		tree.lines.push(expanded ? theme.fg("dim", theme.format.ellipsis) : formatExpandHint(theme, false, true));
 	return tree.lines;
 }
 
@@ -162,11 +162,11 @@ function renderSubmission(s: Submission, options: RenderResultOptions, theme: Th
 	return plainToolCard(
 		theme,
 		({ contentWidth }) => {
-			const running = options.spinnerFrame !== undefined;
+			const running = options.executionStarted === true;
 			const failed = s.settled && s.error !== undefined;
 			const size = sizeMeta(s.data);
 			const status: StatusLineOptions = {
-				icon: !s.settled ? (running ? "running" : "pending") : failed ? "error" : "done",
+				icon: !s.settled ? (running ? "running" : "pending") : failed ? "error" : "success",
 				spinnerFrame: options.spinnerFrame,
 				title: TITLE,
 				description: s.target,
@@ -178,9 +178,7 @@ function renderSubmission(s: Submission, options: RenderResultOptions, theme: Th
 				const lines: string[] = [];
 				// Wrapped in full: a schema rejection names every offending field.
 				if (s.error !== undefined) {
-					for (const line of sanitizeDisplayLines(s.error)) {
-						lines.push(...wrapTextWithAnsi(theme.fg("error", line), Math.max(1, contentWidth)));
-					}
+					for (const line of sanitizeDisplayLines(s.error)) lines.push(theme.fg("error", line));
 				}
 				lines.push(...dataLines(s.data, options.expanded, contentWidth, theme));
 				if (s.note) lines.push(theme.fg("dim", s.note));
@@ -188,7 +186,7 @@ function renderSubmission(s: Submission, options: RenderResultOptions, theme: Th
 			}
 			return { status, phase, body: memo.lines };
 		},
-		{ paddingX: 1, paddingY: 1, ignoreTight: true, onInvalidate: () => (memo = undefined) },
+		{ ignoreTight: true, onInvalidate: () => (memo = undefined) },
 	);
 }
 

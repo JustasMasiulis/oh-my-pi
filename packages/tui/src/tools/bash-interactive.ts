@@ -10,7 +10,8 @@ import { extractPrintableText, matchesKey, parseKey, parseKittySequence } from "
 import { padding, truncateToWidth, visibleWidth } from "../utils";
 import type { Theme } from "../theme/theme";
 import { formatKeyHint } from "../app-keybindings";
-import { formatStatusIcon, replaceTabs } from "../render/render-utils";
+import { replaceTabs, type ToolUIStatus } from "../render/render-utils";
+import { renderStatusLine, type StatusLineOptions } from "../render/status-line";
 import { readTerminalRows, styleTerminalRow } from "./terminal-output";
 
 /** Resize-only backend exposed by an interactive PTY controller. */
@@ -305,13 +306,21 @@ export class BashInteractiveOverlayComponent implements Component {
 			return col([head, ansi(screen.join("\n"), { cols }), footer], { gap: "sm" });
 		});
 	}
-	#stateText(): string {
-		if (this.#state === "running") return this.#uiTheme.fg("warning", "running");
-		if (this.#state === "timed_out") return this.#uiTheme.fg("warning", "timed out");
-		if (this.#state === "killed") return this.#uiTheme.fg("warning", "killed");
-		if (this.#exitCode === 0) return this.#uiTheme.fg("success", "exit 0");
-		if (this.#exitCode === undefined) return this.#uiTheme.fg("warning", "exited");
-		return this.#uiTheme.fg("error", `exit ${this.#exitCode}`);
+	/** The session outcome as a tool status: a non-zero exit fails, a timeout warns, a kill aborts. */
+	#statusIcon(): ToolUIStatus {
+		if (this.#state === "running") return "running";
+		if (this.#state === "timed_out") return "warning";
+		if (this.#state === "killed") return "aborted";
+		if (this.#exitCode === undefined) return "warning";
+		return this.#exitCode === 0 ? "success" : "error";
+	}
+
+	/** The settled session's fact for the header meta (`exit 2`, `timed out`, …). */
+	#stateMeta(): string | undefined {
+		if (this.#state === "running") return undefined;
+		if (this.#state === "timed_out") return "timed out";
+		if (this.#state === "killed") return "killed";
+		return this.#exitCode === undefined ? "exited" : `exit ${this.#exitCode}`;
 	}
 
 	#readViewport(innerWidth: number, maxContentRows: number): string[] {
@@ -326,23 +335,21 @@ export class BashInteractiveOverlayComponent implements Component {
 		const innerWidth = Math.max(1, safeWidth - 2);
 		const maxContentRows = this.#maxContentRows();
 		this.#syncPtySize(innerWidth, maxContentRows);
-		const statusIcon =
-			this.#state === "running"
-				? formatStatusIcon("running", this.#uiTheme)
-				: this.#state === "complete" && this.#exitCode === 0
-					? this.#uiTheme.styledSymbol("tool.bash", "accent")
-					: formatStatusIcon("warning", this.#uiTheme);
-		const title = this.#uiTheme.fg("accent", "Console");
-		const statusBadge = `${this.#uiTheme.fg("dim", this.#uiTheme.format.bracketLeft)}${this.#stateText()}${this.#uiTheme.fg("dim", this.#uiTheme.format.bracketRight)}`;
-		const prefix = `${statusIcon} ${title} `;
-		const suffix = ` ${statusBadge}`;
-		const available = Math.max(1, innerWidth - visibleWidth(prefix) - visibleWidth(suffix));
-		const cmd = truncateToWidth(this.#uiTheme.fg("muted", replaceTabs(this.#command)), available);
-		const header = truncateToWidth(`${prefix}${cmd}${suffix}`, innerWidth);
+		const stateMeta = this.#stateMeta();
+		const status: StatusLineOptions = {
+			icon: this.#statusIcon(),
+			title: "Console",
+			meta: stateMeta ? [stateMeta] : undefined,
+		};
+		// Truncate only the command subject so the status and exit meta stay visible.
+		const reserved = visibleWidth(renderStatusLine({ ...status, description: " " }, this.#uiTheme)) - 1;
+		const command = truncateToWidth(replaceTabs(this.#command), Math.max(1, innerWidth - reserved));
+		const header = truncateToWidth(renderStatusLine({ ...status, description: command }, this.#uiTheme), innerWidth);
+		const dot = this.#uiTheme.sep.dot;
 		const footer =
 			this.#state === "running"
 				? truncateToWidth(
-						`${this.#uiTheme.fg("warning", formatKeyHint("escape"))} ${this.#uiTheme.fg("dim", "force-kill")} ${this.#uiTheme.fg("dim", "· input forwarded to PTY")}`,
+						`${this.#uiTheme.fg("warning", formatKeyHint("escape"))} ${this.#uiTheme.fg("dim", `force-kill${dot}input forwarded to PTY`)}`,
 						innerWidth,
 					)
 				: truncateToWidth(this.#uiTheme.fg("dim", "session finished"), innerWidth);

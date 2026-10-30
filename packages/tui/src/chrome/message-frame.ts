@@ -39,8 +39,6 @@ export type FramedRenderer<M extends FramedMessage> = (
 /** Presentation and extension-renderer policy for a framed custom message. */
 export interface FramedMessageOptions<M extends FramedMessage> {
 	readonly message: M;
-	/** Theme-aware icon glyph shown before the custom type. */
-	readonly icon?: string | (() => string);
 	/** Hide the default type header while retaining the message body. */
 	readonly hideHeader?: boolean | (() => boolean);
 	/** Semantic color for the outline, defaulting to the muted border. */
@@ -183,8 +181,7 @@ export class FramedMessageComponent<M extends FramedMessage> extends Container {
 		const hideHeader =
 			typeof this.#options.hideHeader === "function" ? this.#options.hideHeader() : this.#options.hideHeader;
 		if (!hideHeader) {
-			const icon = typeof this.#options.icon === "function" ? this.#options.icon() : this.#options.icon;
-			const tag = icon ? `${icon} ${this.#options.message.customType}` : this.#options.message.customType;
+			const tag = this.#options.message.customType;
 			this.#box.addChild(new Text(theme.fg("customMessageLabel", theme.bold(tag)), 0, 0));
 			this.#box.addChild(new Spacer(1));
 		}
@@ -194,7 +191,9 @@ export class FramedMessageComponent<M extends FramedMessage> extends Container {
 		const collapseAfterLines = this.#options.collapseAfterLines;
 		if (!this.#expanded && collapseAfterLines !== undefined) {
 			const lines = text.split("\n");
-			if (lines.length > collapseAfterLines) text = `${lines.slice(0, collapseAfterLines).join("\n")}\n…`;
+			if (lines.length > collapseAfterLines) {
+				text = `${lines.slice(0, collapseAfterLines).join("\n")}\n${theme.format.ellipsis}`;
+			}
 		}
 
 		this.#box.addChild(

@@ -896,7 +896,8 @@ describe("AskTool multiline custom input rendering", () => {
 
 		const theme = darkTheme;
 		const rendered = askToolRenderer.renderResult(result, { expanded: true, isPartial: false }, theme!);
-		const renderedText = stripAnsi(rendered.render(120).join("\n"));
+		// Body rows only: the header row carries the call's own success status.
+		const renderedText = stripAnsi(rendered.render(120).slice(1).join("\n"));
 
 		// All three lines should appear
 		expect(renderedText).toContain("first line");
@@ -909,7 +910,7 @@ describe("AskTool multiline custom input rendering", () => {
 		const successIconCount = (
 			renderedText.match(new RegExp(successGlyph.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []
 		).length;
-		// One glyph on the custom input first line; header uses the tool.ask icon.
+		// One glyph on the custom input first line.
 		expect(successIconCount).toBe(1);
 
 		// Ensure "second line" and "third line" are NOT preceded by a success icon on their own line
@@ -1411,7 +1412,7 @@ describe("askToolRenderer malformed call args", () => {
 			theme!,
 		);
 		const text = stripAnsi(rendered.render(120).join("\n"));
-		expect(text).toContain("[q1]");
+		expect(text).toContain("Ask: q1");
 		expect(text).toContain("Pick one");
 		expect(text).toContain("Alpha");
 	});
@@ -1443,7 +1444,7 @@ describe("askToolRenderer malformed call args", () => {
 			theme!,
 		);
 		const text = stripAnsi(rendered.render(120).join("\n"));
-		expect(text).toContain("[ok]");
+		expect(text).toContain("Ask: ok");
 		expect(text).toContain("Real question");
 		expect(text).toContain("BareString");
 		expect(text).toContain("Proper");
@@ -2083,7 +2084,7 @@ describe("AskTool carriage-return sanitization", () => {
 			theme!,
 		);
 		const text = stripAnsi(rendered.render(120).join("\n"));
-		expect(text).toContain("[q 3a]");
+		expect(text).toContain("Ask: q 3a");
 		expect(text).toContain("Q3 A?");
 		expect(text).not.toContain("\r");
 
@@ -2137,7 +2138,7 @@ describe("AskTool carriage-return sanitization", () => {
 			theme!,
 		);
 		const multiText = stripAnsi(multi.render(120).join("\n"));
-		expect(multiText).toContain("[q 3a]");
+		expect(multiText).toContain("Ask: q 3a");
 		expect(multiText).toContain("Q3 A?");
 		expect(multiText).toContain("Abort log");
 		expect(multiText).not.toContain("\r");

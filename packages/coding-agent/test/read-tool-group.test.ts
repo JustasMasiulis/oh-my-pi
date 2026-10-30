@@ -52,48 +52,9 @@ describe("ReadToolGroupComponent", () => {
 
 		const rendered = Bun.stripANSI(component.render(120).join("\n"));
 
-		expect(rendered).toContain(`Read ${examplePath}`);
+		expect(rendered).toContain(`Read: ${examplePath}`);
 		expect(rendered).not.toContain("line 1");
 		expect(rendered.toLowerCase()).not.toContain("ctrl+o");
-	});
-
-	it("uses the enabled dot for completed reads", () => {
-		const component = new ReadToolGroupComponent();
-		const examplePath = path.resolve("/tmp/example.ts");
-		component.updateArgs({ path: examplePath }, "read-success");
-		component.updateResult(
-			{
-				content: [{ type: "text", text: "line 1" }],
-			},
-			false,
-			"read-success",
-		);
-
-		const rendered = component.render(120).join("\n");
-		const plain = Bun.stripANSI(rendered);
-
-		expect(plain).toContain(themeModule.theme.status.enabled);
-		expect(plain).not.toContain(themeModule.theme.status.success);
-		expect(rendered).toContain(themeModule.theme.fg("text", themeModule.theme.status.enabled));
-		expect(rendered).not.toContain(themeModule.theme.fg("success", themeModule.theme.status.enabled));
-	});
-
-	it("omits duplicate success marks from multi-read child rows", () => {
-		const component = new ReadToolGroupComponent();
-		const onePath = path.resolve("/tmp/one.ts");
-		const twoPath = path.resolve("/tmp/two.ts");
-		component.updateArgs({ path: onePath }, "read-one");
-		component.updateArgs({ path: twoPath }, "read-two");
-		component.updateResult({ content: [{ type: "text", text: "one" }] }, false, "read-one");
-		component.updateResult({ content: [{ type: "text", text: "two" }] }, false, "read-two");
-
-		const plain = Bun.stripANSI(component.render(120).join("\n"));
-
-		expect(plain).toContain("Read (2)");
-		expect(plain).toContain(`${themeModule.theme.tree.branch} ${onePath}`);
-		expect(plain).toContain(`${themeModule.theme.tree.last} ${twoPath}`);
-		expect(plain).not.toContain(`${themeModule.theme.tree.branch} ${themeModule.theme.status.enabled}`);
-		expect(plain).not.toContain(`${themeModule.theme.tree.last} ${themeModule.theme.status.enabled}`);
 	});
 
 	it("nests one usage row beneath the last path from each read-only turn", () => {
@@ -143,11 +104,11 @@ describe("ReadToolGroupComponent", () => {
 			.filter(index => index >= 0);
 
 		expect(firstUsageIndex).toBe(onePathIndex + 1);
-		expect(lines[firstUsageIndex]?.startsWith(`   ${themeModule.theme.tree.vertical}  `)).toBe(true);
+		expect(lines[firstUsageIndex]?.startsWith(`  ${themeModule.theme.tree.last} `)).toBe(true);
 		expect(twoPathIndex).toBeGreaterThan(firstUsageIndex);
 		expect(threePathIndex).toBeGreaterThan(twoPathIndex);
 		expect(parallelUsageIndices).toEqual([threePathIndex + 1]);
-		expect(lines[parallelUsageIndices[0]!]?.startsWith("      ")).toBe(true);
+		expect(lines[parallelUsageIndices[0]!]?.startsWith(`  ${themeModule.theme.tree.last} `)).toBe(true);
 	});
 
 	it("splits a single selector-delimited read argument into child rows", () => {
@@ -160,10 +121,10 @@ describe("ReadToolGroupComponent", () => {
 
 		const plain = Bun.stripANSI(component.render(120).join("\n"));
 
-		expect(plain).toContain("Read (3)");
-		expect(plain).toContain(`${themeModule.theme.tree.branch} ${onePath}:1-2`);
-		expect(plain).toContain(`${themeModule.theme.tree.branch} ${twoPath}:3-4`);
-		expect(plain).toContain(`${themeModule.theme.tree.last} ${threePath}:5-6`);
+		expect(plain).toContain("Read 3 files");
+		expect(plain).toContain(`${themeModule.theme.status.success} ${onePath}:1-2`);
+		expect(plain).toContain(`${themeModule.theme.status.success} ${twoPath}:3-4`);
+		expect(plain).toContain(`${themeModule.theme.status.success} ${threePath}:5-6`);
 	});
 
 	it("merges multi-range selectors into one file row", () => {
@@ -174,8 +135,8 @@ describe("ReadToolGroupComponent", () => {
 
 		const plain = Bun.stripANSI(component.render(120).join("\n"));
 
-		expect(plain).toContain(`Read ${examplePath}:5-10,20-30`);
-		expect(plain).not.toContain("Read (2)");
+		expect(plain).toContain(`Read: ${examplePath}:5-10,20-30`);
+		expect(plain).not.toContain("Read 2 files");
 		expect(plain).not.toContain("full file");
 	});
 
@@ -211,9 +172,9 @@ describe("ReadToolGroupComponent", () => {
 
 		const plain = Bun.stripANSI(component.render(120).join("\n"));
 
-		expect(plain).toContain("Read (2)");
-		expect(plain).toContain(`${themeModule.theme.tree.branch} ${onePath}`);
-		expect(plain).toContain(`${themeModule.theme.tree.last} ${twoPath}`);
+		expect(plain).toContain("Read 2 files");
+		expect(plain).toContain(`${themeModule.theme.status.success} ${onePath}`);
+		expect(plain).toContain(`${themeModule.theme.status.success} ${twoPath}`);
 	});
 
 	it("links every grouped delimited row from result-provided link paths", () => {
@@ -239,7 +200,7 @@ describe("ReadToolGroupComponent", () => {
 		// Plain file: URIs — the line location must stay out of the query (#12123).
 		const oneUri = url.pathToFileURL(oneLink).href;
 		const twoUri = url.pathToFileURL(twoLink).href;
-		expect(Bun.stripANSI(rendered)).toContain("Read (2)");
+		expect(Bun.stripANSI(rendered)).toContain("Read 2 files");
 		expect(extractLinkUris(rendered)).toEqual(expect.arrayContaining([oneUri, twoUri]));
 		expect(extractLinkTexts(rendered)).toEqual(expect.arrayContaining(["src/one.ts", "src/two.ts"]));
 	});
@@ -304,7 +265,7 @@ describe("ReadToolGroupComponent", () => {
 		);
 
 		const rendered = Bun.stripANSI(component.render(120).join("\n"));
-		const matches = rendered.split(`Read ${examplePath}:L10-L20`).length - 1;
+		const matches = rendered.split(`Read: ${examplePath}:L10-L20`).length - 1;
 
 		expect(matches).toBe(1);
 	});
@@ -355,7 +316,7 @@ describe("ReadToolGroupComponent", () => {
 		const rendered = component.render(120).join("\n");
 
 		const exampleUri = url.pathToFileURL(path.resolve(examplePath)).href;
-		expect(Bun.stripANSI(rendered)).toContain("Read src/example.ts:7-9");
+		expect(Bun.stripANSI(rendered)).toContain("Read: src/example.ts:7-9");
 		expect(extractLinkUris(rendered)).toContain(exampleUri);
 		expect(extractLinkTexts(rendered)).toContain("src/example.ts");
 		expect(extractLinkTexts(rendered)).not.toContain("src/example.ts:7-9");
@@ -378,7 +339,7 @@ describe("ReadToolGroupComponent", () => {
 		const rendered = component.render(120).join("\n");
 
 		const previewUri = url.pathToFileURL(path.resolve(previewPath)).href;
-		expect(Bun.stripANSI(rendered)).toContain("Read src/preview.ts:20-22");
+		expect(Bun.stripANSI(rendered)).toContain("Read: src/preview.ts:20-22");
 		expect(extractLinkUris(rendered)).toContain(previewUri);
 		expect(extractLinkTexts(rendered)).toContain("src/preview.ts");
 		expect(extractLinkTexts(rendered)).not.toContain("src/preview.ts:20-22");

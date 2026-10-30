@@ -23,6 +23,8 @@ export interface TranscriptStatusNative {
 /**
  * One compact transcript status row: the terminal line's themed parts (joined
  * by single spaces, glyphs and brackets included) and the same row natively.
+ * A row led by a status glyph sits at column 0 like tool headers; `indent`
+ * hangs a detail row under the one above it.
  */
 export interface TranscriptStatusRow {
 	readonly parts: readonly (TranscriptStatusPart | undefined)[];
@@ -42,7 +44,7 @@ export class TranscriptStatusBlock extends TranscriptBlock {
 		super();
 		for (const row of rows) {
 			const styled = row.parts.flatMap(part => (part ? [theme.fg(part.color, part.text)] : []));
-			this.addChild(new Text(styled.join(" "), row.indent ?? 1, 0));
+			this.addChild(new Text(styled.join(" "), row.indent ?? 0, 0));
 		}
 		this.#native = col(
 			rows.map(({ native }) => noticeRow(native.tone, native.message, { icon: native.icon })),

@@ -13,15 +13,23 @@ import {
 	readSourceFsPath,
 	splitPathAndSel,
 } from "../tools/read";
-import { PREVIEW_LIMITS, shortenPath } from "../render/render-utils";
-import { fileHyperlink, renderCodeCell, renderMarkdownCell } from "../render";
-import { wrapTreeLine } from "../render/hanging-wrap";
-import { wrapTextWithAnsi } from "../utils";
+import {
+	FILE_NAME_COLOR,
+	formatBadge,
+	formatStatusIcon,
+	formatStyledPath,
+	PREVIEW_LIMITS,
+	shortenPath,
+	type ToolUIStatus,
+} from "../render/render-utils";
+import { fileHyperlink, renderCodeCell, renderMarkdownCell, renderStatusLine, type StatusLineOptions } from "../render";
+import { wrapPrefixedLine, wrapTreeLine } from "../render/hanging-wrap";
+import { visibleWidth } from "../utils";
 import { canonicalizeMessage } from "./thinking-display";
 import { internalUrlSchemeSpec, splitUrlScheme } from "../tools/url-scheme-host";
 import type { ToolExecutionHandle } from "./tool-execution";
 import { formatUsageRow } from "../overlays/usage-row";
-import { formatCount, sanitizeText, sanitizeTextDeep } from "@oh-my-pi/pi-utils";
+import { formatCount, isUrlLikePath, sanitizeText, sanitizeTextDeep } from "@oh-my-pi/pi-utils";
 import type { TspCardStatus, TspSpan, TspText } from "@oh-my-pi/pi-wire";
 import type { NativeToolHead } from "../tools/renderer";
 import { card, code, keyed, md, node, span, text, withHidden } from "../native/describe";
@@ -120,7 +128,7 @@ type ReadEntry = {
 	path: string;
 	displayPaths?: ReadDisplayPathSpec[];
 	linkPath?: string;
-	status: "pending" | "success" | "warning" | "error";
+	status: "pending" | "running" | "success" | "warning" | "error";
 	correctedFrom?: string;
 	contentText?: string;
 	/** The result's `details.contentType`; see {@link previewsMarkdown}. */
@@ -162,6 +170,7 @@ const TRIMMED_BODY_PREVIEW = { lines: 1000 } as const;
 const READ_STATUS_TONE: Record<ReadEntry["status"], "pending" | "warning" | "error" | undefined> = {
 	success: undefined,
 	pending: "pending",
+	running: "pending",
 	warning: "warning",
 	error: "error",
 };
@@ -182,10 +191,15 @@ type ReadSummaryRow = {
 
 const READ_STATUS_RANK: Record<ReadEntry["status"], number> = {
 	success: 0,
-	pending: 1,
-	warning: 2,
-	error: 3,
+	running: 1,
+	pending: 2,
+	warning: 3,
+	error: 4,
 };
+
+function isInFlight(entry: ReadEntry): boolean {
+	return entry.status === "pending" || entry.status === "running";
+}
 
 function getDisplayReadTargets(
 	details: ReadToolDetails | undefined,
@@ -356,7 +370,7 @@ function formatMergedSelectorParts(selectors: string[]): string {
 	const first = selectors[0]!;
 	const second = selectors[1]!;
 	const last = selectors[selectors.length - 1]!;
-	return `${first},${second},…,${last}`;
+	return `${first},${second},${theme.format.ellipsis},${last}`;
 }
 
 export class ReadToolGroupComponent extends Container implements ToolExecutionHandle {
@@ -410,7 +424,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	#hasPendingEntries(): boolean {
 		for (const entry of this.#entries.values()) {
-			if (entry.status === "pending") return true;
+			if (isInFlight(entry)) return true;
 		}
 		return false;
 	}
@@ -559,7 +573,12 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		this.#updateDisplay();
 	}
 
-	setExecutionStarted(_toolCallId?: string): void {
+	setExecutionStarted(toolCallId?: string): void {
+		for (const entry of this.#entries.values()) {
+			if (entry.status === "pending" && (toolCallId === undefined || entry.toolCallId === toolCallId)) {
+				entry.status = "running";
+			}
+		}
 		this.#updateDisplay();
 	}
 
@@ -864,7 +883,9 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		let rank = 0;
 		for (const entry of entries) rank = Math.max(rank, READ_STATUS_RANK[entry.status]);
 		if (rank === READ_STATUS_RANK.error) return "error";
-		if (rank === READ_STATUS_RANK.pending) return this.#sealed ? "cancelled" : "running";
+		if (rank === READ_STATUS_RANK.pending || rank === READ_STATUS_RANK.running) {
+			return this.#sealed ? "cancelled" : "running";
+		}
 		return "done";
 	}
 
@@ -901,12 +922,20 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 		// Clear previous children and rebuild the summary and preview blocks.
 		this.clear();
-		this.#text = new Text("", 0, 0).setWrapLine(
-			(line, width) => wrapTreeLine(line, width, theme) ?? wrapTextWithAnsi(line, width),
-		);
+		// Item rows hang their path under the label column; usage rows hang under
+		// their connector; the header hangs at the body column.
+		const itemPrefixes = new Map<string, string>();
+		this.#text = new Text("", 0, 0).setWrapLine((line, width) => {
+			const itemPrefix = itemPrefixes.get(line);
+			if (itemPrefix !== undefined) {
+				const hang = " ".repeat(visibleWidth(itemPrefix));
+				return wrapPrefixedLine(itemPrefix, hang, line.slice(itemPrefix.length), width);
+			}
+			return wrapTreeLine(line, width, theme) ?? wrapPrefixedLine("", "  ", line, width);
+		});
 
 		if (displayRows.length === 0) {
-			this.#text.setText(` ${theme.format.bullet} ${theme.fg("toolTitle", theme.bold("Read"))}`);
+			this.#text.setText(renderStatusLine({ icon: this.#groupIcon(entries), title: "Read" }, theme));
 			this.addChild(this.#text);
 			return;
 		}
@@ -914,11 +943,11 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		if (displayRows.length === 1) {
 			const row = displayRows[0]!;
 			if (!this.#shouldRenderPreviewRow(row)) {
-				const statusSymbol = this.#formatStatus(this.#statusForTargets(row.targets));
-				const pathDisplay = this.#formatRowPath(row);
-				const lines = [` ${statusSymbol} ${theme.fg("toolTitle", theme.bold("Read"))} ${pathDisplay}`.trimEnd()];
+				const icon = this.#statusForTargets(row.targets);
+				const description = this.#formatRowPath(row, true);
+				const lines = [renderStatusLine({ icon, title: "Read", description }, theme)];
 				const usageRows = this.#usageRowsBySummaryRow(displayRows).get(0) ?? [];
-				this.#appendUsageRows(lines, usageRows, "   ");
+				this.#appendUsageRows(lines, usageRows, "  ");
 				this.#text.setText(lines.join("\n"));
 				this.addChild(this.#text);
 			}
@@ -929,14 +958,22 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			return;
 		}
 
-		const header = `${theme.fg("toolTitle", theme.bold("Read"))}${theme.fg("dim", ` (${displayRows.length})`)}`;
-		const lines = [` ${theme.format.bullet} ${header}`];
+		const lines = [
+			renderStatusLine(
+				{ icon: this.#groupIcon(entries), title: "Read", meta: [formatCount("file", displayRows.length)] },
+				theme,
+			),
+		];
 		const entriesWithoutPreview = entries.filter(entry => !this.#shouldRenderPreview(entry));
 		const summaryTargets = this.#displayTargetsForEntries(entriesWithoutPreview);
 		const rows = this.#buildSummaryRows(summaryTargets);
 		const usageRowsBySummaryRow = this.#usageRowsBySummaryRow(rows);
 		for (const [index, row] of rows.entries()) {
-			this.#appendSummaryRow(lines, row, index, rows.length, usageRowsBySummaryRow.get(index) ?? []);
+			const prefix = `  ${formatStatusIcon(this.#statusForTargets(row.targets), theme)} `;
+			const line = `${prefix}${this.#formatRowPath(row)}`;
+			itemPrefixes.set(line, prefix);
+			lines.push(line);
+			this.#appendUsageRows(lines, usageRowsBySummaryRow.get(index) ?? [], "  ");
 		}
 
 		this.#text.setText(lines.join("\n"));
@@ -1024,22 +1061,18 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		return rows;
 	}
 
-	#appendSummaryRow(
-		lines: string[],
-		row: ReadSummaryRow,
-		index: number,
-		total: number,
-		usageRows: ReadUsageRow[],
-	): void {
-		const connector = index === total - 1 ? theme.tree.last : theme.tree.branch;
-		lines.push(`   ${theme.fg("dim", connector)} ${this.#formatRow(row)}`.trimEnd());
-
-		const connectorWidth = Bun.stringWidth(connector);
-		const continuation =
-			index === total - 1
-				? " ".repeat(connectorWidth)
-				: `${theme.tree.vertical}${" ".repeat(Math.max(0, connectorWidth - Bun.stringWidth(theme.tree.vertical)))}`;
-		this.#appendUsageRows(lines, usageRows, `   ${continuation} `);
+	/**
+	 * Overall outcome of the group: pending while any read runs, error only when
+	 * every read failed, warning when some reads failed or need attention.
+	 */
+	#groupIcon(entries: readonly ReadEntry[]): ToolUIStatus {
+		if (entries.length === 0) return "pending";
+		if (entries.some(isInFlight)) {
+			if (this.#sealed) return "aborted";
+			return entries.some(entry => entry.status === "running") ? "running" : "pending";
+		}
+		if (entries.every(entry => entry.status === "error")) return "error";
+		return entries.some(entry => entry.status !== "success") ? "warning" : "success";
 	}
 
 	#usageRowsBySummaryRow(rows: ReadSummaryRow[]): Map<number, ReadUsageRow[]> {
@@ -1067,29 +1100,29 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		return usageRowsByIndex;
 	}
 
+	/** Usage rows nest under their item with tree connectors. */
 	#appendUsageRows(lines: string[], usageRows: ReadUsageRow[], prefix: string): void {
-		for (const usageRow of usageRows) {
-			lines.push(
-				theme.fg(
-					"dim",
-					`${prefix}${formatUsageRow(usageRow.usage, usageRow.durationMs, usageRow.ttftMs, usageRow.timestamp, usageRow.turnElapsedMs)}`,
-				),
+		for (const [index, usageRow] of usageRows.entries()) {
+			const connector = index === usageRows.length - 1 ? theme.tree.last : theme.tree.branch;
+			const usage = formatUsageRow(
+				usageRow.usage,
+				usageRow.durationMs,
+				usageRow.ttftMs,
+				usageRow.timestamp,
+				usageRow.turnElapsedMs,
 			);
+			lines.push(`${prefix}${theme.fg("dim", `${connector} ${usage}`)}`);
 		}
 	}
 
-	#formatRow(row: ReadSummaryRow): string {
-		const status = this.#statusForTargets(row.targets);
-		const statusPrefix = status === "success" ? "" : `${this.#formatStatus(status)} `;
-		return `${statusPrefix}${this.#formatRowPath(row)}`;
-	}
-
-	#formatRowPath(row: ReadSummaryRow): string {
+	/** A row's path: styled in the body, or plain in a header so it takes the subject color. */
+	#formatRowPath(row: ReadSummaryRow, header = false): string {
 		return this.#formatPathValue(row.targetPath, {
 			correctedFrom: this.#correctedFromForTargets(row.targets),
 			conflictCount: this.#conflictCountForTargets(row.targets),
 			line: firstSelectorLineForTargets(row.targets),
 			linkPath: linkPathForTargets(row.targets),
+			header,
 		});
 	}
 
@@ -1137,19 +1170,36 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	#formatPathValue(
 		value: string,
-		options: { correctedFrom?: string; conflictCount?: number; line?: number; linkPath?: string } = {},
+		options: {
+			correctedFrom?: string;
+			conflictCount?: number;
+			line?: number;
+			linkPath?: string;
+			header?: boolean;
+		} = {},
 	): string {
 		const split = splitPathAndSel(value);
-		const selectorSuffix = split.sel ? `:${split.sel}` : "";
-		const baseValue = split.sel ? split.path : value;
-		const filePath = shortenPath(baseValue);
-		let pathDisplay = filePath ? theme.fg("accent", filePath) : theme.fg("toolOutput", "…");
+		const base = split.sel ? split.path : value;
+		const isUrl = isUrlLikePath(base);
+		// `?q=…` queries read like selectors: muted after the path, outside its link.
+		const queryIndex = isUrl ? -1 : base.indexOf("?");
+		const filePath = shortenPath(queryIndex > 0 ? base.slice(0, queryIndex) : base);
+		const selectors = `${queryIndex > 0 ? base.slice(queryIndex) : ""}${split.sel ? `:${split.sel}` : ""}`;
+		// Headers keep the plain subject color; body rows use the shared path
+		// style, with URLs whole in the file-name color.
+		let pathDisplay = !filePath
+			? theme.fg("toolOutput", theme.format.ellipsis)
+			: options.header
+				? filePath
+				: isUrl
+					? theme.fg(FILE_NAME_COLOR, filePath)
+					: formatStyledPath(filePath, theme);
 		if (filePath && options.linkPath) {
 			const linkOptions = options.line !== undefined ? { line: options.line } : undefined;
 			pathDisplay = fileHyperlink(options.linkPath, pathDisplay, linkOptions);
 		}
-		if (selectorSuffix) {
-			pathDisplay += theme.fg("accent", selectorSuffix);
+		if (selectors) {
+			pathDisplay += options.header ? selectors : theme.fg("muted", selectors);
 		}
 		if (options.correctedFrom) {
 			pathDisplay += theme.fg("dim", ` (corrected from ${shortenPath(options.correctedFrom)})`);
@@ -1161,7 +1211,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	#formatConflictBadge(conflictCount: number | undefined): string {
 		if (!conflictCount || conflictCount <= 0) return "";
 		const n = conflictCount;
-		return ` ${theme.fg("warning", `(⚠ ${n} conflict${n === 1 ? "" : "s"})`)}`;
+		return ` ${formatBadge(`${n} conflict${n === 1 ? "" : "s"}`, "warning", theme)}`;
 	}
 
 	/**
@@ -1179,9 +1229,16 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 					conflictCount: entry.conflictCount,
 					line: firstSelectorLine(split.sel),
 					linkPath: readTargetLinkPath(split.path, entry.linkPath),
+					header: true,
 				})
 			: "";
-		const title = pathDisplay ? `Read ${pathDisplay}` : "Read";
+		const header: StatusLineOptions = {
+			icon: entry.status,
+			title: "Read",
+			description: pathDisplay || undefined,
+		};
+		const lineCount = (entry.contentText ?? "").split("\n").length;
+		const lineCountMeta = `${lineCount} line${lineCount === 1 ? "" : "s"}`;
 		let cachedWidth: number | undefined;
 		let cachedLines: string[] | undefined;
 		const dropCache = () => {
@@ -1192,13 +1249,12 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		const component: Component = {
 			render: (width: number) => {
 				if (cachedLines && cachedWidth === width) return cachedLines;
-				const status = entry.status === "success" ? "complete" : entry.status;
 				cachedLines = previewsMarkdown(entry)
 					? renderMarkdownCell(
 							{
 								content: entry.contentText ?? "",
-								title,
-								status,
+								header,
+								footerMeta: theme.fg("dim", lineCountMeta),
 								expanded,
 								contentMaxLines: COLLAPSED_PREVIEW_LINES,
 								width,
@@ -1209,8 +1265,8 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 							{
 								code: entry.contentText ?? "",
 								language: lang,
-								title,
-								status,
+								header,
+								footerMeta: theme.fg("dim", lineCountMeta),
 								expanded,
 								codeMaxLines: expanded ? undefined : COLLAPSED_PREVIEW_LINES,
 								codeStartLine: entry.codeStartLine,
@@ -1251,18 +1307,5 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	#shouldRenderPreview(entry: ReadEntry): boolean {
 		return this.#showContentPreview && entry.contentText !== undefined;
-	}
-
-	#formatStatus(status: ReadEntry["status"]): string {
-		if (status === "success") {
-			return theme.fg("text", theme.status.enabled);
-		}
-		if (status === "warning") {
-			return theme.fg("warning", theme.status.warning);
-		}
-		if (status === "error") {
-			return theme.fg("error", theme.status.error);
-		}
-		return theme.fg("dim", theme.status.pending);
 	}
 }

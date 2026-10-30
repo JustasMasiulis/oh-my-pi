@@ -226,7 +226,7 @@ describe("CopySelectorComponent", () => {
 		// leaving the Read card below the outline.
 		const boxed = lines.filter(line => line.startsWith("┆")).join("\n");
 		expect(boxed).toContain(GROUPED_READ_YIELD);
-		expect(boxed).toContain("Read (2)");
+		expect(boxed).toContain("Read 2 files");
 
 		selector.handleInput(ENTER);
 		selector.dispose();

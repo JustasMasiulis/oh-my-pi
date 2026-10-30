@@ -38,7 +38,7 @@ function linkUris(output: string): string[] {
 }
 
 describe("AST edit file hyperlinks", () => {
-	it("retains original control-byte paths for existing directory and file links while keeping labels sanitized", () => {
+	it("retains original control-byte paths for file links while keeping labels sanitized", () => {
 		applyHyperlinkSetting("always");
 		const cwd = "/tmp/project-\x01";
 		const rawContent = [
@@ -64,10 +64,9 @@ describe("AST edit file hyperlinks", () => {
 		};
 		const output = render(details, sanitizeText(rawContent));
 		const directory = path.join(cwd, "source-\x1b[31mroot\x02");
+		// Directory headers are folded into each file header's path.
 		expect(linkUris(output)).toEqual([
-			pathToFileURL(directory).href,
 			pathToFileURL(path.join(directory, "file-\x1b[32mname\x7f.ts")).href,
-			pathToFileURL(path.join(directory, "nested-\x03")).href,
 			pathToFileURL(path.join(directory, "nested-\x03", "deep.ts")).href,
 		]);
 		const labels = output.replace(/\x1b\]8;[^;]*;[^\x1b]+\x1b\\/g, "");

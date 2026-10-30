@@ -6,7 +6,7 @@ import {
 	type MessageNoticePresentation,
 } from "../chrome/message-notice";
 import { theme } from "../theme";
-import { expandKeyHint } from "../render/render-utils";
+import { expandHintLabel, formatMoreItems } from "../render/render-utils";
 import { span, text } from "../native/describe";
 import type { NativeNode } from "../native/node";
 
@@ -104,7 +104,7 @@ export class TtsrNotificationComponent extends Container {
 	}
 
 	#presentationSingle(rule: NotificationRule, expanded: boolean): MessageNoticePresentation {
-		const header = `Injecting rule: ${theme.bold(rule.name)}  ${theme.icon.rewind}`;
+		const header = `Injecting rule: ${theme.bold(rule.name)}`;
 
 		const desc = (rule.description || rule.content)?.trim();
 		if (!desc) return { icon: theme.icon.warning, header };
@@ -114,20 +114,20 @@ export class TtsrNotificationComponent extends Container {
 		if (!expanded) {
 			const lines = desc.split("\n");
 			if (lines.length > 2) {
-				displayText = `${lines.slice(0, 2).join("\n")}…`;
+				displayText = `${lines.slice(0, 2).join("\n")}${theme.format.ellipsis}`;
 				truncated = true;
 			}
 		}
 
 		const body: Component[] = [new Text(theme.italic(displayText), 0, 0)];
 		if (truncated) {
-			body.push(new Text(theme.italic(` (${expandKeyHint()} to expand)`), 0, 0));
+			body.push(new Text(theme.italic(expandHintLabel(theme)), 0, 0));
 		}
 		return { icon: theme.icon.warning, header, body };
 	}
 
 	#presentationMulti(expanded: boolean): MessageNoticePresentation {
-		const header = `Injecting ${this.#rules.length} rules:  ${theme.icon.rewind}`;
+		const header = `Injecting ${this.#rules.length} rules:`;
 
 		const visible = expanded ? this.#rules : this.#rules.slice(0, MAX_COLLAPSED_RULES);
 		const body: Component[] = [];
@@ -141,7 +141,7 @@ export class TtsrNotificationComponent extends Container {
 					// One line per rule when collapsed; full description when expanded.
 					const newline = desc.indexOf("\n");
 					if (newline !== -1) {
-						displayText = `${desc.slice(0, newline).trimEnd()}…`;
+						displayText = `${desc.slice(0, newline).trimEnd()}${theme.format.ellipsis}`;
 						elidedDetail = true;
 					}
 				}
@@ -152,9 +152,9 @@ export class TtsrNotificationComponent extends Container {
 
 		const hidden = this.#rules.length - visible.length;
 		if (hidden > 0) {
-			body.push(new Text(theme.italic(`… +${hidden} more (${expandKeyHint()} to expand)`), 0, 0));
+			body.push(new Text(theme.italic(`${formatMoreItems(hidden, "rule", theme)} ${expandHintLabel(theme)}`), 0, 0));
 		} else if (elidedDetail) {
-			body.push(new Text(theme.italic(` (${expandKeyHint()} to expand)`), 0, 0));
+			body.push(new Text(theme.italic(expandHintLabel(theme)), 0, 0));
 		}
 		return { icon: theme.icon.warning, header, body };
 	}

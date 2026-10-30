@@ -179,6 +179,9 @@ export function stripTrailingNotice(
 	return trimResult ? stripped.trimEnd() : stripped;
 }
 
+/** Model-facing stand-in for a run that printed nothing; cards say `No output` in their bottom border instead. */
+export const NO_OUTPUT_NOTICE = "(no output)";
+
 const RAW_OUTPUT_ARTIFACT_PREFIX = "[raw output: artifact://";
 const RAW_OUTPUT_ARTIFACT_SUFFIX = "]";
 
@@ -367,15 +370,24 @@ export function formatOutputNotice(meta: OutputMeta | undefined): string {
 }
 
 /**
+ * Plain truncation and artifact capture notice, without brackets, for a frame
+ * footer. Returns undefined if neither is present.
+ */
+export function formatTruncationWarningText(meta: OutputMeta | undefined): string | undefined {
+	if (!meta?.truncation && !meta?.artifactError) return undefined;
+	const parts: string[] = [];
+	if (meta.truncation) parts.push(formatTruncationMetaNotice(meta.truncation, meta.source));
+	if (meta.artifactError) parts.push(formatArtifactErrorNotice(meta.artifactError));
+	return parts.join(". ");
+}
+
+/**
  * Format styled truncation and artifact capture warnings.
  * Returns null if neither warning is present.
  */
 export function formatStyledTruncationWarning(meta: OutputMeta | undefined, theme: Theme): string | null {
-	if (!meta?.truncation && !meta?.artifactError) return null;
-	const parts: string[] = [];
-	if (meta.truncation) parts.push(formatTruncationMetaNotice(meta.truncation, meta.source));
-	if (meta.artifactError) parts.push(formatArtifactErrorNotice(meta.artifactError));
-	return theme.fg("warning", wrapBrackets(parts.join(". "), theme));
+	const text = formatTruncationWarningText(meta);
+	return text === undefined ? null : theme.fg("warning", wrapBrackets(text, theme));
 }
 
 /**

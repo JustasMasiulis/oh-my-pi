@@ -8,7 +8,7 @@ import { Spacer } from "../components/spacer";
 import { Text } from "../components/text";
 import { getMarkdownTheme, theme } from "../theme";
 import type { CustomMessage, SkillPromptDetails } from "./messages";
-import { fileHyperlink } from "../render";
+import { fileHyperlink, formatExpandHint } from "../render";
 import { tryFileUri } from "../render/hyperlink";
 import { collapseSkillTokens, skillChipLabel, skillChipStyle, skillToken } from "../prompt/composer-attachments";
 import { type UserBubbleOptions, UserMessageComponent, userBubbleColor } from "./user-message";
@@ -162,9 +162,13 @@ export class SkillMessageComponent extends Container {
 			skillPath: candidate => (candidate === name ? details?.path : undefined),
 		};
 
+		// Ctrl+O reveals the loaded SKILL.md prompt; say so while it is folded away.
+		const hasPrompt = this.#hasPromptText();
+
 		if (!leading) {
 			this.#disclosure = new Disclosure({
 				summary: new UserMessageComponent(display, bubble),
+				collapsedBody: hasPrompt ? () => new Text(formatExpandHint(theme), 1, 0) : undefined,
 				// Prompt extraction and Markdown layout stay lazy: the factory
 				// runs on the first expanded render, reading the current theme.
 				body: () =>
@@ -181,6 +185,7 @@ export class SkillMessageComponent extends Container {
 		// The prompt disclosure nests inside the one callout so the
 		// skill-colored rail stays continuous across summary and detail.
 		const promptDisclosure = new Disclosure({
+			collapsedBody: hasPrompt ? () => this.#collapsedHint() : undefined,
 			body: () => this.#promptFragment(bubble),
 			expanded,
 		});
@@ -199,6 +204,14 @@ export class SkillMessageComponent extends Container {
 	#promptFragment(bubble: UserBubbleOptions): Component {
 		const fragment = new Container();
 		for (const child of this.#promptSection(bubble)) fragment.addChild(child);
+		return fragment;
+	}
+
+	/** The folded prompt's expand hint, a row below the draft inside the rail. */
+	#collapsedHint(): Component {
+		const fragment = new Container();
+		fragment.addChild(new Spacer(1));
+		fragment.addChild(new Text(formatExpandHint(theme), 0, 0));
 		return fragment;
 	}
 
@@ -226,6 +239,13 @@ export class SkillMessageComponent extends Container {
 		const text = this.#extractText();
 		if (!text) return [];
 		return [new Spacer(1), new Text(theme.fg("muted", "prompt"), 0, 0), new Spacer(1), this.#markdown(text, bubble)];
+	}
+
+	/** Whether the message carries prompt text, without joining it (extraction stays lazy). */
+	#hasPromptText(): boolean {
+		const content = this.#message.content;
+		if (typeof content === "string") return content.length > 0;
+		return content.some(part => part.type === "text" && part.text.length > 0);
 	}
 
 	#extractText(): string {

@@ -4,6 +4,15 @@ import { buildPathTree, isUrlLikePath, type PathTreeInput, walkPathTree } from "
 import type { TspTone } from "@oh-my-pi/pi-wire";
 import { code, col, keyed, span, text } from "../native/describe";
 import type { NativeNode } from "../native/node";
+import {
+	CODE_FRAME_GUTTER,
+	FILE_NAME_COLOR,
+	formatExpandHint,
+	formatMoreItems,
+	formatStyledPath,
+	replaceTabs,
+} from "../render/render-utils";
+import type { Theme } from "../theme/theme";
 import { formatHashlineHeader } from "./hashline-format";
 import { fileRow } from "./native-view";
 
@@ -158,6 +167,13 @@ export interface GroupedLineContext {
 	depth: number;
 	/** Resolved absolute path of the dir/file a header points at (when resolvable). */
 	headerPath?: string;
+	/**
+	 * For file headers, the full display path: the folded directory chain joined
+	 * with the name, without `#` markers or the hashline tag.
+	 */
+	displayPath?: string;
+	/** For file headers, a trailing parenthesized note such as `(2 replacements)`. */
+	suffix?: string;
 	/** For content lines, the absolute path of the owning file (line hyperlinks). */
 	filePath?: string;
 	/** Header is an internal/url-like target the caller resolves itself. */
@@ -172,9 +188,18 @@ function resolveGroupedPath(parent: string | undefined, name: string): string | 
 	return path.resolve(parent, name);
 }
 
+/** `# dir/`: a directory header row of grouped output. */
+export function isGroupedDirHeader(line: string): boolean {
+	const match = GROUPED_HEADER_RE.exec(line);
+	if (!match) return false;
+	const rest = match[2]!.trimEnd();
+	return rest.endsWith("/") && !isUrlLikePath(rest);
+}
+
 /**
  * Walk grouped output lines, tracking a directory stack keyed by header depth, so
- * each header and body line can be linked back to its absolute filesystem path.
+ * each header and body line can be linked back to its absolute filesystem path
+ * and each file header to its full display path.
  * Reconstruction is stack-based (not per-blank-group) so nested directory headers
  * resolve correctly across the whole output.
  *
@@ -192,6 +217,7 @@ export function classifyGroupedLines(
 ): GroupedLineContext[] {
 	const result: GroupedLineContext[] = [];
 	const dirAtDepth = new Map<number, string>();
+	const displayDirAtDepth: string[] = [];
 	// Body lines before any header (single-file scopes) link to the scoped file.
 	let currentFile = fileScope;
 
@@ -199,6 +225,7 @@ export function classifyGroupedLines(
 		for (const key of dirAtDepth.keys()) {
 			if (key >= depth) dirAtDepth.delete(key);
 		}
+		displayDirAtDepth.length = depth - 1;
 	};
 
 	for (const line of lines) {
@@ -209,10 +236,12 @@ export function classifyGroupedLines(
 		}
 		const depth = match[1]!.length;
 		const rest = match[2]!.trimEnd();
+		const suffix = HEADER_SUFFIX_RE.exec(rest)?.[0].trim();
 		if (isUrlLikePath(rest)) {
 			clearDeeper(depth);
 			currentFile = undefined;
-			result.push({ kind: "file", depth, isUrl: true });
+			const displayPath = rest.replace(HEADER_SUFFIX_RE, "").replace(HEADER_HASH_TAG_RE, "");
+			result.push({ kind: "file", depth, isUrl: true, displayPath, suffix });
 			continue;
 		}
 		const parent = depth > 1 ? dirAtDepth.get(depth - 1) : headerBase;
@@ -221,17 +250,33 @@ export function classifyGroupedLines(
 			const abs = resolveGroupedPath(parent, name);
 			clearDeeper(depth);
 			if (abs !== undefined) dirAtDepth.set(depth, abs);
+			displayDirAtDepth[depth - 1] = name;
 			currentFile = undefined;
 			result.push({ kind: "dir", depth, headerPath: abs });
 			continue;
 		}
 		const name = rest.replace(HEADER_SUFFIX_RE, "").replace(HEADER_HASH_TAG_RE, "");
 		const abs = name ? resolveGroupedPath(parent, name) : undefined;
+		const prefix = displayDirAtDepth
+			.slice(0, depth - 1)
+			.filter(Boolean)
+			.join("/");
 		currentFile = abs;
-		result.push({ kind: "file", depth, headerPath: abs });
+		result.push({ kind: "file", depth, headerPath: abs, displayPath: prefix ? `${prefix}/${name}` : name, suffix });
 	}
 
 	return result;
+}
+
+/**
+ * A file header row: the full path with a dim directory and bronze name, then
+ * any dim suffix. URL-like headers stay whole in the name color.
+ */
+export function formatGroupedFileHeader(ctx: GroupedLineContext, theme: Theme): string {
+	const display = replaceTabs(ctx.displayPath ?? "");
+	const path = ctx.isUrl ? theme.fg(FILE_NAME_COLOR, display) : formatStyledPath(display, theme);
+	const suffix = ctx.suffix ? ` ${theme.fg("dim", replaceTabs(ctx.suffix))}` : "";
+	return `${path}${suffix}`;
 }
 
 /**
@@ -267,6 +312,119 @@ export function groupLineIndicesByBlank(rawLines: readonly string[]): number[][]
 }
 
 // =============================================================================
+// Flush search previews (grep / ast-grep TUI renderers)
+// =============================================================================
+
+/** A persisted code-frame row up to its gutter: optional marker, line number, then {@link CODE_FRAME_GUTTER}. */
+const CODE_FRAME_ROW_RE = new RegExp(`^(\\s*[*+\\->]?\\s*\\d*)${CODE_FRAME_GUTTER}`);
+
+/**
+ * Redraw a persisted code-frame row's canonical gutter with the theme's
+ * vertical rule (`|` in ASCII). Rows without that gutter (older transcripts'
+ * `12|text` / `12:text`, headers, notes) pass through unchanged.
+ */
+export function themeCodeFrameGutter(line: string, theme: Theme): string {
+	const match = CODE_FRAME_ROW_RE.exec(line);
+	if (!match) return line;
+	return `${match[1]}${theme.boxSharp.vertical}${line.slice(match[0].length)}`;
+}
+
+/** `*12│`, `*12|`, `*12:`: a match row of search display output. */
+const SEARCH_MATCH_LINE_RE = /^\s*\*\d+(?:│|[:|])/;
+
+function isSearchMatchLine(line: string): boolean {
+	return SEARCH_MATCH_LINE_RE.test(line);
+}
+
+function isSearchHeaderLine(line: string): boolean {
+	return /^#+ /.test(line);
+}
+
+/** Headers and match rows only; falls back to the whole group when it has neither. */
+function compactSearchPreviewGroup(group: readonly number[], lines: readonly string[]): readonly number[] {
+	const compact = group.filter(index => isSearchHeaderLine(lines[index]!) || isSearchMatchLine(lines[index]!));
+	return compact.length > 0 ? compact : group;
+}
+
+function countPreviewMatches(group: readonly number[], lines: readonly string[], hasMarkedMatches: boolean): number {
+	let count = 0;
+	for (const index of group) {
+		const line = lines[index]!;
+		if (hasMarkedMatches ? isSearchMatchLine(line) : !isSearchHeaderLine(line) && line.length > 0) count++;
+	}
+	return count;
+}
+
+/** Line budget and expansion state for {@link renderSearchPreviewRows}. */
+export interface SearchPreviewOptions {
+	/** Rows available, including the trailing `… N more` row. */
+	maxLines: number;
+	/** Reported match total; used when the display output marks no match rows. */
+	matchCount: number;
+	expanded: boolean;
+}
+
+/**
+ * Flush rows of grouped search output (`## file`, `*18│ line`) within a line
+ * budget. Directory headers are dropped: callers style each file header with
+ * its full path ({@link formatGroupedFileHeader}). Collapsed, groups keep only
+ * their headers and match rows. When rows are cut, the last row is
+ * `… N more matches` (or lines) with the expand hint.
+ */
+export function renderSearchPreviewRows(
+	groups: readonly (readonly number[])[],
+	lines: readonly string[],
+	styleLine: (index: number) => string,
+	options: SearchPreviewOptions,
+	theme: Theme,
+): string[] {
+	const { maxLines, matchCount, expanded } = options;
+	if (maxLines <= 0) return [];
+	const renderedGroups = groups
+		.map(group => group.filter(index => !isGroupedDirHeader(lines[index]!)))
+		.map(group => (expanded ? group : compactSearchPreviewGroup(group, lines)))
+		.filter(group => group.length > 0);
+	if (renderedGroups.length === 0) return [];
+
+	let totalLines = 0;
+	let totalMarkedMatches = 0;
+	let totalFallbackMatches = 0;
+	for (const group of renderedGroups) {
+		totalLines += group.length;
+		totalMarkedMatches += countPreviewMatches(group, lines, true);
+		totalFallbackMatches += countPreviewMatches(group, lines, false);
+	}
+	const hasMarkedMatches = totalMarkedMatches > 0;
+	const needsSummary = totalLines > maxLines;
+	const contentBudget = needsSummary ? Math.max(maxLines - 1, 0) : maxLines;
+	const visible: number[] = [];
+	for (const group of renderedGroups) {
+		const take = Math.min(group.length, contentBudget - visible.length);
+		if (take <= 0) break;
+		visible.push(...group.slice(0, take));
+	}
+	// A cut preview never ends on a header whose body it hides.
+	if (needsSummary) {
+		while (visible.length > 1 && isSearchHeaderLine(lines[visible[visible.length - 1]!]!)) visible.pop();
+	}
+
+	const out = visible.map(index => replaceTabs(styleLine(index)));
+	const visibleMatches = countPreviewMatches(visible, lines, hasMarkedMatches);
+	const totalMatches = hasMarkedMatches ? totalMarkedMatches : Math.max(matchCount, totalFallbackMatches);
+	const hiddenMatches = Math.max(totalMatches - visibleMatches, 0);
+	const hiddenLines = Math.max(totalLines - visible.length, 0);
+	if (needsSummary && (hiddenMatches > 0 || hiddenLines > 0)) {
+		const hidden =
+			hiddenMatches > 0
+				? formatMoreItems(hiddenMatches, "match", theme)
+				: formatMoreItems(hiddenLines, "line", theme);
+		const hint = formatExpandHint(theme, expanded);
+		out.push(hint ? `${theme.fg("dim", hidden)} ${hint}` : theme.fg("dim", hidden));
+	}
+	return out;
+}
+
+// =============================================================================
 // Native (TSP) description of grouped output
 // =============================================================================
 
@@ -278,29 +436,17 @@ export type GroupedOutputEvent =
 
 /**
  * Walk grouped output (`# dir/`, `## file.ts (suffix)`, body lines), resolving
- * each file header to its full display path (the folded directory chain
- * joined with the name) and dropping blank separator lines.
+ * each file header to its full display path ({@link classifyGroupedLines})
+ * and dropping blank separator lines.
  */
 export function* walkGroupedOutput(lines: readonly string[]): Generator<GroupedOutputEvent> {
-	const dirAtDepth: string[] = [];
-	for (const line of lines) {
-		const header = GROUPED_HEADER_RE.exec(line);
-		if (!header) {
-			if (line.trim().length > 0) yield { kind: "line", text: line };
-			continue;
-		}
-		const depth = header[1]!.length;
-		const rest = header[2]!.trimEnd();
-		dirAtDepth.length = depth - 1;
-		if (rest.endsWith("/") && !isUrlLikePath(rest)) {
-			dirAtDepth[depth - 1] = rest.slice(0, -1).replace(HEADER_SUFFIX_RE, "");
-			yield { kind: "dir" };
-			continue;
-		}
-		const suffix = HEADER_SUFFIX_RE.exec(rest)?.[0].trim();
-		const name = rest.replace(HEADER_SUFFIX_RE, "").replace(HEADER_HASH_TAG_RE, "");
-		const prefix = dirAtDepth.filter(Boolean).join("/");
-		yield { kind: "file", path: prefix ? `${prefix}/${name}` : name, suffix };
+	const contexts = classifyGroupedLines(lines, undefined);
+	for (let index = 0; index < lines.length; index++) {
+		const ctx = contexts[index]!;
+		const line = lines[index]!;
+		if (ctx.kind === "dir") yield { kind: "dir" };
+		else if (ctx.kind === "file") yield { kind: "file", path: ctx.displayPath ?? "", suffix: ctx.suffix };
+		else if (line.trim().length > 0) yield { kind: "line", text: line };
 	}
 }
 

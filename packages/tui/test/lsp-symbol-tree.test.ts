@@ -10,7 +10,7 @@ beforeAll(async () => {
 });
 
 describe("LSP symbols expanded tree", () => {
-	it("draws branches and rails for nested siblings, including a sibling after a deeper child", () => {
+	it("keeps top-level symbols flush and draws branches and rails for nested siblings, including a sibling after a deeper child", () => {
 		const text = [
 			"Symbols in src/a.ts:",
 			"class Alpha @ line 1",
@@ -24,27 +24,15 @@ describe("LSP symbols expanded tree", () => {
 		const rows = lspToolRenderer
 			.renderResult({ content: [{ type: "text", text }] }, { expanded: true, isPartial: false }, theme)
 			.render(80)
-			.map(row =>
-				Bun.stripANSI(row)
-					.replace(/^│/, "")
-					.replace(/\s*│$/, ""),
-			);
-		const start = rows.findIndex(row => row.includes("in src/a.ts"));
-		expect(rows.slice(start + 1, start + 15)).toEqual([
-			"  ├─ class Alpha",
-			"  │  line 1",
-			"  │  ├─ method one",
-			"  │  │  line 2",
-			"  │  │  └─ var inner",
-			"  │  │     line 3",
-			"  │  └─ method two",
-			"  │     line 5",
-			"  ├─ class Beta",
-			"  │  line 10",
-			"  │  └─ method three",
-			"  │     line 11",
-			"  └─ function gamma",
-			"     line 20",
+			.map(row => Bun.stripANSI(row).trimEnd());
+		expect(rows.slice(1)).toEqual([
+			"  class Alpha line 1",
+			"  ├─ method one line 2",
+			"  │  └─ var inner line 3",
+			"  └─ method two line 5",
+			"  class Beta line 10",
+			"  └─ method three line 11",
+			"  function gamma line 20",
 		]);
 	});
 });

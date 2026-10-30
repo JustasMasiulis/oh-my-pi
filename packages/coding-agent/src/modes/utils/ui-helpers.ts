@@ -398,7 +398,7 @@ export class UiHelpers {
 			}
 			case "fileMention": {
 				// Render compact file mention display
-				const block = buildFileMentionBlock(message.files, 0);
+				const block = buildFileMentionBlock(message.files);
 				if (block.children.length > 0) this.ctx.chatContainer.addChild(block);
 				break;
 			}

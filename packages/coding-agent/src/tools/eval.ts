@@ -54,7 +54,7 @@ import type { ToolSession } from ".";
 import { truncateForPrompt } from "./approval";
 import { type EvalBackendsAllowance, resolveAdvertisedEvalBackends, resolveEvalBackends } from "./eval-backends";
 import { recordStatusEvent, type StatusEventLog } from "@oh-my-pi/pi-tui/tools/eval";
-import { formatOutputNotice } from "@oh-my-pi/pi-tui/tools/output-meta";
+import { formatOutputNotice, NO_OUTPUT_NOTICE } from "@oh-my-pi/pi-tui/tools/output-meta";
 import { resolveOutputMaxColumns, resolveOutputSinkArtifactMaxBytes, resolveOutputSinkHeadBytes } from "./output-meta";
 import { ToolAbortError, throwIfAborted } from "./tool-errors";
 import { hasWaitTool } from "./wait";
@@ -1065,7 +1065,9 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 			const hasImages = images.length > 0;
 			const outputText =
 				combinedOutput ||
-				(hasImages ? `(${images.length} image${images.length === 1 ? "" : "s"}; no text output)` : "(no output)");
+				(hasImages
+					? `(${images.length} image${images.length === 1 ? "" : "s"}; no text output)`
+					: NO_OUTPUT_NOTICE);
 			const summaryForMeta = await summarizeFinal(combinedOutput, finalizeOutput);
 
 			const details: EvalToolDetails = {

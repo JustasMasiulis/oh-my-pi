@@ -1,5 +1,5 @@
 import type { Component } from "../index";
-import { Markdown, Text } from "../index";
+import { Markdown } from "../index";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type {
 	NativeToolHead,
@@ -14,14 +14,10 @@ import type { NativeChild, NativeNode } from "../native/node";
 import { plainText } from "../native/spans";
 import { resultText, runBox, runFoot, type RunFootInput, runInput, runOutput, type RunState } from "./native-view";
 import { renderAgentTreeRow } from "./agent-tree";
-import { truncateToVisualLines } from "../chrome/visual-truncate";
 import { getMarkdownTheme, type Theme } from "../theme/theme";
-import {
-	type CodeCellOptions,
-	markFramedBlockComponent,
-	outputBlockContentWidth,
-	renderCodeCell,
-} from "../render/index";
+import { markFramedBlockComponent, outputBlockContentWidth, renderCodeCell } from "../render/index";
+import type { StatusLineOptions } from "../render/status-line";
+import { framedToolCard, plainToolCard } from "../render/tool-card";
 import { formatOutputPaneLines } from "../render/output-pane";
 import { formatEvalCodeForDisplay } from "./eval-format/index";
 import {
@@ -34,25 +30,27 @@ import {
 	describeJsonValue,
 	renderJsonTreeLines,
 } from "./json-tree";
-import { formatStyledTruncationWarning, stripOutputNotice } from "./output-meta";
+import { formatTruncationWarningText, NO_OUTPUT_NOTICE, stripOutputNotice } from "./output-meta";
 import { formatMCPProgress, parseMCPProgress } from "./mcp";
 import { splitPathAndSel } from "./read";
 import {
 	DEFAULT_TERMINAL_PREVIEW_LINES,
 	PREVIEW_LIMITS,
 	cappedHeadLines,
-	formatTitle,
+	formatDuration,
+	formatExpandHint,
+	formatMoreItems,
 	previewLine,
 	previewWindowRows,
 	replaceTabs,
 	sanitizeDisplayLines,
 	shortenPath,
+	type ToolUIStatus,
 	truncateToWidth,
-	wrapBrackets,
 } from "../render/render-utils";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { OutputMeta } from "./output-meta";
-import { type ConfiguredThinkingLevel, expandKeyHint } from "../render/render-utils";
+import type { ConfiguredThinkingLevel } from "../render/render-utils";
 
 /** Runtime backend that an eval cell dispatches to. */
 export type EvalLanguage = "python" | "js";
@@ -189,35 +187,91 @@ function getRenderCells(args: EvalRenderArgs | undefined): EvalRenderCell[] {
 	return out;
 }
 
-/**
- * A rendered {@link renderCodeCell} box. Its first row is the header bar, the
- * only row that depends on `spinnerFrame`; the code and output rows below it
- * are reused across spinner ticks.
- */
-interface RenderedCodeCell {
-	readonly options: CodeCellOptions;
-	readonly lines: readonly string[];
+/** One eval cell's frame: its source, outcome and the rows shown under its Output bar. */
+interface EvalCellFrame {
+	title?: string;
+	code: string;
+	language: EvalLanguage;
+	icon: ToolUIStatus;
+	durationMs?: number;
+	/** Pre-capped, styled output rows (printed output, status events, agent progress); unset before a result exists. */
+	outputLines?: readonly string[];
+	/** Output rows hidden above the shown tail window. */
+	hiddenOutput?: number;
+	/** Call-level facts (timeout, notice, background job, truncation) for the bottom border. */
+	footerExtra?: readonly string[];
+}
+
+/** Display limits shared by every cell of one eval card. */
+interface EvalCellLayout {
+	index: number;
+	total: number;
+	width: number;
+	expanded: boolean;
+	codeMaxLines: number;
+}
+
+/** The Eval header: the cell title as the subject, `[i/n]` on multi-cell runs. */
+function evalStatus(
+	icon: ToolUIStatus,
+	title?: string,
+	position?: { index: number; total: number },
+): StatusLineOptions {
+	return {
+		icon,
+		title: "Eval",
+		description: title?.trim() || undefined,
+		badge:
+			position && position.total > 1
+				? { label: `${position.index + 1}/${position.total}`, color: "muted" }
+				: undefined,
+	};
 }
 
 /**
- * Append `cell` for `spinnerFrame`. Only a running header animates, so only it
- * is redrawn for a new frame: `renderOutputBlock` lays the header bar out from
- * the header fields and width alone, so rendering an empty cell with the same
- * header yields the identical bar row.
+ * Render one cell frame; language, duration and the hidden-output marker ride the bottom border,
+ * led by `No output` when a settled cell printed nothing.
  */
-function pushCodeCellLines(
-	out: string[],
-	cell: RenderedCodeCell,
-	spinnerFrame: number | undefined,
-	theme: Theme,
-): void {
-	const { options, lines } = cell;
-	const header =
-		options.status === "running" && options.spinnerFrame !== spinnerFrame
-			? renderCodeCell({ ...options, code: "", output: undefined, spinnerFrame }, theme)[0]!
-			: lines[0]!;
-	out.push(header);
-	for (let i = 1; i < lines.length; i++) out.push(lines[i]!);
+function renderEvalCell(frame: EvalCellFrame, layout: EvalCellLayout, theme: Theme): string[] {
+	const outputLines = frame.outputLines ?? [];
+	const settled = frame.icon !== "running" && frame.icon !== "pending";
+	const facts: string[] = [languageForHighlighter(frame.language)];
+	if (frame.durationMs !== undefined) facts.push(formatDuration(frame.durationMs));
+	if (frame.hiddenOutput && frame.hiddenOutput > 0) {
+		const marker = formatMoreItems(frame.hiddenOutput, "line", theme, "earlier");
+		const hint = formatExpandHint(theme, layout.expanded, true);
+		facts.push(hint ? `${marker} ${hint}` : marker);
+	}
+	if (frame.footerExtra) facts.push(...frame.footerExtra);
+	// `No output` takes the Output label's color; the facts stay dim.
+	const footer = facts.map(fact => theme.fg("dim", fact));
+	if (frame.outputLines !== undefined && outputLines.length === 0 && settled) {
+		footer.unshift(theme.fg("toolTitle", "No output"));
+	}
+	return renderCodeCell(
+		{
+			header: evalStatus(frame.icon, frame.title, layout),
+			footerMeta: footer.join(theme.fg("dim", theme.sep.dot)),
+			code: frame.code,
+			language: languageForHighlighter(frame.language),
+			output: outputLines.length > 0 ? outputLines.join("\n") : undefined,
+			outputMaxLines: outputLines.length,
+			// Viewport-sized tail window following the newest code line, in every
+			// state, so a cell never snaps open on completion. Only ctrl+o uncaps.
+			codeTail: true,
+			codeMaxLines: layout.codeMaxLines,
+			expanded: layout.expanded,
+			width: layout.width,
+		},
+		theme,
+	);
+}
+
+/** Header status of a cell from its execution state. */
+function cellIcon(status: EvalCellResult["status"]): ToolUIStatus {
+	if (status === "complete") return "success";
+	if (status === "error") return "error";
+	return status;
 }
 
 type AgentEventStatus = "pending" | "running" | "completed" | "failed" | "aborted";
@@ -308,9 +362,9 @@ function agentEventStatus(value: unknown): AgentEventStatus {
 }
 
 /**
- * Render coalesced `agent()` progress as a Task-tool-style tree, one entry per
- * subagent: a status line (icon · id · stats) plus, while running, the current
- * tool/intent. Drawn below the cell box so progress streams live.
+ * Render coalesced `agent()` progress, one flush row per subagent: a status
+ * line (icon · id · stats) plus, while running, the current tool/intent as
+ * its nested child. Drawn under the cell's Output bar so progress streams live.
  */
 function renderAgentProgressEvents(
 	events: EvalStatusEvent[],
@@ -319,12 +373,8 @@ function renderAgentProgressEvents(
 	spinnerFrame?: number,
 ): string[] {
 	const lines: string[] = [];
-	for (let i = 0; i < events.length; i++) {
-		const event = events[i];
-		const isLast = i === events.length - 1;
-		const prefix = theme.fg("dim", isLast ? theme.tree.last : theme.tree.branch);
-		const cont = isLast ? "   " : `${theme.fg("dim", theme.tree.vertical)}  `;
-
+	const child = `  ${theme.fg("dim", theme.tree.last)} `;
+	for (const event of events) {
 		const status = agentEventStatus(event.status);
 		const currentTool = eventString(event.currentTool);
 		const lastIntent = eventString(event.lastIntent);
@@ -335,7 +385,7 @@ function renderAgentProgressEvents(
 				{
 					presentation: "eval",
 					status,
-					prefix,
+					prefix: "",
 					id: sanitizeText(eventString(event.id) ?? "agent").replace(/\s+/g, " "),
 					width,
 					model: eventString(event.resolvedModelIdentity ?? event.model ?? event.resolvedModel),
@@ -360,16 +410,13 @@ function renderAgentProgressEvents(
 
 		if (status === "running") {
 			if (currentTool) {
-				let toolLine = `${cont}${theme.tree.hook} ${theme.fg("muted", currentTool)}`;
+				let toolLine = `${child}${theme.fg("muted", currentTool)}`;
 				const detail = lastIntent ?? eventString(event.currentToolArgs);
 				if (detail) toolLine += `: ${theme.fg("dim", truncateToWidth(replaceTabs(detail), 48))}`;
 				lines.push(truncateToWidth(toolLine, width));
 			} else if (lastIntent) {
 				lines.push(
-					truncateToWidth(
-						`${cont}${theme.tree.hook} ${theme.fg("dim", truncateToWidth(replaceTabs(lastIntent), 48))}`,
-						width,
-					),
+					truncateToWidth(`${child}${theme.fg("dim", truncateToWidth(replaceTabs(lastIntent), 48))}`, width),
 				);
 			}
 		}
@@ -520,7 +567,7 @@ function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
 			}
 	}
 
-	const desc = parts.length > 0 ? parts.join(" · ") : "";
+	const desc = parts.length > 0 ? parts.join(theme.sep.dot) : "";
 	return `${icon} ${theme.fg("muted", op)}${desc ? ` ${theme.fg("dim", desc)}` : ""}`;
 }
 
@@ -534,20 +581,20 @@ function formatStatusEventExpanded(event: EvalStatusEvent, theme: Theme): string
 	const addItems = (items: unknown[], formatter: (item: unknown) => string, max = 5) => {
 		const arr = Array.isArray(items) ? items : [];
 		for (let i = 0; i < Math.min(arr.length, max); i++) {
-			lines.push(`   ${theme.fg("dim", formatter(arr[i]))}`);
+			lines.push(`  ${theme.fg("dim", formatter(arr[i]))}`);
 		}
 		if (arr.length > max) {
-			lines.push(`   ${theme.fg("dim", `… ${arr.length - max} more`)}`);
+			lines.push(`  ${theme.fg("dim", formatMoreItems(arr.length - max, "item", theme))}`);
 		}
 	};
 
 	const addPreview = (preview: string, maxLines = 3) => {
 		const previewLines = cappedHeadLines(String(preview).split("\n"), maxLines);
 		for (const line of previewLines.lines) {
-			lines.push(`   ${theme.fg("toolOutput", truncateToWidth(replaceTabs(line), 80))}`);
+			lines.push(`  ${theme.fg("toolOutput", truncateToWidth(replaceTabs(line), 80))}`);
 		}
 		if (previewLines.hidden > 0) {
-			lines.push(`   ${theme.fg("dim", `… ${previewLines.hidden} more lines`)}`);
+			lines.push(`  ${theme.fg("dim", formatMoreItems(previewLines.hidden, "line", theme))}`);
 		}
 	};
 
@@ -586,10 +633,11 @@ function formatStatusEventExpanded(event: EvalStatusEvent, theme: Theme): string
 }
 
 /**
- * Render status events as tree lines. Shows a tail window (newest events are
+ * Render status events as flush rows. Shows a tail window (newest events are
  * the live edge for `log()` progress loops) behind an "… N earlier" marker,
  * matching the code/output tail-window convention. Collapsed keeps a small
- * fixed window; expanded widens to the viewport-sized preview window.
+ * fixed window; expanded widens to the viewport-sized preview window and
+ * nests each event's detail rows under it.
  * `elided` counts events already dropped from the log's front.
  */
 function renderStatusEvents(events: EvalStatusEvent[], theme: Theme, expanded: boolean, elided = 0): string[] {
@@ -601,26 +649,11 @@ function renderStatusEvents(events: EvalStatusEvent[], theme: Theme, expanded: b
 	const visible = shownFrom > 0 ? events.slice(shownFrom) : events;
 
 	const lines: string[] = [];
-	if (hidden > 0) {
-		const glyph = visible.length > 0 ? theme.tree.branch : theme.tree.last;
-		lines.push(`${theme.fg("dim", glyph)} ${theme.fg("dim", `… ${hidden} earlier`)}`);
+	if (hidden > 0) lines.push(theme.fg("dim", formatMoreItems(hidden, "event", theme, "earlier")));
+	for (const event of visible) {
+		if (expanded) lines.push(...formatStatusEventExpanded(event, theme));
+		else lines.push(formatStatusEvent(event, theme));
 	}
-	for (let i = 0; i < visible.length; i++) {
-		const isLast = i === visible.length - 1;
-		const branch = isLast ? theme.tree.last : theme.tree.branch;
-
-		if (expanded) {
-			const eventLines = formatStatusEventExpanded(visible[i], theme);
-			lines.push(`${theme.fg("dim", branch)} ${eventLines[0]}`);
-			const continueBranch = isLast ? "   " : `${theme.tree.vertical}  `;
-			for (let j = 1; j < eventLines.length; j++) {
-				lines.push(`${theme.fg("dim", continueBranch)}${eventLines[j]}`);
-			}
-		} else {
-			lines.push(`${theme.fg("dim", branch)} ${formatStatusEvent(visible[i], theme)}`);
-		}
-	}
-
 	return lines;
 }
 
@@ -666,7 +699,7 @@ function formatCellOutputLines(
 			if (view.kind === "json") {
 				const tree = renderJsonTreeLines(view.value, theme, treeDepth, treeLineCap, treeScalarLen);
 				allLines.push(...tree.lines);
-				if (tree.truncated) allLines.push(theme.fg("dim", "…"));
+				if (tree.truncated) allLines.push(theme.fg("dim", theme.format.ellipsis));
 			} else if (view.kind === "markdown") {
 				allLines.push(...new Markdown(view.text, 0, 0, getMarkdownTheme()).render(innerWidth));
 			}
@@ -817,6 +850,12 @@ function evalTableNode(view: Extract<EvalView, { kind: "table" }>, key: string):
 	);
 }
 
+/** Printed output without the model-facing truncation notice or the empty-run stand-in. */
+function displayedEvalOutput(rawOutput: string, meta: OutputMeta | undefined): string {
+	const output = stripOutputNotice(rawOutput, meta).trimEnd();
+	return output === NO_OUTPUT_NOTICE ? "" : output;
+}
+
 /**
  * One cell's outputs in order: printed text (following its tail, clamped to
  * the last `previewLines` while folded) with each view in place of its text.
@@ -928,103 +967,66 @@ function evalCellBox(cell: EvalCellRun, index: number, total: number): NativeNod
 
 /** Render eval code cells, structured display output, and progress events. */
 export const evalToolRenderer = {
-	animatedPendingPreview: true,
+	/** Only the cell-less flush status line spins; framed cells never animate. */
+	animatedPendingPreview: (args: unknown) => getRenderCells(args as EvalRenderArgs | undefined).length === 0,
 	animatedPartialResult: true,
 	renderCall(args: EvalRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 		const cells = getRenderCells(args);
 
+		// Nothing streamed yet: the bare status line, flush (and animated).
 		if (cells.length === 0) {
-			const promptSym = uiTheme.fg("accent", ">>>");
-			const text = formatTitle(`${promptSym} …`, uiTheme);
-			return new Text(text, 0, 0);
+			return plainToolCard(uiTheme, () => {
+				const icon = options.executionStarted ? "running" : "pending";
+				return { status: { ...evalStatus(icon), spinnerFrame: options.spinnerFrame }, phase: icon };
+			});
 		}
 
-		// Cell bodies depend on width, expansion, the viewport window and whether
-		// the call is live; a spinner tick only redraws the running header rows.
-		let bodies: { key: string; cells: RenderedCodeCell[] } | undefined;
-		let cached: { key: string; result: string[] } | undefined;
-
+		// Framed headers never animate, so a spinner tick changes nothing here.
+		let cached: { key: string; lines: string[] } | undefined;
 		return markFramedBlockComponent({
 			render: (width: number): readonly string[] => {
-				const spinnerFrame = options.spinnerFrame;
-				const windowRows = previewWindowRows();
-				const bodyKey = `${width}|${options.expanded ? 1 : 0}|${windowRows}|${spinnerFrame === undefined ? 0 : 1}`;
-				const key = `${bodyKey}|${spinnerFrame ?? "-"}`;
-				if (cached?.key === key) {
-					return cached.result;
-				}
-
-				if (bodies?.key !== bodyKey) {
-					bodies = {
-						key: bodyKey,
-						cells: cells.map((cell, i) => {
-							const cellOptions: CodeCellOptions = {
-								code: cell.code,
-								language: languageForHighlighter(cell.language),
-								showLanguage: true,
-								index: i,
-								total: cells.length,
-								title: cell.title,
-								status: spinnerFrame !== undefined ? "running" : "pending",
-								spinnerFrame,
-								width,
-								// Viewport-sized tail window following the newest streamed code
-								// line; renderResult keeps the same cap so the cell never snaps
-								// open on completion. Only ctrl+o uncaps.
-								codeTail: true,
-								codeMaxLines: windowRows,
-								expanded: options.expanded,
-							};
-							return { options: cellOptions, lines: renderCodeCell(cellOptions, uiTheme) };
-						}),
-					};
-				}
-
-				const lines: string[] = [];
-				for (let i = 0; i < bodies.cells.length; i++) {
-					pushCodeCellLines(lines, bodies.cells[i]!, spinnerFrame, uiTheme);
-					if (i < cells.length - 1) {
-						lines.push("");
-					}
-				}
-				cached = { key, result: lines };
+				const icon = options.executionStarted ? "running" : "pending";
+				const codeMaxLines = previewWindowRows();
+				const key = `${width}|${options.expanded ? 1 : 0}|${codeMaxLines}|${icon}`;
+				if (cached?.key === key) return cached.lines;
+				const lines = cells.flatMap((cell, index) =>
+					renderEvalCell(
+						{ title: cell.title, code: cell.code, language: cell.language, icon },
+						{ index, total: cells.length, width, expanded: options.expanded, codeMaxLines },
+						uiTheme,
+					),
+				);
+				cached = { key, lines };
 				return lines;
 			},
 			invalidate: () => {
-				bodies = undefined;
 				cached = undefined;
 			},
 		});
 	},
 
 	renderResult(
-		result: { content: Array<{ type: string; text?: string }>; details?: EvalToolDetails },
+		result: { content: Array<{ type: string; text?: string }>; details?: EvalToolDetails; isError?: boolean },
 		options: RenderResultOptions & { renderContext?: EvalRenderContext },
 		uiTheme: Theme,
-		_args?: EvalRenderArgs,
+		args?: EvalRenderArgs,
 	): Component {
 		const details = result.details;
 
 		const rawOutput =
 			options.renderContext?.output ?? (result.content?.find(c => c.type === "text")?.text ?? "").trimEnd();
 		// Strip the LLM-facing notice (appended by wrappedExecute) before display;
-		// the styled `warningLine` below carries the same text in ⟨…⟩ form.
-		const output = stripOutputNotice(rawOutput, details?.meta).trimEnd();
+		// the bottom border carries the same text.
+		const output = displayedEvalOutput(rawOutput, details?.meta);
 
+		// Call-level facts for the last frame's bottom border.
+		const callFacts: string[] = [];
 		const timeoutSeconds = options.renderContext?.timeout;
-		const timeoutLine =
-			typeof timeoutSeconds === "number"
-				? uiTheme.fg("dim", wrapBrackets(`Timeout: ${timeoutSeconds}s`, uiTheme))
-				: undefined;
-		let warningLine: string | undefined;
-		if (details?.meta?.truncation || details?.meta?.artifactError) {
-			warningLine = formatStyledTruncationWarning(details.meta, uiTheme) ?? undefined;
-		}
-		const noticeLine = details?.notice ? uiTheme.fg("dim", wrapBrackets(details.notice, uiTheme)) : undefined;
-		const asyncLine =
-			details?.async?.state === "running"
-				? uiTheme.fg("dim", wrapBrackets(`Backgrounded: ${details.async.jobId}`, uiTheme))
-				: undefined;
+		if (typeof timeoutSeconds === "number") callFacts.push(`Timeout: ${timeoutSeconds}s`);
+		if (details?.notice) callFacts.push(details.notice);
+		if (details?.async?.state === "running") callFacts.push(`Backgrounded: ${details.async.jobId}`);
+		const truncationNotice = formatTruncationWarningText(details?.meta);
+		if (truncationNotice) callFacts.push(uiTheme.fg("warning", truncationNotice));
 
 		const cellResults = details?.cells;
 		if (cellResults && cellResults.length > 0) {
@@ -1038,226 +1040,154 @@ export const evalToolRenderer = {
 					language,
 					agentEvents,
 					otherEvents: agentEvents.length > 0 ? allEvents.filter(e => e.op !== "agent") : allEvents,
-					// Running agent rows carry the spinner; settled ones are frame-independent.
-					agentLive: agentEvents.some(e => agentEventStatus(e.status) === "running"),
 				};
 			});
-			// Per-cell rows keyed by everything but the spinner frame: a tick only
-			// redraws running headers and running agent rows.
-			let bodies:
-				| {
-						key: string;
-						cells: { codeCell: RenderedCodeCell; agentLines: string[]; agentFrame: number | undefined }[];
-				  }
-				| undefined;
-			let cached: { key: string; result: string[] } | undefined;
+			// Running agent rows carry the spinner; settled ones are frame-independent.
+			const agentLive = displayCells.some(({ agentEvents }) =>
+				agentEvents.some(e => agentEventStatus(e.status) === "running"),
+			);
+			let cached: { key: string; lines: string[] } | undefined;
 
 			return markFramedBlockComponent({
 				render: (width: number): readonly string[] => {
 					const spinnerFrame = options.spinnerFrame;
 					const expanded = options.renderContext?.expanded ?? options.expanded;
-					const windowRows = previewWindowRows();
+					const codeMaxLines = previewWindowRows();
 					const previewLines = Math.min(
 						options.renderContext?.previewLines ?? EVAL_DEFAULT_PREVIEW_LINES,
-						windowRows,
+						codeMaxLines,
 					);
-					const bodyKey = `${width}|${expanded}|${previewLines}|${windowRows}`;
-					const key = `${bodyKey}|${spinnerFrame}`;
-					if (cached?.key === key) {
-						return cached.result;
-					}
+					const key = `${width}|${expanded}|${previewLines}|${codeMaxLines}|${agentLive ? spinnerFrame : ""}`;
+					if (cached?.key === key) return cached.lines;
 
-					if (bodies?.key !== bodyKey) {
-						bodies = {
-							key: bodyKey,
-							cells: displayCells.map(({ cell, code, language, agentEvents, otherEvents }, i) => {
-								const statusLines = renderStatusEvents(otherEvents, uiTheme, expanded, cell.statusEventsElided);
-								const outputContent = formatCellOutputLines(cell, expanded, previewLines, uiTheme, width);
-								const outputLines = [...outputContent.lines];
-								if (!expanded && outputContent.hiddenCount > 0) {
-									outputLines.push(
-										uiTheme.fg(
-											"dim",
-											`… ${outputContent.hiddenCount} more lines (${expandKeyHint()} to expand)`,
-										),
-									);
-								}
-								if (statusLines.length > 0) {
-									if (outputLines.length > 0) {
-										outputLines.push(uiTheme.fg("dim", "Status"));
-									}
-									outputLines.push(...statusLines);
-								}
-								const cellOptions: CodeCellOptions = {
-									code,
-									language: languageForHighlighter(language),
-									showLanguage: true,
-									index: i,
-									total: cellResults.length,
-									title: cell.title,
-									status: cell.status,
+					const lines = displayCells.flatMap(({ cell, code, language, agentEvents, otherEvents }, index) => {
+						const outputContent = formatCellOutputLines(cell, expanded, previewLines, uiTheme, width);
+						const outputLines = [...outputContent.lines];
+						const statusLines = renderStatusEvents(otherEvents, uiTheme, expanded, cell.statusEventsElided);
+						if (statusLines.length > 0) {
+							if (outputLines.length > 0) outputLines.push(uiTheme.fg("dim", "Status"));
+							outputLines.push(...statusLines);
+						}
+						if (agentEvents.length > 0) {
+							outputLines.push(
+								...renderAgentProgressEvents(
+									agentEvents,
+									uiTheme,
+									outputBlockContentWidth(width),
 									spinnerFrame,
-									duration: cell.durationMs,
-									output: outputLines.length > 0 ? outputLines.join("\n") : undefined,
-									outputMaxLines: outputLines.length,
-									// Same viewport-sized tail window as the pending preview so the
-									// cell never snaps open on completion; only ctrl+o uncaps.
-									// `output` keeps its own preview cap from above.
-									codeTail: true,
-									codeMaxLines: windowRows,
-									expanded,
-									width,
-								};
-								return {
-									codeCell: { options: cellOptions, lines: renderCodeCell(cellOptions, uiTheme) },
-									agentLines:
-										agentEvents.length > 0
-											? renderAgentProgressEvents(agentEvents, uiTheme, width, spinnerFrame)
-											: [],
-									agentFrame: spinnerFrame,
-								};
-							}),
-						};
-					}
-
-					const lines: string[] = [];
-					for (let i = 0; i < displayCells.length; i++) {
-						const { agentEvents, agentLive } = displayCells[i]!;
-						const body = bodies.cells[i]!;
-						pushCodeCellLines(lines, body.codeCell, spinnerFrame, uiTheme);
-						if (agentLive && body.agentFrame !== spinnerFrame) {
-							body.agentLines = renderAgentProgressEvents(agentEvents, uiTheme, width, spinnerFrame);
-							body.agentFrame = spinnerFrame;
+								),
+							);
 						}
-						lines.push(...body.agentLines);
-						if (i < cellResults.length - 1) {
-							lines.push("");
-						}
-					}
-					if (timeoutLine) {
-						lines.push(timeoutLine);
-					}
-					if (noticeLine) {
-						lines.push(noticeLine);
-					}
-					if (asyncLine) {
-						lines.push(asyncLine);
-					}
-					if (warningLine) {
-						lines.push(warningLine);
-					}
-					cached = { key, result: lines };
+						return renderEvalCell(
+							{
+								title: cell.title,
+								code,
+								language,
+								icon: cellIcon(cell.status),
+								durationMs: cell.durationMs,
+								outputLines,
+								hiddenOutput: expanded ? 0 : outputContent.hiddenCount,
+								footerExtra: index === displayCells.length - 1 ? callFacts : undefined,
+							},
+							{ index, total: displayCells.length, width, expanded, codeMaxLines },
+							uiTheme,
+						);
+					});
+					cached = { key, lines };
 					return lines;
 				},
 				invalidate: () => {
-					bodies = undefined;
 					cached = undefined;
 				},
 			});
 		}
 
+		// No per-cell results (older details): the call's cells, the whole output under the last.
+		// Read at render time: the partial flag is live.
+		const resultIcon = (): "running" | "error" | "success" =>
+			options.isPartial === true ? "running" : result.isError || details?.isError ? "error" : "success";
+		const argCells = getRenderCells(args);
 		const statusEvents = details?.statusEvents ?? [];
-		const statusLines = renderStatusEvents(
-			statusEvents,
-			uiTheme,
-			options.renderContext?.expanded ?? options.expanded,
-			details?.statusEventsElided,
-		);
-
-		if (!output && statusLines.length === 0) {
-			const lines = [timeoutLine, noticeLine, asyncLine, warningLine].filter(Boolean) as string[];
-			return new Text(lines.join("\n"), 0, 0);
+		if (argCells.length === 0 && !output && statusEvents.length === 0 && !details?.statusEventsElided) {
+			return plainToolCard(uiTheme, () => {
+				const icon = resultIcon();
+				return { status: { ...evalStatus(icon), meta: callFacts }, phase: icon };
+			});
 		}
 
-		if (!output && statusLines.length > 0) {
-			const lines = [
-				uiTheme.fg("dim", "Status"),
-				...statusLines,
-				timeoutLine,
-				noticeLine,
-				asyncLine,
-				warningLine,
-			].filter(Boolean) as string[];
-			return new Text(lines.join("\n"), 0, 0);
+		const renderOutput = (width: number, expanded: boolean): { lines: string[]; hidden: number } => {
+			const previewLines = Math.min(
+				options.renderContext?.previewLines ?? EVAL_DEFAULT_PREVIEW_LINES,
+				previewWindowRows(),
+			);
+			const formatted = formatOutputPaneLines(
+				{
+					lines: output ? output.split("\n") : [],
+					expanded,
+					collapsedMaxLines: previewLines,
+					edge: "tail",
+					visual: true,
+					width: outputBlockContentWidth(width),
+					styleLine: line => uiTheme.fg("toolOutput", replaceTabs(line)),
+					showHiddenMarker: false,
+				},
+				uiTheme,
+			);
+			const lines = [...formatted.lines];
+			const statusLines = renderStatusEvents(statusEvents, uiTheme, expanded, details?.statusEventsElided);
+			if (statusLines.length > 0) {
+				if (lines.length > 0) lines.push(uiTheme.fg("dim", "Status"));
+				lines.push(...statusLines);
+			}
+			return { lines, hidden: expanded ? 0 : formatted.hiddenCount };
+		};
+
+		if (argCells.length === 0) {
+			return framedToolCard(uiTheme, ({ width }) => {
+				const expanded = options.renderContext?.expanded ?? options.expanded;
+				const { lines, hidden } = renderOutput(width, expanded);
+				const footer = [...callFacts];
+				if (hidden > 0) {
+					const hint = formatExpandHint(uiTheme, expanded, true);
+					const marker = formatMoreItems(hidden, "line", uiTheme, "earlier");
+					footer.unshift(hint ? `${marker} ${hint}` : marker);
+				}
+				const icon = resultIcon();
+				return {
+					status: evalStatus(icon),
+					phase: icon,
+					footerMeta: footer.length > 0 ? uiTheme.fg("dim", footer.join(uiTheme.sep.dot)) : undefined,
+					body: lines,
+				};
+			});
 		}
 
-		if (options.renderContext?.expanded ?? options.expanded) {
-			const styledOutput = output
-				.split("\n")
-				.map(line => uiTheme.fg("toolOutput", line))
-				.join("\n");
-			const lines = [
-				styledOutput,
-				...(statusLines.length > 0 ? [uiTheme.fg("dim", "Status"), ...statusLines] : []),
-				timeoutLine,
-				noticeLine,
-				asyncLine,
-				warningLine,
-			].filter(Boolean) as string[];
-			return new Text(lines.join("\n"), 0, 0);
-		}
-
-		const styledOutput = output
-			.split("\n")
-			.map(line => uiTheme.fg("toolOutput", line))
-			.join("\n");
-		const textContent = `\n${styledOutput}`;
-
-		let cachedWidth: number | undefined;
-		let cachedLines: readonly string[] | undefined;
-		let cachedSkipped: number | undefined;
-		let cachedPreviewLines: number | undefined;
-
-		return {
+		let cached: { key: string; lines: string[] } | undefined;
+		return markFramedBlockComponent({
 			render: (width: number): readonly string[] => {
-				const previewLines = Math.min(
-					options.renderContext?.previewLines ?? EVAL_DEFAULT_PREVIEW_LINES,
-					previewWindowRows(),
+				const expanded = options.renderContext?.expanded ?? options.expanded;
+				const codeMaxLines = previewWindowRows();
+				const icon = resultIcon();
+				const key = `${width}|${expanded}|${codeMaxLines}|${icon}`;
+				if (cached?.key === key) return cached.lines;
+				const { lines: outputLines, hidden } = renderOutput(width, expanded);
+				const last = argCells.length - 1;
+				const lines = argCells.flatMap((cell, index) =>
+					renderEvalCell(
+						index === last
+							? { ...cell, icon, outputLines, hiddenOutput: hidden, footerExtra: callFacts }
+							: { ...cell, icon },
+						{ index, total: argCells.length, width, expanded, codeMaxLines },
+						uiTheme,
+					),
 				);
-				if (cachedLines === undefined || cachedWidth !== width || cachedPreviewLines !== previewLines) {
-					const result = truncateToVisualLines(textContent, previewLines, width);
-					cachedLines = result.visualLines;
-					cachedSkipped = result.skippedCount;
-					cachedWidth = width;
-					cachedPreviewLines = previewLines;
-				}
-				const outputLines: string[] = [];
-				if (cachedSkipped && cachedSkipped > 0) {
-					outputLines.push("");
-					const skippedLine = uiTheme.fg(
-						"dim",
-						`… (${cachedSkipped} earlier lines, showing ${cachedLines.length} of ${cachedSkipped + cachedLines.length}) (${expandKeyHint()} to expand)`,
-					);
-					outputLines.push(truncateToWidth(skippedLine, width));
-				}
-				outputLines.push(...cachedLines);
-				if (statusLines.length > 0) {
-					outputLines.push(truncateToWidth(uiTheme.fg("dim", "Status"), width));
-					for (const statusLine of statusLines) {
-						outputLines.push(truncateToWidth(statusLine, width));
-					}
-				}
-				if (timeoutLine) {
-					outputLines.push(truncateToWidth(timeoutLine, width));
-				}
-				if (noticeLine) {
-					outputLines.push(truncateToWidth(noticeLine, width));
-				}
-				if (asyncLine) {
-					outputLines.push(truncateToWidth(asyncLine, width));
-				}
-				if (warningLine) {
-					outputLines.push(truncateToWidth(warningLine, width));
-				}
-				return outputLines;
+				cached = { key, lines };
+				return lines;
 			},
 			invalidate: () => {
-				cachedWidth = undefined;
-				cachedLines = undefined;
-				cachedSkipped = undefined;
-				cachedPreviewLines = undefined;
+				cached = undefined;
 			},
-		};
+		});
 	},
 
 	describeCall(args: EvalRenderArgs, options: RenderResultOptions): NativeToolView {
@@ -1307,18 +1237,23 @@ export const evalToolRenderer = {
 							: Math.max(0, options.elapsedMs - earlierMs)
 						: cell.durationMs;
 				earlierMs += cell.durationMs ?? 0;
+				const outputs = [...evalOutputNodes(cell.output, cell.views, previewLines, options.json === true)];
+				const status = evalStatusSection(cell, expanded);
+				const noOutput = outputs.length === 0 && status === undefined && (state === "done" || state === "failed");
+				const callFactList = i === factsIndex ? callFacts.facts : [];
 				return evalCellBox(
 					{
 						language,
 						code: formatEvalCodeForDisplay(cell.code, language),
 						title: cell.title,
-						outputs: [...evalOutputNodes(cell.output, cell.views, previewLines, options.json === true)],
-						status: evalStatusSection(cell, expanded),
+						outputs,
+						status,
 						foot: state && {
 							state,
 							exitCode: cell.exitCode,
 							elapsedMs,
-							...(i === factsIndex ? callFacts : {}),
+							facts: noOutput ? ["No output", ...callFactList] : callFactList,
+							meta: i === factsIndex ? callFacts.meta : undefined,
 						},
 					},
 					i,
@@ -1335,16 +1270,19 @@ export const evalToolRenderer = {
 		const argCells = getRenderCells(args);
 		const languages = details?.languages ?? (details?.language ? [details.language] : []);
 		const rawOutput = options.renderContext?.output ?? resultText(result).trimEnd();
+		const output = displayedEvalOutput(rawOutput, details?.meta);
 		const state: RunState = cancelled ? "cancelled" : isPartial ? "running" : result.isError ? "failed" : "done";
+		const status = evalStatusSection(details ?? {}, expanded);
+		const noOutput = !output && status === undefined && (state === "done" || state === "failed");
 		const last: Omit<EvalCellRun, "language" | "code" | "title"> = {
-			outputs: evalOutputNodes(
-				stripOutputNotice(rawOutput, details?.meta).trimEnd(),
-				undefined,
-				previewLines,
-				options.json === true,
-			),
-			status: evalStatusSection(details ?? {}, expanded),
-			foot: { state, elapsedMs: options.elapsedMs, ...callFacts },
+			outputs: evalOutputNodes(output, undefined, previewLines, options.json === true),
+			status,
+			foot: {
+				state,
+				elapsedMs: options.elapsedMs,
+				facts: noOutput ? ["No output", ...callFacts.facts] : callFacts.facts,
+				meta: callFacts.meta,
+			},
 		};
 		const runs: EvalCellRun[] =
 			argCells.length > 0

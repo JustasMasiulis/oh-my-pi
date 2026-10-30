@@ -444,7 +444,7 @@ describe("native transcript", () => {
 					),
 				),
 			);
-			container.addChild(buildFileMentionBlock([{ path: "src/a.ts", content: "", lineCount: 3 }], 0));
+			container.addChild(buildFileMentionBlock([{ path: "src/a.ts", content: "", lineCount: 3 }]));
 			container.addChild(
 				createAdvisorMessageCard({ notes: [{ note: "Check the cache", severity: "blocker" }] }, () => false, theme),
 			);

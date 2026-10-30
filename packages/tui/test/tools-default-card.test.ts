@@ -31,8 +31,8 @@ describe("generic fallback card", () => {
 		expect(
 			expanded
 				.split("\n")
-				.slice(5)
-				.map(row => row.trimEnd()),
+				.slice(3)
+				.map(row => row.trim()),
 		).toEqual(rows);
 		expect(expanded).toContain("row-39");
 		expect(expanded).not.toMatch(/more lines/);

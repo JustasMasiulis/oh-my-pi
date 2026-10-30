@@ -1,9 +1,9 @@
 import type { Component } from "../tui";
-import { Text } from "../components/text";
 import type { Theme, ThemeColor } from "../theme/theme";
-import { formatDuration, formatErrorDetail, formatNumber, TRUNCATE_LENGTHS } from "../render/render-utils";
-import { renderStatusLine, truncateToWidth } from "../render/index";
-import { framedToolCard } from "../render/tool-card";
+import { formatDuration, formatErrorText, formatNumber } from "../render/render-utils";
+import { truncateToWidth } from "../utils";
+import type { StatusLineOptions } from "../render/status-line";
+import { plainToolCard } from "../render/tool-card";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { compact, node, span, text } from "../native/describe";
 import { OwnerMemo } from "../native/memo";
@@ -31,7 +31,7 @@ export interface GoalToolDetails {
 	remainingTokens?: number | null;
 	completionBudgetReport?: string | null;
 }
-function describeOp(op: string | undefined): string {
+function describeOp(op: string | undefined): string | undefined {
 	switch (op) {
 		case "create":
 			return "set";
@@ -44,7 +44,7 @@ function describeOp(op: string | undefined): string {
 		case "drop":
 			return "drop";
 		default:
-			return op ?? "?";
+			return op;
 	}
 }
 
@@ -60,6 +60,11 @@ function goalBadgeColor(status: GoalStatus): ThemeColor {
 		default:
 			return "accent";
 	}
+}
+
+/** The goal objective as one muted row: truncated collapsed, whole (the flush card wraps it) expanded. */
+function objectiveRow(uiTheme: Theme, objective: string, width: number, expanded: boolean): string {
+	return uiTheme.fg("muted", expanded ? objective : truncateToWidth(objective, width));
 }
 
 interface GoalRenderArgs {
@@ -103,86 +108,74 @@ const goalResultMemo = new OwnerMemo<NativeToolView | undefined>();
 
 /** Renders goal creation, status, and lifecycle results. */
 export const goalToolRenderer = {
-	renderCall(args: GoalRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
-		const description = describeOp(args.op);
-		const meta: string[] = [];
-		const trimmedObjective = args.objective?.trim();
-		if (args.op === "create" && trimmedObjective) {
-			const objective = truncateToWidth(trimmedObjective, TRUNCATE_LENGTHS.TITLE);
-			meta.push(uiTheme.italic(uiTheme.fg("muted", `"${objective}"`)));
-		}
-		if (args.op === "create" && args.token_budget !== undefined) {
-			meta.push(`budget ${formatNumber(args.token_budget)}`);
-		}
-		return new Text(renderStatusLine({ icon: "pending", title: "Goal", description, meta }, uiTheme), 0, 0);
+	renderCall(args: GoalRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
+		const status: StatusLineOptions = {
+			icon: options.executionStarted ? "running" : "pending",
+			spinnerFrame: options.spinnerFrame,
+			title: "Goal",
+			description: describeOp(args.op),
+			meta:
+				args.op === "create" && args.token_budget !== undefined
+					? [`budget ${formatNumber(args.token_budget)}`]
+					: undefined,
+		};
+		const objective = args.op === "create" ? args.objective?.trim() : undefined;
+		return plainToolCard(uiTheme, ({ contentWidth }) => ({
+			status,
+			phase: "pending",
+			body: objective ? [objectiveRow(uiTheme, objective, contentWidth, options.expanded)] : undefined,
+		}));
 	},
 
 	renderResult(
 		result: { content: Array<{ type: string; text?: string }>; details?: GoalToolDetails; isError?: boolean },
-		_options: RenderResultOptions,
+		options: RenderResultOptions,
 		uiTheme: Theme,
 		args?: GoalRenderArgs,
 	): Component {
 		const fallbackText = result.content?.find(c => c.type === "text")?.text ?? "";
 		const details = result.details;
-		const op = details?.op ?? args?.op;
-		const description = describeOp(op);
+		const description = describeOp(details?.op ?? args?.op);
 
 		if (result.isError) {
-			const header = renderStatusLine({ icon: "error", title: "Goal", description }, uiTheme);
-			return framedToolCard(uiTheme, () => ({
-				header,
-				sections: [{ content: formatErrorDetail(fallbackText || "Goal tool failed", uiTheme).split("\n") }],
+			return plainToolCard(uiTheme, () => ({
+				status: { icon: "error", title: "Goal", description },
 				phase: "error",
-				borderColor: "error",
+				body: [formatErrorText(fallbackText || "Goal tool failed", uiTheme)],
 			}));
 		}
 
 		const goal = details?.goal ?? null;
 		if (!goal) {
-			return new Text(
-				renderStatusLine({ icon: "warning", title: "Goal", description, meta: ["no active goal"] }, uiTheme),
-				0,
-				0,
-			);
+			return plainToolCard(uiTheme, () => ({
+				status: { icon: "warning", title: "Goal", description, meta: ["no active goal"] },
+				phase: "warning",
+			}));
 		}
 
-		const header = renderStatusLine(
-			{
-				iconOverride: uiTheme.styledSymbol("tool.goal", "accent"),
-				title: "Goal",
-				description,
-				badge: { label: goal.status, color: goalBadgeColor(goal.status) },
-			},
-			uiTheme,
-		);
-
-		const lines: string[] = [];
-		const objectiveText = truncateToWidth(goal.objective.trim(), TRUNCATE_LENGTHS.LONG);
-		lines.push(uiTheme.italic(uiTheme.fg("muted", `"${objectiveText}"`)));
-
+		const status: StatusLineOptions = {
+			icon: "success",
+			title: "Goal",
+			description,
+			badge: { label: goal.status, color: goalBadgeColor(goal.status) },
+		};
 		const used = formatNumber(goal.tokensUsed);
-		const tokensLine =
+		const budgetParts = [
 			goal.tokenBudget !== undefined
 				? `${used} / ${formatNumber(goal.tokenBudget)} tokens (${formatNumber(Math.max(0, goal.tokenBudget - goal.tokensUsed))} left)`
-				: `${used} tokens`;
-		const metaParts = [tokensLine];
-		if (goal.timeUsedSeconds > 0) {
-			metaParts.push(`${formatDuration(goal.timeUsedSeconds * 1000)} elapsed`);
-		}
-		lines.push(uiTheme.fg("dim", metaParts.join(" · ")));
-
+				: `${used} tokens`,
+		];
+		if (goal.timeUsedSeconds > 0) budgetParts.push(`${formatDuration(goal.timeUsedSeconds * 1000)} elapsed`);
+		const budgetLine = uiTheme.fg("dim", budgetParts.join(uiTheme.sep.dot));
 		const report = details?.completionBudgetReport;
-		const sections: Array<{ label?: string; content: string[] }> = [{ content: lines }];
-		if (report) {
-			sections.push({ label: "Report", content: report.split("\n").map(line => uiTheme.fg("muted", line)) });
-		}
 
-		return framedToolCard(uiTheme, () => ({
-			header,
-			sections,
+		return plainToolCard(uiTheme, ({ contentWidth }) => ({
+			status,
 			phase: "success",
-			borderColor: "borderMuted",
+			body: [objectiveRow(uiTheme, goal.objective.trim(), contentWidth, options.expanded), budgetLine],
+			sections: report
+				? [{ label: "Report", content: report.split("\n").map(line => uiTheme.fg("muted", line)) }]
+				: undefined,
 		}));
 	},
 

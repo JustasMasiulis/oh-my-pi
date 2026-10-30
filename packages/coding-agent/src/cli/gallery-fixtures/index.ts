@@ -27,6 +27,7 @@ import { statusLineFixtures } from "./status-line";
 import { webFixtures } from "./web";
 
 export * from "./composer";
+export * from "./messages";
 export * from "./segments";
 export * from "./types";
 

@@ -87,8 +87,7 @@ describe("renderOutputBlock", () => {
 			{
 				content: "x".repeat(27),
 				contentMaxLines: 1,
-				status: "complete",
-				title: "Read",
+				header: { icon: "success", title: "Read" },
 				width: 30,
 			},
 			theme,

@@ -1,30 +1,32 @@
-import type { TspSpan, TspText } from "@oh-my-pi/pi-wire";
+import type { TspText } from "@oh-my-pi/pi-wire";
 import { Text } from "../components/text";
 import { compactText, rowsText, styledSpans } from "../native/spans";
 import { sameItems } from "../native/memo";
-import { colorTone } from "../native/tone";
-import { span } from "../native/describe";
 import type { DescribeContext, NativeChild, NativeNode } from "../native/node";
-import type { Theme, ThemeColor } from "../theme/theme";
+import type { Theme } from "../theme/theme";
 import type { Component } from "../tui";
-import { getPaddingX } from "../utils";
+import { visibleWidth } from "../utils";
+import { wrapGuidedLine, wrapPrefixedLine } from "./hanging-wrap";
 import {
 	CachedOutputBlock,
 	describeOutputBlock,
 	markFramedBlockComponent,
 	type NativeOutputBlockSection,
 	outputBlockContentWidth,
+	outputBlockHeaderWidth,
 	type OutputBlockOptions,
 } from "./output-block";
-import { renderStatusLine, type StatusLineOptions } from "./status-line";
+import { renderFittedStatusLine, type StatusLineOptions, statusLineSpans } from "./status-line";
 import type { State } from "./types";
-import { getStateBgColor } from "./utils";
 
 /** Lifecycle distinctions shared by tool call and result cards. */
 export type ToolCardPhase = "pending" | "running" | "partial" | "success" | "warning" | "error" | "info";
 
-/** Fixed card topology. Framed cards own their border; plain cards flow inline. */
+/** Fixed card topology. Framed cards own their border; plain cards are flush: a header row over indented body rows. */
 export type ToolCardVariant = "framed" | "plain";
+
+/** Body indent of flush (plain) cards, in columns. */
+export const FLUSH_BODY_INDENT = 2;
 
 /** Lazily rendered slot content. Components retain their own width caches. */
 export type ToolCardContent = readonly string[] | Component | ((width: number) => readonly string[] | Component);
@@ -36,29 +38,26 @@ export interface ToolCardSection {
 	separator?: boolean;
 }
 
-/** Snapshot returned by a ToolCard builder on each render. */
+/**
+ * Snapshot returned by a ToolCard builder on each render. Every card's header
+ * is a status line; framed cards draw `footerMeta` in the bottom border, flush
+ * cards append it to the header row.
+ */
 export interface ToolCardSnapshot {
-	/** Pre-rendered header. Prefer `status` for ordinary tool lifecycle rows. */
-	header?: string;
-	/** Structured status header, rendered by the shared status-line primitive. */
-	status?: StatusLineOptions;
-	headerMeta?: string;
-	/** Short facts drawn inside the frame's bottom border (framed); a trailing row otherwise. */
+	status: StatusLineOptions;
 	footerMeta?: string;
 	phase?: ToolCardPhase;
 	body?: ToolCardContent;
 	sections?: readonly ToolCardSection[];
 	footer?: ToolCardContent;
-	applyBg?: boolean;
 	contentPaddingLeft?: number;
 	contentPaddingRight?: number;
-	borderColor?: ThemeColor;
 }
 
 /** Width information supplied to a ToolCard's lazy snapshot builder. */
 export interface ToolCardBuildContext {
 	width: number;
-	/** Inner width for the default one-column framed padding. */
+	/** Inner width: inside the frame's borders and padding, or after the flush body indent. */
 	contentWidth: number;
 	/** Compute an inner width when this snapshot opts into custom frame padding. */
 	contentWidthFor(contentPaddingLeft?: number, contentPaddingRight?: number): number;
@@ -67,8 +66,6 @@ export interface ToolCardBuildContext {
 /** Construction options whose topology remains fixed for a card's lifetime. */
 export interface ToolCardOptions {
 	variant: ToolCardVariant;
-	paddingX?: number;
-	paddingY?: number;
 	ignoreTight?: boolean;
 	onInvalidate?: () => void;
 	/**
@@ -86,33 +83,31 @@ export function toolCardState(phase: ToolCardPhase | undefined): State | undefin
 	return phase;
 }
 
-function isRenderedLines(value: readonly string[] | Component): value is readonly string[] {
-	return Array.isArray(value);
+/**
+ * Flush card rows: a long header hangs at the body column so its trailing
+ * facts stay visible; body rows indent {@link FLUSH_BODY_INDENT} and wrap
+ * under their own tree guides.
+ */
+export function layoutFlushCard(header: string, rows: readonly string[], width: number, theme: Theme): string[] {
+	const indent = " ".repeat(FLUSH_BODY_INDENT);
+	const contentWidth = Math.max(1, width - FLUSH_BODY_INDENT);
+	const lines = wrapPrefixedLine("", indent, header, width);
+	for (const row of rows) {
+		for (const line of row.split("\n")) {
+			for (const wrapped of wrapGuidedLine(line, contentWidth, theme)) lines.push(`${indent}${wrapped}`);
+		}
+	}
+	return lines;
 }
 
-/** Header spans for a structured status line; the status icon is the card's status chip. */
-function statusSpans(status: StatusLineOptions, theme: Theme): TspSpan[] {
-	const flatten = (text: string): string => text.replace(/\r\n?|\n/g, " ");
-	const spans: TspSpan[] = [];
-	if (status.iconOverride) spans.push(...styledSpans(status.iconOverride), span(" "));
-	spans.push(span(flatten(status.title), status.titleColor ?? "accent"));
-	if (status.description) spans.push(span(": "), span(flatten(status.description), "muted"));
-	if (status.badge) {
-		const label = `${theme.format.bracketLeft}${flatten(status.badge.label)}${theme.format.bracketRight}`;
-		spans.push(span(" "), span(label, status.badge.color));
-	}
-	const meta = status.meta?.map(flatten).filter(value => value.trim().length > 0) ?? [];
-	if (meta.length > 0) spans.push(span(" "), span(meta.join(theme.sep.dot), "dim"));
-	return spans;
+function isRenderedLines(value: readonly string[] | Component): value is readonly string[] {
+	return Array.isArray(value);
 }
 
 /** Last description of a card, reused while the snapshot's inputs are unchanged. */
 interface NativeCardMemo {
 	head: string;
-	meta: string | undefined;
 	phase: ToolCardPhase | undefined;
-	applyBg: boolean | undefined;
-	borderColor: ThemeColor | undefined;
 	/** Per slot: label plus resolved content (component or rows array) and its described child. */
 	slots: readonly {
 		label: string | undefined;
@@ -150,16 +145,14 @@ export class ToolCard implements Component {
 		this.#theme = theme;
 		this.#options = options;
 		this.#build = build;
-		this.#plainText = new Text("", options.paddingX ?? 0, options.paddingY ?? 0);
+		this.#plainText = new Text("", 0, 0);
 		this.#plainText.setIgnoreTight(options.ignoreTight ?? true);
 		if (options.variant === "framed") markFramedBlockComponent(this);
 	}
 
 	render(width: number): readonly string[] {
-		const configuredPadding = this.#options.paddingX ?? 0;
-		const plainPadding = this.#options.ignoreTight === false ? getPaddingX(configuredPadding) : configuredPadding;
 		const defaultContentWidth =
-			this.#options.variant === "framed" ? outputBlockContentWidth(width) : Math.max(1, width - plainPadding * 2);
+			this.#options.variant === "framed" ? outputBlockContentWidth(width) : Math.max(1, width - FLUSH_BODY_INDENT);
 		const snapshot = this.#build({
 			width,
 			contentWidth: defaultContentWidth,
@@ -203,7 +196,22 @@ export class ToolCard implements Component {
 		this.#renderedChildren = nextChildren;
 
 		const state = toolCardState(snapshot.phase);
-		const header = snapshot.header ?? (snapshot.status ? renderStatusLine(snapshot.status, this.#theme) : undefined);
+		// Framed headers never animate: native-scrollback commits are prefix-only,
+		// so a spinner in the top border would pin the commit boundary above the body.
+		// Either way the header keeps to one row: the top border, or the flush row
+		// (which `layoutFlushCard` wraps at the body indent) beside any footer facts.
+		const header =
+			this.#options.variant === "framed"
+				? renderFittedStatusLine(
+						{ ...snapshot.status, spinnerFrame: undefined },
+						this.#theme,
+						outputBlockHeaderWidth(width, this.#theme),
+					)
+				: renderFittedStatusLine(
+						snapshot.status,
+						this.#theme,
+						width - FLUSH_BODY_INDENT - (snapshot.footerMeta ? visibleWidth(snapshot.footerMeta) + 1 : 0),
+					);
 		if (this.#options.variant === "framed") {
 			const previousOptions = this.#lastBlockOptions;
 			const previousSections = previousOptions?.sections;
@@ -220,50 +228,41 @@ export class ToolCard implements Component {
 			const reusableOptions =
 				previousOptions?.width === width &&
 				previousOptions.header === header &&
-				previousOptions.headerMeta === snapshot.headerMeta &&
 				previousOptions.footerMeta === snapshot.footerMeta &&
 				previousOptions.state === state &&
-				previousOptions.applyBg === snapshot.applyBg &&
 				previousOptions.contentPaddingLeft === snapshot.contentPaddingLeft &&
 				previousOptions.contentPaddingRight === snapshot.contentPaddingRight &&
-				previousOptions.borderColor === snapshot.borderColor &&
 				sectionsStable
 					? previousOptions
 					: undefined;
 			const blockOptions: OutputBlockOptions = reusableOptions ?? {
 				header,
-				headerMeta: snapshot.headerMeta,
 				footerMeta: snapshot.footerMeta,
 				state,
 				sections,
 				width,
-				applyBg: snapshot.applyBg,
 				contentPaddingLeft: snapshot.contentPaddingLeft,
 				contentPaddingRight: snapshot.contentPaddingRight,
-				borderColor: snapshot.borderColor,
 			};
 			this.#lastBlockOptions = blockOptions;
 			return this.#block.render(blockOptions, this.#theme);
 		}
 
-		const lines: string[] = [];
-		if (header) {
-			lines.push(snapshot.headerMeta ? `${header} ${snapshot.headerMeta}` : header);
-		}
+		const rows: string[] = [];
 		for (const section of sections) {
-			if (section.separator && lines.length > 0) lines.push("");
-			if (section.label) lines.push(section.label);
-			lines.push(...section.lines);
+			if (section.label) rows.push(this.#theme.fg("dim", section.label));
+			rows.push(...section.lines);
 		}
-		if (snapshot.footerMeta) lines.push(snapshot.footerMeta);
-		const text = lines.join("\n");
-		const key = `${width}:${text.length}:${Bun.hash(text).toString(36)}:${state ?? "info"}:${snapshot.applyBg ?? true}`;
+		const text = layoutFlushCard(
+			snapshot.footerMeta ? `${header} ${this.#theme.fg("dim", snapshot.footerMeta)}` : header,
+			rows,
+			width,
+			this.#theme,
+		).join("\n");
+		const key = `${width}:${text.length}:${Bun.hash(text).toString(36)}`;
 		if (key !== this.#plainKey) {
 			this.#plainKey = key;
 			this.#plainText.setText(text);
-			this.#plainText.setCustomBgFn(
-				state && snapshot.applyBg !== false ? value => this.#theme.bg(getStateBgColor(state), value) : undefined,
-			);
 		}
 		return this.#plainText.render(width);
 	}
@@ -307,14 +306,11 @@ export class ToolCard implements Component {
 		}
 		this.#renderedChildren = nextChildren;
 
-		const head = snapshot.header ?? (snapshot.status ? JSON.stringify(snapshot.status) : "");
+		const head = JSON.stringify(snapshot.status);
 		if (
 			previous !== undefined &&
 			previous.head === head &&
-			previous.meta === snapshot.headerMeta &&
 			previous.phase === snapshot.phase &&
-			previous.applyBg === snapshot.applyBg &&
-			previous.borderColor === snapshot.borderColor &&
 			previous.slots.length === slots.length &&
 			slots.every((slot, index) => {
 				const prior = previous.slots[index]!;
@@ -324,11 +320,7 @@ export class ToolCard implements Component {
 			return previous.node;
 		}
 
-		const headSpans: TspText | undefined = snapshot.header
-			? compactText(styledSpans(snapshot.header))
-			: snapshot.status
-				? statusSpans(snapshot.status, this.#theme)
-				: undefined;
+		const headSpans: TspText = statusLineSpans(snapshot.status, this.#theme);
 		const sections: NativeOutputBlockSection[] = slots.map((slot, index) => ({
 			label: slot.label === undefined ? undefined : compactText(styledSpans(slot.label)),
 			separator: slot.separator,
@@ -339,24 +331,14 @@ export class ToolCard implements Component {
 		const plain = this.#options.variant === "plain";
 		const described = describeOutputBlock({
 			head: headSpans,
-			meta: snapshot.headerMeta ? compactText(styledSpans(snapshot.headerMeta)) : undefined,
 			state,
 			role: "omp.tool",
-			tone:
-				snapshot.borderColor !== undefined
-					? (colorTone(snapshot.borderColor) ?? "neutral")
-					: plain && snapshot.applyBg === false
-						? "neutral"
-						: undefined,
 			sections,
 			inset: plain || undefined,
 		});
 		this.#native = {
 			head,
-			meta: snapshot.headerMeta,
 			phase: snapshot.phase,
-			applyBg: snapshot.applyBg,
-			borderColor: snapshot.borderColor,
 			slots,
 			node: described,
 		};

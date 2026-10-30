@@ -6,7 +6,7 @@ import { noteText } from "./native-view";
 import type { Theme } from "../theme/theme";
 import { formatOutputPaneLines, styleToolOutputLine } from "../render/output-pane";
 import { renderStatusLine, type StatusLineOptions } from "../render/status-line";
-import { plainToolCard, type ToolCardPhase } from "../render/tool-card";
+import { FLUSH_BODY_INDENT, layoutFlushCard, plainToolCard, type ToolCardPhase } from "../render/tool-card";
 import { clipCollapsed } from "../render/render-utils";
 import {
 	describeJsonValue,
@@ -20,6 +20,9 @@ import {
 	renderJsonTreeLines,
 } from "./json-tree";
 import { formatExpandHint } from "../render/render-utils";
+
+/** Width that never clips an args line; `truncateToWidth` coerces widths to int32, so it stays below 2^31. */
+const UNCLIPPED_ARGS_WIDTH = 2 ** 30;
 
 /** Inputs rendered by the fallback card used when a tool has no bespoke renderer. */
 export interface DefaultToolRenderInput {
@@ -42,30 +45,17 @@ export interface DefaultToolRenderInput {
 /** Spinner-dependent header state; cheap, recomputed every frame. */
 function buildDefaultToolStatus(input: DefaultToolRenderInput): { status: StatusLineOptions; phase: ToolCardPhase } {
 	const { options, result } = input;
-	const status: StatusLineOptions = {
-		icon: options.isPartial
-			? options.spinnerFrame !== undefined
-				? "running"
-				: "pending"
-			: result?.skipped
-				? "info"
-				: result?.isError
-					? "error"
-					: "done",
-		spinnerFrame: options.spinnerFrame,
-		title: input.label,
-	};
-	if (result?.skipped) status.titleColor = "muted";
-	const phase: ToolCardPhase = options.isPartial
-		? options.spinnerFrame !== undefined
+	// A skipped call never ran (steering pre-empted it): neutral, not an error.
+	const icon: ToolCardPhase & StatusLineOptions["icon"] = options.isPartial
+		? options.executionStarted
 			? "running"
-			: "partial"
+			: "pending"
 		: result?.skipped
 			? "info"
 			: result?.isError
 				? "error"
 				: "success";
-	return { status, phase };
+	return { status: { icon, spinnerFrame: options.spinnerFrame, title: input.label }, phase: icon };
 }
 
 /** Args preview plus JSON-tree/raw output body; depends only on args, output, expansion and width. */
@@ -74,15 +64,13 @@ function buildDefaultToolBody(input: DefaultToolRenderInput, uiTheme: Theme, con
 	const body: string[] = [];
 	const args = isRecord(input.args) ? input.args : undefined;
 	if (!options.expanded && args && Object.keys(args).length > 0) {
-		const inlineBudget = Math.max(20, contentWidth - Bun.stringWidth(uiTheme.tree.last) - 2);
-		const preview = formatArgsInline(args, inlineBudget);
-		if (preview) {
-			body.push(` ${uiTheme.fg("dim", uiTheme.tree.last)} ${uiTheme.fg("dim", preview)}`);
-		}
+		const preview = formatArgsInline(args, Math.max(20, contentWidth));
+		if (preview) body.push(uiTheme.fg("dim", preview));
+		// A clipped args line before any result: Ctrl+O shows the full args tree.
+		if (!result && preview !== formatArgsInline(args, UNCLIPPED_ARGS_WIDTH)) body.push(formatExpandHint(uiTheme));
 	}
 
 	if (options.expanded && input.args !== undefined) {
-		body.push("");
 		body.push(uiTheme.fg("dim", "Args"));
 		const tree = renderJsonTreeLines(
 			input.args,
@@ -92,10 +80,7 @@ function buildDefaultToolBody(input: DefaultToolRenderInput, uiTheme: Theme, con
 			JSON_TREE_SCALAR_LEN_EXPANDED,
 		);
 		body.push(...tree.lines);
-		if (tree.truncated) {
-			body.push(uiTheme.fg("dim", "…"));
-		}
-		body.push("");
+		if (tree.truncated) body.push(uiTheme.fg("dim", uiTheme.format.ellipsis));
 	}
 
 	if (result) {
@@ -149,14 +134,11 @@ function buildDefaultToolBody(input: DefaultToolRenderInput, uiTheme: Theme, con
 	return body;
 }
 
-/** Format one generic tool call/result card at the available content width. */
-export function formatDefaultToolExecution(
-	input: DefaultToolRenderInput,
-	contentWidth: number,
-	uiTheme: Theme,
-): string {
+/** Format one generic tool call/result card as flush rows; see {@link layoutFlushCard}. */
+export function formatDefaultToolExecution(input: DefaultToolRenderInput, width: number, uiTheme: Theme): string {
 	const { status } = buildDefaultToolStatus(input);
-	return [renderStatusLine(status, uiTheme), ...buildDefaultToolBody(input, uiTheme, contentWidth)].join("\n");
+	const body = buildDefaultToolBody(input, uiTheme, Math.max(1, width - FLUSH_BODY_INDENT));
+	return layoutFlushCard(renderStatusLine(status, uiTheme), body, width, uiTheme).join("\n");
 }
 
 /**
@@ -258,6 +240,6 @@ export function renderDefaultToolExecution(input: DefaultToolRenderInput, uiThem
 			}
 			return { status, phase, body: memo.body };
 		},
-		{ paddingX: 1, paddingY: 1, ignoreTight: true, onInvalidate: () => (memo = undefined) },
+		{ ignoreTight: true, onInvalidate: () => (memo = undefined) },
 	);
 }

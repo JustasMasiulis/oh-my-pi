@@ -256,10 +256,10 @@ describe("task renderer: nested live rendering", () => {
 		// Header and per-agent body rows are static; only the tool header owns live animation.
 		expect(header0).toBe(header1);
 		expect(body0).toBe(body1);
-		expect(Bun.stripANSI(body1)).toContain(`${theme.status.done} Probe: Investigate padding`);
+		expect(Bun.stripANSI(body1)).toContain(`${theme.status.running} Probe: Investigate padding`);
 	});
 
-	it("wraps the completed run summary in bracket glyphs, dropping the Total: label", async () => {
+	it("puts the completed run summary in the bottom border", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		const ok = makeCompletedSubResult("Alpha", "did the thing");
 		const bad: SingleResult = { ...makeCompletedSubResult("Beta", "blew up"), exitCode: 1, error: "boom" };
@@ -273,11 +273,9 @@ describe("task renderer: nested live rendering", () => {
 			{ expanded: false, isPartial: false },
 			theme,
 		);
-		const text = Bun.stripANSI(component.render(160).join("\n"));
-		// Bash-style bracketed footer: dim bracket chrome wrapping colored counts,
-		// with no "Total:" prefix between the bracket and the first count.
-		const expected = `${theme.format.bracketLeft}1 succeeded${theme.sep.dot}1 failed${theme.sep.dot}${formatDuration(39_400)}${theme.format.bracketRight}`;
-		expect(text).toContain(expected);
-		expect(text).not.toContain("Total:");
+		const lines = Bun.stripANSI(component.render(160).join("\n")).split("\n");
+		const expected = `1 succeeded${theme.sep.dot}1 failed${theme.sep.dot}${formatDuration(39_400)}`;
+		expect(lines.at(-1)).toContain(expected);
+		expect(lines.slice(0, -1).join("\n")).not.toContain(expected);
 	});
 });

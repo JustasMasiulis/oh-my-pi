@@ -1,6 +1,5 @@
 import { isReadableUrlPath, readSelectorRangeStart } from "./read";
 import type { Component } from "../tui";
-import { Text } from "../components/text";
 import type { NativeToolHead, NativeToolView, RenderResultOptions } from "./renderer";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { compact, span, text } from "../native/describe";
@@ -9,9 +8,10 @@ import { errorText, noteText, resultText, statsText } from "./native-view";
 import { type Theme, theme } from "../theme/theme";
 import type { OutputMeta } from "./output-meta";
 import { truncate } from "@oh-my-pi/pi-utils";
-import { renderStatusLine, urlHyperlink } from "../render";
-import { framedToolCard } from "../render/tool-card";
+import { type StatusLineOptions, urlHyperlink } from "../render";
+import { framedToolCard, plainToolCard } from "../render/tool-card";
 import {
+	formatErrorText,
 	formatExpandHint,
 	formatMoreItems,
 	getDomain,
@@ -104,7 +104,7 @@ function formatReadUrlDescription(input: string): string {
 	const target = readUrlLinkTarget(input);
 	const displayUrl = target.match(/^www\./i) ? `https://${target}` : target;
 	const domain = getDomain(displayUrl);
-	const urlPath = truncate(displayUrl.replace(/^https?:\/\/[^/]+/, ""), 50, "…");
+	const urlPath = truncate(displayUrl.replace(/^https?:\/\/[^/]+/, ""), 50, theme.format.ellipsis);
 	const label = `${domain}${urlPath ? ` ${urlPath}` : ""}`.trim();
 	return urlHyperlink(target, label);
 }
@@ -125,15 +125,22 @@ function formatReadUrlMetadataValue(url: string, uiTheme: Theme): string {
 /** Render URL read call (URL preview) */
 export function renderReadUrlCall(
 	args: { path?: string; url?: string; raw?: boolean },
-	_options: RenderResultOptions,
+	options: RenderResultOptions,
 	uiTheme: Theme = theme,
 ): Component {
 	const url = args.path ?? args.url ?? "";
 	const description = formatReadUrlDescription(url);
 	const meta: string[] = [];
 	if (args.raw) meta.push("raw");
-	const text = renderStatusLine({ icon: "pending", title: "Read", description, meta }, uiTheme);
-	return new Text(text, 0, 0);
+	return plainToolCard(uiTheme, () => ({
+		status: {
+			icon: options.executionStarted ? "running" : "pending",
+			spinnerFrame: options.spinnerFrame,
+			title: "Read",
+			description,
+			meta,
+		},
+	}));
 }
 
 /** Native head of a URL read: `Read` plus the linked, one-line URL. */
@@ -187,7 +194,7 @@ export function describeReadUrlResult(result: {
 			details.method ? plainText(details.method) : "",
 			`${contentLines.length} line${contentLines.length === 1 ? "" : "s"}`,
 			`${contentBody.trim().length} chars`,
-			hidden > 0 ? formatMoreItems(hidden, "line") : "",
+			hidden > 0 ? `… ${hidden} more lines` : "",
 			...details.notes.map(note => plainText(note)),
 		].filter(Boolean),
 	);
@@ -229,12 +236,11 @@ export function renderReadUrlResult(
 		const errorText = (rawErrorText || "No response data").replace(/^Error:\s*/, "");
 		const urlText = details?.finalUrl ?? details?.url ?? "";
 		const description = urlText ? formatReadUrlDescription(urlText) : undefined;
-		const header = renderStatusLine({ icon: "error", title: "Read", description }, uiTheme);
-		const errorLines = sanitizeDisplayLines(errorText).map(line => uiTheme.fg("error", line));
-		return framedToolCard(uiTheme, () => ({
-			header,
+		const errorLines = sanitizeDisplayLines(errorText).map(line => formatErrorText(line, uiTheme));
+		return plainToolCard(uiTheme, () => ({
+			status: { icon: "error", title: "Read", description },
 			phase: "error",
-			sections: [{ content: errorLines }],
+			body: errorLines,
 		}));
 	}
 
@@ -244,14 +250,7 @@ export function renderReadUrlResult(
 	const truncation = details.meta?.truncation;
 	const truncated = Boolean(details.truncated || truncation);
 
-	const header = renderStatusLine(
-		{
-			icon: truncated ? "warning" : "success",
-			title: "Read",
-			description,
-		},
-		uiTheme,
-	);
+	const status: StatusLineOptions = { icon: truncated ? "warning" : "success", title: "Read", description };
 
 	const contentText = result.content[0]?.text ?? "";
 	const contentBody = contentText.includes("---\n\n")
@@ -271,18 +270,14 @@ export function renderReadUrlResult(
 		);
 	}
 	const lineLabel = `${lineCount} line${lineCount === 1 ? "" : "s"}`;
-	metadataLines.push(`${uiTheme.fg("muted", "Lines:")} ${lineLabel}`);
-	metadataLines.push(`${uiTheme.fg("muted", "Chars:")} ${charCount}`);
-	if (truncated) {
-		metadataLines.push(uiTheme.fg("warning", `${uiTheme.status.warning} Output truncated`));
-		if (truncation?.artifactId) metadataLines.push(formatStyledArtifactReference(truncation.artifactId, uiTheme));
-	}
+	if (truncation?.artifactId) metadataLines.push(formatStyledArtifactReference(truncation.artifactId, uiTheme));
 	if (hasNotes) {
 		metadataLines.push(`${uiTheme.fg("muted", "Notes:")} ${details.notes.join("; ")}`);
 	}
 
 	let lastExpanded: boolean | undefined;
 	let contentPreviewLines: string[] | undefined;
+	let previewMarker = "";
 	const dropPreview = () => {
 		lastExpanded = undefined;
 		contentPreviewLines = undefined;
@@ -303,21 +298,24 @@ export function renderReadUrlResult(
 					previewLines.length > 0
 						? previewLines.map(line => uiTheme.fg("dim", line))
 						: [uiTheme.fg("dim", "(no content)")];
-				if (remaining > 0) {
-					const hint = formatExpandHint(uiTheme, expanded, true);
-					contentPreviewLines.push(uiTheme.fg("muted", `… ${remaining} more lines${hint ? ` ${hint}` : ""}`));
-				}
+				previewMarker =
+					remaining > 0
+						? [formatMoreItems(remaining, "line", uiTheme), formatExpandHint(uiTheme, expanded, true)]
+								.filter(Boolean)
+								.join(" ")
+						: "";
 				lastExpanded = expanded;
 			}
 
+			const footer = [lineLabel, `${charCount} chars`];
+			if (truncated) footer.push(uiTheme.fg("warning", "output truncated"));
+			if (previewMarker) footer.push(previewMarker);
 			return {
-				header,
+				status,
+				footerMeta: uiTheme.fg("dim", footer.join(uiTheme.sep.dot)),
 				phase: truncated ? "warning" : "success",
-				sections: [
-					{ label: uiTheme.fg("toolTitle", "Metadata"), content: metadataLines },
-					{ label: uiTheme.fg("toolTitle", "Content Preview"), content: contentPreviewLines },
-				],
-				applyBg: false,
+				body: metadataLines,
+				sections: [{ label: "Content Preview", content: contentPreviewLines }],
 			};
 		},
 		{ onInvalidate: dropPreview, onReleaseRenderCaches: dropPreview },

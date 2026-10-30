@@ -82,8 +82,8 @@ describe("grepToolRenderer", () => {
 		const result = {
 			content: [{ type: "text", text: "" }],
 			details: {
-				matchCount: 3,
-				fileCount: 3,
+				matchCount: 4,
+				fileCount: 4,
 				displayContent: [
 					"# src/",
 					"## first.ts#aaaa",
@@ -94,6 +94,8 @@ describe("grepToolRenderer", () => {
 					"*4│const secondFlag = true;",
 					"## third.ts#cccc",
 					"*5│const thirdFlag = true;",
+					"## fourth.ts#dddd",
+					"*6│const fourthFlag = true;",
 				].join("\n"),
 			},
 		};
@@ -102,12 +104,14 @@ describe("grepToolRenderer", () => {
 			pattern: "Flag",
 		});
 		const renderedLines = sanitizeText(collapsed.render(240).join("\n")).split("\n");
-		const bodyLines = renderedLines.slice(1);
+		const bodyLines = renderedLines.slice(1).map(line => line.trim());
 
-		expect(bodyLines).toHaveLength(6);
-		expect(bodyLines.some(line => line.includes("const firstFlag = true;"))).toBe(true);
+		// File headers carry the full path, without `#` markers or hashline tags.
+		expect(bodyLines.slice(0, 2)).toEqual(["src/first.ts", "*2│const firstFlag = true;"]);
+		expect(bodyLines).toHaveLength(5);
+		expect(bodyLines).toContain("src/second.ts");
 		expect(bodyLines.some(line => line.includes("const secondFlag = true;"))).toBe(true);
-		expect(bodyLines.some(line => line.includes("1 more match"))).toBe(true);
+		expect(bodyLines.some(line => line.includes("2 more matches"))).toBe(true);
 		expect(bodyLines.some(line => line.includes("before"))).toBe(false);
 		expect(bodyLines.some(line => line.includes("thirdFlag"))).toBe(false);
 	});

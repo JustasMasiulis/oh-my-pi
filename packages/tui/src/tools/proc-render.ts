@@ -1,14 +1,16 @@
 import type { Component } from "../tui";
-import { Ellipsis, renderStatusLine, renderTreeList, truncateToWidth } from "../render";
+import { renderStatusLine, renderTreeList, truncateToWidth } from "../render";
 import {
 	cappedHeadLines,
 	formatBadge,
 	formatDuration,
-	formatErrorDetail,
+	formatErrorText,
+	formatMoreItems,
 	formatStatusIcon,
 	PREVIEW_LIMITS,
+	pluralize,
 	TRUNCATE_LENGTHS,
-	type ToolUIColor,
+	type ToolUIStatus,
 } from "../render/render-utils";
 import type { Theme } from "../theme/theme";
 import type { NativeToolView, RenderResultOptions } from "./renderer";
@@ -16,7 +18,14 @@ import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import { ansi, compact, node, span, text } from "../native/describe";
 import type { NativeChild, NativeNode } from "../native/node";
 import { errorText, noteText, toolHead } from "./native-view";
-import type { AgentActivitySnapshot, CoordinationDetails, JobSnapshot } from "./wait";
+import {
+	type AgentActivitySnapshot,
+	type CoordinationDetails,
+	fitFlushRows,
+	jobRowFacts,
+	jobStatusIcon,
+	type JobSnapshot,
+} from "./wait";
 import type { IrcDeliveryReceipt } from "./irc";
 import type { DaemonSnapshot } from "./daemon";
 import { styleTerminalRow } from "./terminal-output";
@@ -39,6 +48,9 @@ export type ProcWriteDetails =
 /** Process operation selected by a write URL, independent of its content. */
 export type ProcWriteAction = "stdin" | "mode" | "kill";
 
+/** Body indent for flush proc cards. */
+const INDENT = "  ";
+
 function preview(body: string, expanded: boolean, theme: Theme, tone: "dim" | "toolOutput" = "dim"): string[] {
 	if (!body.trim()) return [];
 	const limit = expanded ? PREVIEW_LIMITS.EXPANDED_LINES : PREVIEW_LIMITS.COLLAPSED_LINES;
@@ -46,17 +58,39 @@ function preview(body: string, expanded: boolean, theme: Theme, tone: "dim" | "t
 		body.split("\n").filter(line => line.trim()),
 		limit,
 	);
-	const quote = theme.fg("dim", theme.md.quoteBorder);
 	const lines = shown.lines.map(
-		line =>
-			`  ${quote} ${theme.fg(tone, truncateToWidth(safe(line.trim()), TRUNCATE_LENGTHS.LINE, Ellipsis.Unicode))}`,
+		line => `${INDENT}${theme.fg(tone, truncateToWidth(safe(line.trim()), TRUNCATE_LENGTHS.LINE))}`,
 	);
-	if (shown.hidden) lines.push(`  ${quote} ${theme.fg("dim", `… +${shown.hidden} more lines`)}`);
+	if (shown.hidden) lines.push(`${INDENT}${theme.fg("dim", formatMoreItems(shown.hidden, "line", theme))}`);
 	return lines;
 }
 
-function receiptColor(outcome: IrcDeliveryReceipt["outcome"]): ToolUIColor {
+/** A receipt's outcome as a status; its word rides beside it as a gray badge. */
+function receiptStatus(outcome: IrcDeliveryReceipt["outcome"]): "success" | "warning" | "error" {
 	return outcome === "failed" ? "error" : outcome === "revived" ? "warning" : "success";
+}
+
+/** Status of a call whose result has not landed: queued, or executing once started. */
+function inFlightStatus(options: RenderResultOptions): "pending" | "running" {
+	return options.executionStarted ? "running" : "pending";
+}
+
+/**
+ * Header outcome of an IRC write: error when nothing landed, warning when only
+ * some did or nobody was listening. A result without details predates delivery
+ * receipts and counts as delivered.
+ */
+function agentWriteStatus(
+	result: ToolResult | undefined,
+	details: CoordinationDetails | undefined,
+	options: RenderResultOptions,
+): ToolUIStatus {
+	if (result === undefined) return inFlightStatus(options);
+	const receipts = details?.receipts ?? [];
+	const failed = receipts.filter(receipt => receipt.outcome === "failed").length;
+	if (result.isError || (failed > 0 && failed === receipts.length)) return "error";
+	if (failed > 0 || (details !== undefined && receipts.length === 0)) return "warning";
+	return "success";
 }
 
 export function renderAgentWrite(
@@ -68,48 +102,51 @@ export function renderAgentWrite(
 	theme: Theme,
 ): Component {
 	return card((width, expanded) => {
-		const recipient = safe(details?.to || to || "…");
-		const title = `IRC ${theme.nav.selected} ${recipient}`;
+		const recipient = safe(details?.to || to || theme.format.ellipsis);
 		const receipts = details?.receipts ?? [];
 		const delivered = receipts.filter(receipt => receipt.outcome !== "failed").length;
 		const failed = receipts.length - delivered;
-		const error = result?.isError || (failed > 0 && delivered === 0);
+		const single = receipts.length === 1 ? receipts[0] : undefined;
 		const meta: string[] = [];
-		if (recipient === "all") meta.push("broadcast");
-		if (receipts.length === 1) meta.push(theme.fg(receiptColor(receipts[0]!.outcome), receipts[0]!.outcome));
-		else if (receipts.length > 1) {
-			if (delivered) meta.push(theme.fg("success", `${delivered} delivered`));
-			if (failed) meta.push(theme.fg("error", `${failed} failed`));
+		if (receipts.length > 1) {
+			if (delivered) meta.push(`${delivered} delivered`);
+			if (failed) meta.push(`${failed} failed`);
 		}
 		const header = renderStatusLine(
-			result === undefined
-				? { icon: "pending", title, meta }
-				: error
-					? { icon: "error", title, meta }
-					: { iconOverride: theme.styledSymbol("tool.irc", "accent"), title, meta },
+			{
+				icon: agentWriteStatus(result, details, options),
+				title: "IRC",
+				description: `${theme.format.arrowRight} ${recipient}`,
+				badge: single ? { label: single.outcome, color: "muted" } : undefined,
+				meta,
+			},
 			theme,
 		);
-		if (result?.isError && receipts.length === 0)
-			return [header, formatErrorDetail(firstText(result) || "Message delivery failed.", theme)];
-		const lines = [header, ...preview(body, expanded, theme)];
-		if (result && receipts.length === 0)
-			lines.push(theme.fg("muted", firstText(result) || "No live peers to broadcast to."));
-		if (receipts.length > 1 || failed > 0) {
-			lines.push(
-				...renderTreeList(
-					{
-						items: receipts,
-						expanded,
-						maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
-						itemType: "recipient",
-						renderItem: receipt =>
-							`${theme.fg("toolOutput", safe(receipt.to))} ${formatBadge(receipt.outcome, receiptColor(receipt.outcome), theme)}${receipt.error ? ` ${theme.fg("error", `${theme.format.dash} ${safe(receipt.error)}`)}` : ""}`,
-					},
-					theme,
-				),
-			);
+		const lines = [header];
+		if (result?.isError && receipts.length === 0) {
+			lines.push(`${INDENT}${formatErrorText(firstText(result) || "Message delivery failed.", theme)}`);
+			return fitFlushRows(lines, width);
 		}
-		return lines.map(line => truncateToWidth(line, width, Ellipsis.Unicode));
+		if (single?.error) lines.push(`${INDENT}${formatErrorText(single.error, theme)}`);
+		lines.push(...preview(body, expanded, theme, "toolOutput"));
+		if (result && receipts.length === 0)
+			lines.push(`${INDENT}${theme.fg("muted", firstText(result) || "No live peers to broadcast to.")}`);
+		if (receipts.length > 1) {
+			const rows = renderTreeList(
+				{
+					items: receipts,
+					flush: true,
+					expanded,
+					maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
+					itemType: "recipient",
+					renderItem: receipt =>
+						`${formatStatusIcon(receiptStatus(receipt.outcome), theme)} ${theme.fg("accent", safe(receipt.to))} ${formatBadge(receipt.outcome, "muted", theme)}${receipt.error ? `${theme.sep.dot}${theme.fg("error", safe(receipt.error))}` : ""}`,
+				},
+				theme,
+			);
+			lines.push(...rows.map(row => `${INDENT}${row}`));
+		}
+		return fitFlushRows(lines, width);
 	}, options);
 }
 
@@ -130,18 +167,39 @@ function daemonMeta(daemon: DaemonSnapshot, theme: Theme): string[] {
 	return meta;
 }
 
-function jobRow(job: JobSnapshot, theme: Theme): string {
-	const icon = formatStatusIcon(
-		job.status === "cancelled"
-			? "aborted"
-			: job.status === "failed"
-				? "error"
-				: job.status === "running"
-					? "running"
-					: "done",
-		theme,
-	);
-	return `${icon} ${formatBadge(job.type, job.status === "failed" ? "error" : job.status === "cancelled" ? "warning" : "accent", theme)} ${theme.fg("toolOutput", safe(job.id))} ${theme.fg("dim", safe(job.label))} ${theme.fg("dim", formatDuration(job.durationMs))}`;
+/** `<icon> <id> - <facts> - <label>`: the job row grammar wait cards share, plus an optional outcome fact. */
+function jobRow(job: JobSnapshot, theme: Theme, outcome?: string): string {
+	const facts = jobRowFacts(job, theme);
+	if (outcome) facts.push(theme.fg("dim", outcome));
+	const label = safe(job.label);
+	if (label && label !== job.id) facts.push(theme.fg("muted", label));
+	return itemRow(jobStatusIcon(job.status), job.id, facts, theme);
+}
+
+/** `<icon> <id> - <fact> - <fact>`: one flush list item. */
+function itemRow(status: ToolUIStatus, id: string, facts: readonly string[], theme: Theme): string {
+	return [`${formatStatusIcon(status, theme)} ${theme.fg("accent", safe(id))}`, ...facts].join(theme.sep.dot);
+}
+
+function serviceRow(service: DaemonSnapshot, theme: Theme): string {
+	const status: ToolUIStatus =
+		service.state === "failed"
+			? "error"
+			: service.state === "ready" || service.state === "running"
+				? "success"
+				: "warning";
+	const facts = ["service", ...daemonMeta(service, theme)].map(fact => theme.fg("dim", fact));
+	return itemRow(status, service.name, facts, theme);
+}
+
+function errorRows(header: string, message: string, theme: Theme): string[] {
+	return [header, ...message.split("\n").map(line => `${INDENT}${formatErrorText(line, theme)}`)];
+}
+
+function writeSubject(action: ProcWriteAction, id: string, content: string | undefined, theme: Theme): string {
+	const target = safe(id) || theme.format.ellipsis;
+	if (action === "mode" && content?.trim()) return `mode ${target} ${safe(content.trim())}`;
+	return `${action} ${target}`;
 }
 
 /** Render live and completed process writes with the URL-selected operation. */
@@ -155,18 +213,17 @@ export function renderProcWrite(
 	theme: Theme,
 ): Component {
 	return card((_width, expanded) => {
-		const title = `Proc ${action} ${safe(id || "…")}`;
 		const daemon = details && "daemon" in details ? details.daemon : undefined;
 		const header = renderStatusLine(
 			{
-				icon:
-					result === undefined ? "pending" : result.isError ? "error" : action === "kill" ? "aborted" : "success",
-				title,
-				meta: daemon ? daemonMeta(daemon, theme) : action === "mode" && content ? [safe(content)] : [],
+				icon: result === undefined ? inFlightStatus(options) : result.isError ? "error" : "success",
+				title: "Proc",
+				description: writeSubject(action, id, content, theme),
+				meta: daemon ? daemonMeta(daemon, theme) : [],
 			},
 			theme,
 		);
-		if (result?.isError) return [header, formatErrorDetail(firstText(result) || "Process operation failed.", theme)];
+		if (result?.isError) return errorRows(header, firstText(result) || "Process operation failed.", theme);
 		const lines = [header];
 		if (content && action === "stdin") lines.push(...preview(content, expanded, theme));
 		if (details && "op" in details && details.op === "cancel") {
@@ -177,15 +234,18 @@ export function renderProcWrite(
 					{
 						items: outcomes,
 						expanded,
+						flush: true,
 						maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
 						itemType: "job",
 						renderItem: outcome => {
 							const job = jobs.find(item => item.id === outcome.id);
-							return `${job ? `${jobRow(job, theme)} ` : `${theme.fg("toolOutput", safe(outcome.id))} `}${formatBadge(outcome.status, outcome.status === "cancelled" ? "warning" : "error", theme)}`;
+							if (job) return jobRow(job, theme, outcome.status);
+							const status = outcome.status === "cancelled" ? "aborted" : "error";
+							return itemRow(status, outcome.id, [theme.fg("dim", outcome.status)], theme);
 						},
 					},
 					theme,
-				),
+				).map(line => `${INDENT}${line}`),
 			);
 		}
 		return lines;
@@ -200,22 +260,16 @@ export function renderProcRead(
 	theme: Theme,
 ): Component {
 	return card((_width, expanded) => {
-		const title = id ? `Proc ${safe(id)}` : "Proc jobs & services";
+		const description = id ? safe(id) : "jobs & services";
 		const daemon = details?.daemon;
-		const header = renderStatusLine(
-			{
-				icon: result === undefined ? "pending" : result.isError ? "error" : "info",
-				title,
-				meta: daemon ? daemonMeta(daemon, theme) : [],
-			},
-			theme,
-		);
-		if (result?.isError) return [header, formatErrorDetail(firstText(result) || "Process read failed.", theme)];
-		if (!result) return [header];
+		const headerFor = (icon: ToolUIStatus, meta: string[] = []) =>
+			renderStatusLine({ icon, title: "Proc", description, meta }, theme);
+		if (!result) return [headerFor(inFlightStatus(options))];
+		if (result.isError) return errorRows(headerFor("error"), firstText(result) || "Process read failed.", theme);
 		if (details?.job)
 			return [
-				header,
-				jobRow(details.job, theme),
+				headerFor("success"),
+				`${INDENT}${jobRow(details.job, theme)}`,
 				...preview(
 					details.log ?? details.job.errorText ?? details.job.resultText ?? "",
 					expanded,
@@ -230,45 +284,50 @@ export function renderProcRead(
 				.slice(-limit)
 				.map(
 					line =>
-						`  ${styleTerminalRow(truncateToWidth(safe(line), TRUNCATE_LENGTHS.LINE, Ellipsis.Unicode), theme.fg("toolOutput", ""))}`,
+						`${INDENT}${styleTerminalRow(truncateToWidth(safe(line), TRUNCATE_LENGTHS.LINE), theme.fg("toolOutput", ""))}`,
 				);
-			if (output.length > limit) visible.unshift(theme.fg("dim", `  … ${output.length - limit} earlier lines`));
-			return [header, ...visible];
+			if (output.length > limit)
+				visible.unshift(
+					`${INDENT}${theme.fg("dim", formatMoreItems(output.length - limit, "line", theme, "earlier"))}`,
+				);
+			return [headerFor("success", daemonMeta(daemon, theme)), ...visible];
 		}
 		if (id && !details?.jobs && !details?.daemons && !details?.agents) {
-			return [header, ...preview(firstText(result), expanded, theme, "toolOutput")];
+			return [headerFor("success"), ...preview(firstText(result), expanded, theme, "toolOutput")];
 		}
 		const jobs = details?.jobs ?? [];
 		const services = details?.daemons ?? [];
 		const agents = details?.agents ?? [];
 		const meta = [
-			`${jobs.length} jobs`,
-			`${services.length} services`,
-			...(agents.length ? [`${agents.length} agents`] : []),
+			`${jobs.length} ${pluralize("job", jobs.length)}`,
+			`${services.length} ${pluralize("service", services.length)}`,
 		];
-		const listHeader = renderStatusLine({ icon: "info", title, meta }, theme);
+		if (agents.length) meta.push(`${agents.length} ${pluralize("agent", agents.length)}`);
 		const items = [
-			...jobs.map(job => ({ label: jobRow(job, theme) })),
-			...services.map(service => ({
-				label: `${formatBadge("service", "accent", theme)} ${theme.fg("toolOutput", safe(service.name))} ${formatBadge(service.state, service.state === "failed" ? "error" : service.state === "ready" || service.state === "running" ? "success" : "warning", theme)} ${daemonMeta(service, theme).slice(1).join(theme.sep.dot)}`,
-			})),
-			...agents.map(agent => ({
-				label: `${formatBadge("agent", agent.live ? "accent" : "warning", theme)} ${theme.fg("toolOutput", safe(agent.id))} ${theme.fg("dim", formatDuration(agent.ageMs))}`,
-			})),
+			...jobs.map(job => jobRow(job, theme)),
+			...services.map(service => serviceRow(service, theme)),
+			...agents.map(agent =>
+				itemRow(
+					agent.live ? "running" : "success",
+					agent.id,
+					[theme.fg("dim", "agent"), theme.fg("dim", formatDuration(agent.ageMs))],
+					theme,
+				),
+			),
 		];
 		return [
-			listHeader,
+			headerFor(items.length ? "success" : "warning", meta),
 			...renderTreeList(
 				{
 					items,
 					expanded,
+					flush: true,
 					maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
 					itemType: "process",
-					renderItem: item => item.label,
+					renderItem: item => item,
 				},
 				theme,
-			),
-			...(items.length ? [] : [theme.fg("dim", "No background jobs or services.")]),
+			).map(line => `${INDENT}${line}`),
 		];
 	}, options);
 }
@@ -337,12 +396,12 @@ export function describeAgentWrite(
 	const failed = receipts.length - delivered;
 	const meta: TspSpan[] = [];
 	if (recipient === "all") meta.push(span("broadcast", "muted"));
-	if (receipts.length === 1) meta.push(span(receipts[0]!.outcome, RECEIPT_TONE[receipts[0]!.outcome]));
+	if (receipts.length === 1) meta.push(span(receipts[0]!.outcome, "muted"));
 	else if (receipts.length > 1) {
-		if (delivered) meta.push(span(`${delivered} delivered`, "success"));
-		if (failed) meta.push(span(`${failed} failed`, "error"));
+		if (delivered) meta.push(span(`${delivered} delivered`, "muted"));
+		if (failed) meta.push(span(`${failed} failed`, "muted"));
 	}
-	const head = toolHead("IRC", span(recipient, "accent"), ...meta);
+	const head = toolHead("IRC", span(`→ ${recipient}`, "accent"), ...meta);
 	const error = result?.isError === true || (failed > 0 && delivered === 0);
 	if (result?.isError && receipts.length === 0) {
 		return { head, tone: "error", body: [errorText(firstText(result) || "Message delivery failed.")] };
@@ -359,7 +418,7 @@ export function describeAgentWrite(
 						"item",
 						{
 							label: [span(safe(receipt.to), "toolOutput")],
-							value: [span(receipt.outcome, RECEIPT_TONE[receipt.outcome])],
+							value: [span(receipt.outcome, "muted")],
 							detail: receipt.error ? [span(safe(receipt.error), "error")] : undefined,
 							tone: RECEIPT_TONE[receipt.outcome],
 						},
@@ -382,9 +441,12 @@ export function describeProcWrite(
 ): NativeToolView {
 	const daemon = details && "daemon" in details ? details.daemon : undefined;
 	const head = toolHead(
-		`Proc ${action}`,
-		span(safe(id || "…"), "accent"),
-		daemon ? daemonMetaText(daemon) : action === "mode" && content ? safe(content) : undefined,
+		"Proc",
+		span(
+			action === "mode" && content?.trim() ? `mode ${safe(id)} ${safe(content.trim())}` : `${action} ${safe(id)}`,
+			"accent",
+		),
+		daemon ? daemonMetaText(daemon) : undefined,
 	);
 	if (result?.isError) {
 		return { head, tone: "error", body: [errorText(firstText(result) || "Process operation failed.")] };
@@ -414,7 +476,7 @@ export function describeProcWrite(
 			),
 		);
 	}
-	return { head, tone: result !== undefined && action === "kill" ? "warning" : undefined, body };
+	return { head, body };
 }
 
 /** TSP view of a `proc://` read: job/service detail, logs, or the process table. */
@@ -424,8 +486,8 @@ export function describeProcRead(
 	details: ProcReadDetails | undefined,
 ): NativeToolView {
 	const daemon = details?.daemon;
-	const title = id ? "Proc" : "Proc jobs & services";
-	const head = toolHead(title, id ? span(safe(id), "accent") : undefined, daemon ? daemonMetaText(daemon) : undefined);
+	const subject = span(id ? safe(id) : "jobs & services", "accent");
+	const head = toolHead("Proc", subject, daemon ? daemonMetaText(daemon) : undefined);
 	if (result?.isError) {
 		return { head, tone: "error", body: [errorText(firstText(result) || "Process read failed.")] };
 	}
@@ -481,10 +543,13 @@ export function describeProcRead(
 			),
 		),
 	];
-	const counts = [`${jobs.length} jobs`, `${services.length} services`];
-	if (agents.length) counts.push(`${agents.length} agents`);
+	const counts = [
+		`${jobs.length} ${pluralize("job", jobs.length)}`,
+		`${services.length} ${pluralize("service", services.length)}`,
+	];
+	if (agents.length) counts.push(`${agents.length} ${pluralize("agent", agents.length)}`);
 	return {
-		head: toolHead(title, id ? span(safe(id), "accent") : undefined, counts.join(" · ")),
+		head: toolHead("Proc", subject, counts.join(" · ")),
 		body: [node("list", { empty: "No background jobs or services.", role: "omp.tool.proc.table" }, items)],
 	};
 }

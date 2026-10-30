@@ -1,5 +1,5 @@
 import type { NativeToolView, ToolRenderer, ToolRenderResult } from "./renderer";
-import { type Component, padding, Text, visibleWidth } from "../index";
+import type { Component } from "../index";
 import type { TspTone } from "@oh-my-pi/pi-wire";
 import { ansi, compact, item, list, md, node, span, text } from "../native/describe";
 import type { NativeChild, NativeNode } from "../native/node";
@@ -7,18 +7,19 @@ import { OwnerMemo } from "../native/memo";
 import { plainText } from "../native/spans";
 import { errorView, noteText, toolHead } from "./native-view";
 import type { RenderResultOptions } from "./renderer";
-import type { Theme, ThemeColor } from "../theme/theme";
-import { outputBlockContentWidth, renderStatusLine } from "../render";
-import { framedToolCard } from "../render/tool-card";
+import type { Theme } from "../theme/theme";
+import type { StatusLineOptions } from "../render";
+import { framedToolCard, plainToolCard, type ToolCardPhase, type ToolCardSection } from "../render/tool-card";
 
 import { formatShortSha, pushLine } from "./gh-format";
 import {
+	formatCount,
+	formatErrorText,
 	formatExpandHint,
 	formatMoreItems,
 	formatStatusIcon,
 	PREVIEW_LIMITS,
 	replaceTabs,
-	type ToolUIColor,
 	type ToolUIStatus,
 	TRUNCATE_LENGTHS,
 	sanitizeDisplayWarning,
@@ -35,26 +36,29 @@ type GithubToolRenderArgs = {
 };
 
 const SUCCESS_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
-const FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled", "action_required", "startup_failure"]);
+const FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "action_required", "startup_failure"]);
 const RUNNING_STATUSES = new Set(["in_progress"]);
-const PENDING_STATUSES = new Set(["queued", "requested", "waiting", "pending"]);
-const FALLBACK_WIDTH = 80;
+/** Error lines shown under a failed call's header. */
+const MAX_ERROR_LINES = 5;
 
-const OP_TITLES: Record<string, string> = {
-	repo_view: "GitHub Repo",
-	pr_checkout: "GitHub PR Checkout",
-	pr_push: "GitHub PR Push",
-	search_issues: "GitHub Search Issues",
-	search_prs: "GitHub Search PRs",
-	search_code: "GitHub Search Code",
-	search_commits: "GitHub Search Commits",
-	search_repos: "GitHub Search Repos",
-	run_watch: "GitHub Run Watch",
+const GITHUB_TITLE = "GitHub";
+
+/** The operation word(s) leading the subject (`search PRs`, `checkout PR`). */
+const OP_LABELS: Record<string, string> = {
+	repo_view: "repo",
+	pr_checkout: "checkout PR",
+	pr_push: "push PR",
+	search_issues: "search issues",
+	search_prs: "search PRs",
+	search_code: "search code",
+	search_commits: "search commits",
+	search_repos: "search repos",
+	run_watch: "watch",
 };
 
-function formatOpTitle(op: string | undefined): string {
-	if (op && OP_TITLES[op]) return OP_TITLES[op];
-	return "GitHub";
+function formatOpLabel(op: string | undefined): string | undefined {
+	if (!op) return undefined;
+	return OP_LABELS[op] ?? op.replace(/_/g, " ");
 }
 
 type FitText = (value: string, width: number) => string;
@@ -85,60 +89,79 @@ function formatPrIdentifier(pr: string | string[] | undefined, fit: FitText = tr
 	return extractIssueId(pr, fit);
 }
 
-function buildOpMeta(args: GithubToolRenderArgs, fit: FitText = truncateVisualWidth): string[] {
-	const meta: string[] = [];
-	const op = args.op;
-	switch (op) {
+function trimmedArg(value: unknown): string | undefined {
+	return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+/** What `run_watch` watches: a run id, a branch, or the current HEAD. */
+function watchTarget(args: GithubToolRenderArgs): string {
+	const runId = trimmedArg(args.run);
+	if (runId) return `run #${runId}`;
+	const branch = trimmedArg(args.branch);
+	return branch ? `branch ${branch}` : "HEAD";
+}
+
+/** The header subject: the op words, then its primary argument (`search PRs is:open`). */
+function githubSubject(args: GithubToolRenderArgs, fit: FitText = truncateVisualWidth): string | undefined {
+	const label = formatOpLabel(args.op);
+	let target: string | undefined;
+	switch (args.op) {
 		case "pr_checkout":
-		case "pr_push": {
-			const id = formatPrIdentifier(args.pr, fit);
-			if (id) meta.push(id);
-			else if (args.branch) meta.push(args.branch);
-			if (args.repo) meta.push(args.repo);
+		case "pr_push":
+			target = formatPrIdentifier(args.pr, fit) ?? args.branch;
 			break;
-		}
 		case "search_issues":
 		case "search_prs":
 		case "search_code":
-		case "search_commits": {
-			if (args.query) meta.push(fit(args.query, TRUNCATE_LENGTHS.CONTENT));
-			if (args.repo) meta.push(args.repo);
+		case "search_commits":
+		case "search_repos":
+			target = args.query ? fit(replaceTabs(args.query), TRUNCATE_LENGTHS.CONTENT) : undefined;
 			break;
-		}
-		case "search_repos": {
-			if (args.query) meta.push(fit(args.query, TRUNCATE_LENGTHS.CONTENT));
+		case "repo_view":
+			target = args.repo;
 			break;
-		}
-		case "repo_view": {
-			if (args.repo) meta.push(args.repo);
-			if (args.branch) meta.push(args.branch);
-			break;
-		}
 		case "run_watch":
+			target = watchTarget(args);
 			break;
-		default: {
-			if (args.repo) meta.push(args.repo);
-			break;
-		}
 	}
-	return meta;
+	const subject = [label, target].filter(Boolean).join(" ");
+	return subject || undefined;
 }
 
-function getWatchHeader(watch: GhRunWatchViewDetails): string {
-	if (watch.mode === "run" && watch.run) {
-		if (watch.state === "watching") {
-			return `watching run #${watch.run.id} on ${watch.repo}`;
-		}
-
-		return `run #${watch.run.id} on ${watch.repo}`;
+/** Subject context: the repository (and branch for repo views) when not already the subject. */
+function githubContext(args: GithubToolRenderArgs): string[] {
+	switch (args.op) {
+		case "repo_view":
+			return args.branch ? [args.branch] : [];
+		case "search_repos":
+		case "run_watch":
+			return [];
+		default:
+			return args.repo ? [args.repo] : [];
 	}
+}
 
-	const shortSha = formatShortSha(watch.headSha) ?? "this commit";
-	if (watch.state === "watching") {
-		return `watching ${shortSha} on ${watch.repo}`;
-	}
+function githubStatus(
+	args: GithubToolRenderArgs,
+	icon: ToolUIStatus,
+	theme: Theme,
+	options: { spinnerFrame?: number; meta?: string[] } = {},
+): StatusLineOptions {
+	const subject = [githubSubject(args), ...githubContext(args)].filter(Boolean).join(theme.sep.dot);
+	return {
+		icon,
+		spinnerFrame: options.spinnerFrame,
+		title: GITHUB_TITLE,
+		description: subject || undefined,
+		meta: options.meta,
+	};
+}
 
-	return `workflow runs for ${shortSha} on ${watch.repo}`;
+/** Result meta for a watch: the repository, and the commit when watching one. */
+function watchMeta(watch: GhRunWatchViewDetails): string[] {
+	const meta = [watch.repo];
+	if (watch.mode === "commit") meta.push(formatShortSha(watch.headSha) ?? "this commit");
+	return meta;
 }
 
 function getRunLabel(run: GhRunWatchRunDetails): string {
@@ -156,84 +179,33 @@ function getRunMeta(run: GhRunWatchRunDetails): string[] {
 	return parts;
 }
 
-function formatRunLine(run: GhRunWatchRunDetails, theme: Theme): string {
-	const title = theme.fg("accent", getRunLabel(run));
-	const metaParts = getRunMeta(run);
-	const meta = metaParts.map((part, index) =>
-		index === metaParts.length - 1 ? theme.fg("muted", part) : theme.fg("text", part),
-	);
-	return [title, ...meta].join("  ");
+/** The lifecycle of a workflow run or job, as a status icon state. */
+function workflowStatus(entry: { status?: string; conclusion?: string }): ToolUIStatus {
+	if (entry.conclusion) {
+		if (SUCCESS_CONCLUSIONS.has(entry.conclusion)) return "success";
+		if (entry.conclusion === "cancelled") return "aborted";
+		if (FAILURE_CONCLUSIONS.has(entry.conclusion)) return "error";
+	}
+	if (entry.status && RUNNING_STATUSES.has(entry.status)) return "running";
+	return "pending";
 }
 
-function getJobStateVisual(
-	job: GhRunWatchJobDetails,
-	theme: Theme,
-): { iconRaw: string; iconColor: ToolUIColor; textColor: ThemeColor } {
-	if (job.conclusion && SUCCESS_CONCLUSIONS.has(job.conclusion)) {
-		return {
-			iconRaw: theme.status.success,
-			iconColor: "accent",
-			textColor: "success",
-		};
-	}
-
-	if (job.conclusion && FAILURE_CONCLUSIONS.has(job.conclusion)) {
-		return {
-			iconRaw: theme.status.error,
-			iconColor: "error",
-			textColor: "error",
-		};
-	}
-
-	if (job.status && RUNNING_STATUSES.has(job.status)) {
-		return {
-			iconRaw: theme.status.enabled,
-			iconColor: "warning",
-			textColor: "warning",
-		};
-	}
-
-	if (job.status && PENDING_STATUSES.has(job.status)) {
-		return {
-			iconRaw: theme.status.shadowed,
-			iconColor: "muted",
-			textColor: "muted",
-		};
-	}
-
-	return {
-		iconRaw: theme.status.shadowed,
-		iconColor: "muted",
-		textColor: "muted",
-	};
-}
-
-function renderJobLine(job: GhRunWatchJobDetails, width: number, theme: Theme): string {
-	const visual = getJobStateVisual(job, theme);
-	const prefix = theme.fg(visual.iconColor, `${visual.iconRaw} `);
-	const durationLabel = job.durationSeconds !== undefined ? `${job.durationSeconds}s` : undefined;
-	const styledDuration = durationLabel ? theme.fg(visual.textColor, durationLabel) : undefined;
-	const reservedWidth = visibleWidth(prefix) + (styledDuration ? 1 + visibleWidth(styledDuration) : 0);
-	const nameWidth = Math.max(8, width - reservedWidth);
-	const jobName = theme.fg(visual.textColor, truncateVisualWidth(replaceTabs(job.name), nameWidth));
-	let line = `${prefix}${jobName}`;
-	if (styledDuration) {
-		line += padding(Math.max(1, width - visibleWidth(line) - visibleWidth(styledDuration)));
-		line += styledDuration;
-	}
-	return line;
-}
-
-function renderRunBlock(run: GhRunWatchRunDetails, width: number, theme: Theme): string[] {
-	const lines = [formatRunLine(run, theme)];
+/** One run row (`<icon> <workflow> <branch> · #id`) with its jobs as tree children. */
+function renderRunRows(run: GhRunWatchRunDetails, theme: Theme): string[] {
+	const runMeta = theme.fg("dim", getRunMeta(run).join(theme.sep.dot));
+	const lines = [`${formatStatusIcon(workflowStatus(run), theme)} ${theme.fg("accent", getRunLabel(run))} ${runMeta}`];
 	if (run.jobs.length === 0) {
-		lines.push(theme.fg("dim", "waiting for workflow jobs..."));
+		lines.push(
+			`${theme.fg("dim", theme.tree.last)} ${theme.fg("dim", `waiting for workflow jobs${theme.format.ellipsis}`)}`,
+		);
 		return lines;
 	}
-
-	for (const job of run.jobs) {
-		lines.push(renderJobLine(job, width, theme));
-	}
+	run.jobs.forEach((job, index) => {
+		const branch = theme.fg("dim", index === run.jobs.length - 1 ? theme.tree.last : theme.tree.branch);
+		const duration = job.durationSeconds !== undefined ? ` ${theme.fg("dim", `${job.durationSeconds}s`)}` : "";
+		const name = theme.fg("toolOutput", replaceTabs(job.name));
+		lines.push(`${branch} ${formatStatusIcon(workflowStatus(job), theme)} ${name}${duration}`);
+	});
 	return lines;
 }
 
@@ -242,84 +214,60 @@ function formatUnavailableLog(entry: GhRunWatchFailedLogDetails): string {
 	return `log tail unavailable${reason ? `: ${reason}` : ""}`;
 }
 
+/** The runs and jobs being watched. */
+function renderWatchRows(watch: GhRunWatchViewDetails, theme: Theme): string[] {
+	const rows: string[] = [];
+	if (watch.note) rows.push(theme.fg("dim", replaceTabs(watch.note)));
+	if (watch.mode === "run" && watch.run) {
+		rows.push(...renderRunRows(watch.run, theme));
+	} else if (watch.mode === "commit") {
+		const runs = watch.runs ?? [];
+		if (runs.length === 0) rows.push(theme.fg("dim", `waiting for workflow runs${theme.format.ellipsis}`));
+		for (const run of runs) rows.push(...renderRunRows(run, theme));
+	}
+	return rows;
+}
+
+/**
+ * Failed-job log tails: a job row, then its last log lines. Earlier entries keep
+ * their `… N earlier log lines` marker in place; the last entry's marker is
+ * returned for the bottom border.
+ */
 function renderFailedLogs(
 	failedLogs: GhRunWatchFailedLogDetails[],
 	width: number,
 	theme: Theme,
 	expanded: boolean,
-): string[] {
-	if (failedLogs.length === 0) {
-		return [];
-	}
-
+): { lines: string[]; marker?: string } {
 	const lines: string[] = [];
-	for (const entry of failedLogs) {
-		const context = entry.workflowName ? `${entry.workflowName}  #${entry.runId}` : `run #${entry.runId}`;
+	let marker: string | undefined;
+	failedLogs.forEach((entry, index) => {
+		const context = entry.workflowName
+			? `${entry.workflowName}${theme.sep.dot}#${entry.runId}`
+			: `run #${entry.runId}`;
 		lines.push(
-			theme.fg("error", `${theme.status.error} ${replaceTabs(entry.jobName)}  ${theme.fg("muted", context)}`),
+			`${formatStatusIcon("error", theme)} ${theme.fg("toolOutput", replaceTabs(entry.jobName))} ${theme.fg("dim", context)}`,
 		);
-
 		if (!entry.available || !entry.tail) {
-			lines.push(theme.fg("dim", truncateVisualWidth(`  ${formatUnavailableLog(entry)}`, Math.max(8, width))));
-			continue;
+			lines.push(theme.fg("dim", truncateVisualWidth(formatUnavailableLog(entry), Math.max(8, width))));
+			return;
 		}
-
 		const tailLines = replaceTabs(entry.tail)
 			.split("\n")
 			.filter(line => line.length > 0);
-		const previewLimit = expanded ? tailLines.length : Math.min(PREVIEW_LIMITS.OUTPUT_COLLAPSED, tailLines.length);
-		for (const line of tailLines.slice(-previewLimit)) {
-			lines.push(theme.fg("dim", `  ${truncateVisualWidth(line, Math.max(8, width - 2))}`));
+		const shown = expanded ? tailLines : tailLines.slice(-PREVIEW_LIMITS.OUTPUT_COLLAPSED);
+		const hidden = tailLines.length - shown.length;
+		const entryMarker =
+			hidden > 0
+				? `${formatMoreItems(hidden, "log line", theme, "earlier")} ${formatExpandHint(theme, expanded, true)}`
+				: undefined;
+		if (entryMarker && index < failedLogs.length - 1) lines.push(theme.fg("dim", entryMarker));
+		else marker = entryMarker;
+		for (const line of shown) {
+			lines.push(theme.fg("toolOutput", expanded ? line : truncateVisualWidth(line, Math.max(8, width))));
 		}
-
-		if (!expanded && tailLines.length > previewLimit) {
-			const remaining = tailLines.length - previewLimit;
-			lines.push(theme.fg("dim", `  … ${remaining} more log lines ${formatExpandHint(theme, false, true)}`));
-		}
-	}
-
-	return lines;
-}
-
-function buildWatchSections(
-	watch: GhRunWatchViewDetails,
-	theme: Theme,
-	options: RenderResultOptions,
-	width: number,
-): Array<{ label?: string; content: string[] }> {
-	const main: string[] = [];
-
-	if (watch.note) {
-		main.push(theme.fg("dim", replaceTabs(watch.note)));
-	}
-
-	if (watch.mode === "run" && watch.run) {
-		main.push(...renderRunBlock(watch.run, width, theme));
-	} else if (watch.mode === "commit") {
-		const runs = watch.runs ?? [];
-		if (runs.length === 0) {
-			main.push(theme.fg("dim", "waiting for workflow runs..."));
-		} else {
-			runs.forEach((run, index) => {
-				if (index > 0) {
-					main.push("");
-				}
-				main.push(...renderRunBlock(run, width, theme));
-			});
-		}
-	}
-
-	const sections: Array<{ label?: string; content: string[] }> = [];
-	if (main.length > 0) {
-		sections.push({ content: main });
-	}
-
-	const failed = renderFailedLogs(watch.failedLogs ?? [], width, theme, options.expanded);
-	if (failed.length > 0) {
-		sections.push({ label: "failed logs", content: failed });
-	}
-
-	return sections;
+	});
+	return { lines, marker };
 }
 
 function extractText(content: Array<{ type: string; text?: string }>): string {
@@ -330,6 +278,115 @@ function extractText(content: Array<{ type: string; text?: string }>): string {
 		.join("\n");
 }
 
+/** Error card: the header with error status, then a few error lines. */
+function renderErrorCard(status: StatusLineOptions, message: string, theme: Theme): Component {
+	const lines = message
+		.split("\n")
+		.filter(line => line.trim().length > 0)
+		.slice(0, MAX_ERROR_LINES)
+		.map(line => formatErrorText(line, theme));
+	return plainToolCard(theme, () => ({
+		status,
+		phase: "error",
+		body: lines.length > 0 ? lines : [formatErrorText("request failed", theme)],
+	}));
+}
+
+/** One `- <title>` entry of a search result, with its `  Key: value` fields. */
+interface SearchItem {
+	title: string;
+	fields: Map<string, string>;
+}
+
+/** Fields summarized on a collapsed search row, per search op, in order. */
+const SEARCH_SUMMARY_FIELDS: Record<string, readonly string[]> = {
+	search_issues: ["State", "Author", "Updated"],
+	search_prs: ["State", "Author", "Updated"],
+	search_commits: ["Author", "Date"],
+	search_code: ["Repo", "Match"],
+	search_repos: ["Language", "Stars", "Updated"],
+};
+
+/**
+ * Parse the search tool's Markdown (`Results: N`, then `- <title>` entries
+ * with indented `Key: value` fields); undefined when `text` is not one.
+ */
+function parseSearchResults(text: string): { total: number; items: SearchItem[] } | undefined {
+	let total: number | undefined;
+	const items: SearchItem[] = [];
+	for (const line of text.split("\n")) {
+		const resultsMatch = line.match(/^Results: (\d+)$/);
+		if (resultsMatch) {
+			total = Number(resultsMatch[1]);
+			continue;
+		}
+		if (line.startsWith("- ")) {
+			items.push({ title: line.slice(2).trim(), fields: new Map() });
+			continue;
+		}
+		const fieldMatch = line.match(/^ {2}([^:]+): (.*)$/);
+		if (fieldMatch && items.length > 0) items[items.length - 1].fields.set(fieldMatch[1], fieldMatch[2]);
+	}
+	return total === undefined ? undefined : { total, items };
+}
+
+/** A field value for display: ISO timestamps shortened to their date. */
+function displayField(value: string): string {
+	return replaceTabs(/^\d{4}-\d{2}-\d{2}T/.test(value) ? value.slice(0, 10) : value);
+}
+
+/**
+ * Search results as a flush list: one row per result (title, then a few dim
+ * facts); expanded, every field hangs beneath its result as a tree child.
+ */
+function renderSearchResults(
+	search: { total: number; items: SearchItem[] },
+	options: RenderResultOptions,
+	theme: Theme,
+	args: GithubToolRenderArgs,
+): Component {
+	if (search.items.length === 0) {
+		const status = githubStatus(args, "warning", theme, { meta: [formatCount("result", search.total)] });
+		return plainToolCard(theme, () => ({ status, phase: "warning" }));
+	}
+	const status = githubStatus(args, "success", theme, { meta: [formatCount("result", search.total)] });
+	const summaryFields = SEARCH_SUMMARY_FIELDS[args.op ?? ""] ?? [];
+	return plainToolCard(theme, ({ contentWidth }) => {
+		const { expanded } = options;
+		const shown = expanded ? search.items : search.items.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS);
+		const body: string[] = [];
+		for (const item of shown) {
+			const title = theme.fg("toolOutput", replaceTabs(item.title));
+			if (expanded) {
+				body.push(title);
+				const fields = [...item.fields];
+				fields.forEach(([key, value], index) => {
+					const branch = theme.fg("dim", index === fields.length - 1 ? theme.tree.last : theme.tree.branch);
+					body.push(`${branch} ${theme.fg("dim", `${key}:`)} ${theme.fg("muted", displayField(value))}`);
+				});
+				continue;
+			}
+			const facts = summaryFields.flatMap(key => {
+				const value = item.fields.get(key);
+				return value ? [displayField(value)] : [];
+			});
+			const row = facts.length > 0 ? `${title} ${theme.fg("dim", facts.join(theme.sep.dot))}` : title;
+			body.push(truncateVisualWidth(row, contentWidth));
+		}
+		const remaining = search.items.length - shown.length;
+		if (remaining > 0) {
+			body.push(
+				`${theme.fg("dim", formatMoreItems(remaining, "result", theme))} ${formatExpandHint(theme, expanded, true)}`,
+			);
+		} else if (!expanded && shown.some(item => [...item.fields.keys()].some(key => !summaryFields.includes(key)))) {
+			// Every result fits, but Ctrl+O still reveals the fields the summary row leaves out.
+			body.push(formatExpandHint(theme));
+		}
+		return { status, phase: "success", body };
+	});
+}
+
+/** Op output (search results, repo views, checkout receipts): flush rows, capped while collapsed. */
 function renderFallbackComponent(
 	result: { content: Array<{ type: string; text?: string }>; isError?: boolean },
 	options: RenderResultOptions,
@@ -337,99 +394,79 @@ function renderFallbackComponent(
 	args: GithubToolRenderArgs,
 ): Component {
 	const text = extractText(result.content);
-	const title = formatOpTitle(args.op);
-	const meta = buildOpMeta(args);
+	if (result.isError === true) return renderErrorCard(githubStatus(args, "error", theme), text, theme);
+
+	const search = args.op?.startsWith("search_") ? parseSearchResults(text) : undefined;
+	if (search) return renderSearchResults(search, options, theme, args);
+
+	const rows = replaceTabs(text)
+		.split("\n")
+		.filter(line => line.trim().length > 0);
+	if (rows.length === 0) {
+		const status = githubStatus(args, "warning", theme, { meta: ["no output"] });
+		return plainToolCard(theme, () => ({ status, phase: "warning" }));
+	}
+
+	const status = githubStatus(args, "success", theme);
+	return plainToolCard(theme, ({ contentWidth }) => {
+		const { expanded } = options;
+		const shown = expanded ? rows : rows.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS);
+		const body = shown.map(row => theme.fg("toolOutput", expanded ? row : truncateVisualWidth(row, contentWidth)));
+		const remaining = rows.length - shown.length;
+		if (remaining > 0) {
+			body.push(
+				`${theme.fg("dim", formatMoreItems(remaining, "line", theme))} ${formatExpandHint(theme, expanded, true)}`,
+			);
+		}
+		return { status, phase: "success", body };
+	});
+}
+
+/**
+ * A run watch: the runs with their jobs as status-iconed children. Flush while
+ * there is no log to show; failed-job logs are command output, so a watch with
+ * them is framed, with the logs as the last section.
+ */
+function renderWatchResult(
+	watch: GhRunWatchViewDetails,
+	result: { isError?: boolean },
+	options: RenderResultOptions,
+	theme: Theme,
+	args: GithubToolRenderArgs,
+): Component {
 	const isError = result.isError === true;
-	const success = !isError && Boolean(text);
-	const header = renderStatusLine(
-		success
-			? {
-					iconOverride: theme.styledSymbol("tool.gh", "accent"),
-					title,
-					titleColor: "accent",
-					meta,
-				}
-			: {
-					icon: isError ? "error" : "warning",
-					title,
-					titleColor: isError ? "error" : "accent",
-					meta,
-				},
-		theme,
-	);
+	const statusFor = (): StatusLineOptions => {
+		// A partial result only arrives once the watch is executing.
+		const icon: ToolUIStatus = options.isPartial ? "running" : isError ? "error" : "success";
+		return githubStatus({ ...args, op: "run_watch" }, icon, theme, {
+			spinnerFrame: options.spinnerFrame,
+			meta: watchMeta(watch),
+		});
+	};
+	const phaseFor = (): ToolCardPhase => (options.isPartial ? "partial" : isError ? "error" : "success");
+	const watchRows = renderWatchRows(watch, theme);
+	const failedLogs = watch.failedLogs ?? [];
 
-	if (!text) {
-		const empty = isError ? "request failed" : "no output";
-		return new Text(`${header}\n${theme.fg("dim", empty)}`, 0, 0);
+	if (failedLogs.length === 0) {
+		return plainToolCard(theme, () => ({ status: statusFor(), phase: phaseFor(), body: watchRows }));
 	}
-
-	const allLines = replaceTabs(text).split("\n");
-	while (allLines.length > 0 && allLines[0].trim() === "") allLines.shift();
-	while (allLines.length > 0 && allLines[allLines.length - 1].trim() === "") allLines.pop();
-
-	// Trivial one-line *success* result: a clean status line beats an almost-empty box.
-	// Errors always frame so the message reads as a structured block, never a raw red wrap.
-	if (allLines.length <= 1 && !isError) {
-		const body = allLines[0];
-		if (!body) return new Text(header, 0, 0);
-		const colored = isError ? theme.fg("error", body) : theme.fg("toolOutput", body);
-		return new Text(`${header}\n${colored}`, 0, 0);
-	}
-
-	return framedToolCard(theme, ({ width }) => {
-		const lineWidth = outputBlockContentWidth(width || FALLBACK_WIDTH);
-		const expanded = options.expanded;
-		const limit = expanded ? allLines.length : Math.min(allLines.length, PREVIEW_LIMITS.OUTPUT_EXPANDED);
-		const visible = allLines.slice(0, limit);
-		const remaining = allLines.length - visible.length;
-
-		const out: string[] = [];
-		for (const line of visible) {
-			const colored = isError ? theme.fg("error", line) : theme.fg("toolOutput", line);
-			out.push(truncateVisualWidth(colored, lineWidth));
-		}
-		if (!expanded && remaining > 0) {
-			const hint = formatExpandHint(theme, expanded, true);
-			const more = `${formatMoreItems(remaining, "line")}${hint ? ` ${hint}` : ""}`;
-			out.push(theme.fg("dim", more));
-		}
+	return framedToolCard(theme, ({ contentWidth }) => {
+		const { lines, marker } = renderFailedLogs(failedLogs, contentWidth, theme, options.expanded);
+		const sections: ToolCardSection[] =
+			watchRows.length > 0 ? [{ label: theme.fg("dim", "Failed logs"), content: lines }] : [{ content: lines }];
 		return {
-			header,
-			sections: out.length > 0 ? [{ content: out }] : [],
-			phase: isError ? "error" : "success",
-			borderColor: isError ? "error" : "borderMuted",
-			applyBg: false,
+			status: statusFor(),
+			phase: phaseFor(),
+			body: watchRows.length > 0 ? watchRows : undefined,
+			sections,
+			footerMeta: marker ? theme.fg("dim", marker) : undefined,
 		};
 	});
 }
 
-function renderWatchCall(args: GithubToolRenderArgs, options: RenderResultOptions, theme: Theme): Component {
-	const icon =
-		options.spinnerFrame !== undefined
-			? formatStatusIcon("running", theme, options.spinnerFrame)
-			: formatStatusIcon("pending", theme);
-
-	const runId = typeof args.run === "string" && args.run.trim().length > 0 ? args.run.trim() : undefined;
-	const branch = typeof args.branch === "string" && args.branch.trim().length > 0 ? args.branch.trim() : undefined;
-
-	const titleText = theme.fg("accent", "GitHub Run Watch");
-	let metaText: string;
-	if (runId) {
-		metaText = theme.fg("muted", `#${runId}`);
-	} else if (branch) {
-		metaText = theme.fg("text", branch);
-	} else {
-		metaText = theme.fg("muted", "current HEAD");
-	}
-
-	const header = `${icon} ${titleText}  ${metaText}`;
-	const wait = theme.fg("dim", "waiting for workflow data...");
-	return new Text(`${header}\n${wait}`, 0, 0);
-}
-
 function jobTone(job: GhRunWatchJobDetails): TspTone {
 	if (job.conclusion && SUCCESS_CONCLUSIONS.has(job.conclusion)) return "success";
-	if (job.conclusion && FAILURE_CONCLUSIONS.has(job.conclusion)) return "error";
+	if (job.conclusion && (job.conclusion === "cancelled" || FAILURE_CONCLUSIONS.has(job.conclusion))) return "error";
 	if (job.status && RUNNING_STATUSES.has(job.status)) return "warning";
 	return "muted";
 }
@@ -458,7 +495,7 @@ function describeRun(run: GhRunWatchRunDetails): NativeNode {
 	return node("section", { head }, [jobs], `run:${run.id}`);
 }
 
-function describeWatch(watch: GhRunWatchViewDetails, isError: boolean): NativeToolView {
+function describeWatch(watch: GhRunWatchViewDetails, isError: boolean, args: GithubToolRenderArgs): NativeToolView {
 	const runs: NativeChild[] = [];
 	if (watch.mode === "run" && watch.run) runs.push(describeRun(watch.run));
 	else if (watch.mode === "commit") {
@@ -475,7 +512,7 @@ function describeWatch(watch: GhRunWatchViewDetails, isError: boolean): NativeTo
 		return [title, ansi(entry.tail, { follow: true, preview: { lines: PREVIEW_LIMITS.OUTPUT_COLLAPSED } })];
 	});
 	return {
-		head: toolHead("GitHub Run Watch", getWatchHeader(watch)),
+		head: toolHead(GITHUB_TITLE, githubSubject({ ...args, op: "run_watch" }, KEEP_TEXT), ...watchMeta(watch)),
 		tone: isError ? "error" : undefined,
 		body: compact([
 			watch.note ? noteText(watch.note) : undefined,
@@ -489,12 +526,11 @@ function describeWatch(watch: GhRunWatchViewDetails, isError: boolean): NativeTo
 
 function describeFallback(result: ToolRenderResult<GhToolDetails>, args: GithubToolRenderArgs): NativeToolView {
 	const output = extractText(result.content).trim();
-	const title = formatOpTitle(args.op);
-	const meta = buildOpMeta(args, KEEP_TEXT);
-	if (result.isError === true) return errorView(title, output || "request failed", ...meta);
-	if (!output) return { head: toolHead(title, ...meta), tone: "warning", body: [noteText("no output")] };
+	const meta = [githubSubject(args, KEEP_TEXT), ...githubContext(args)];
+	if (result.isError === true) return errorView(GITHUB_TITLE, output || "request failed", ...meta);
+	if (!output) return { head: toolHead(GITHUB_TITLE, ...meta), tone: "warning", body: [noteText("no output")] };
 	return {
-		head: toolHead(title, ...meta),
+		head: toolHead(GITHUB_TITLE, ...meta),
 		body: [md(plainText(output))],
 		preview: { lines: PREVIEW_LIMITS.OUTPUT_EXPANDED },
 	};
@@ -504,26 +540,11 @@ const githubResultMemo = new OwnerMemo<NativeToolView | undefined>();
 
 /** Render GitHub operations and live workflow status. */
 export const githubToolRenderer = {
-	// No animatedPendingPreview: renderCall materializes plain Text components
-	// once per display rebuild (no render closure), so a live spinner interval
-	// would request 30fps repaints while the visible glyph stays frozen.
 	renderCall(args: GithubToolRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
-		const op = typeof args.op === "string" && args.op.trim().length > 0 ? args.op.trim() : undefined;
-		if (op === "run_watch") {
-			return renderWatchCall({ ...args, op }, options, uiTheme);
-		}
-
-		const status: ToolUIStatus = options.spinnerFrame !== undefined ? "running" : "pending";
-		const header = renderStatusLine(
-			{
-				icon: status,
-				spinnerFrame: options.spinnerFrame,
-				title: formatOpTitle(op),
-				meta: buildOpMeta({ ...args, op }),
-			},
-			uiTheme,
-		);
-		return new Text(header, 0, 0);
+		const op = trimmedArg(args.op);
+		const icon: ToolUIStatus = options.executionStarted ? "running" : "pending";
+		const status = githubStatus({ ...args, op }, icon, uiTheme, { spinnerFrame: options.spinnerFrame });
+		return plainToolCard(uiTheme, () => ({ status }));
 	},
 
 	renderResult(
@@ -533,58 +554,14 @@ export const githubToolRenderer = {
 		args?: GithubToolRenderArgs,
 	): Component {
 		const watch = result.details?.watch;
-		if (watch) {
-			const isError = result.isError === true;
-			const isPartial = options.isPartial === true;
-			const header = renderStatusLine(
-				isPartial
-					? {
-							icon: options.spinnerFrame !== undefined ? "running" : "pending",
-							spinnerFrame: options.spinnerFrame,
-							title: "GitHub Run Watch",
-							meta: [getWatchHeader(watch)],
-						}
-					: isError
-						? {
-								icon: "error",
-								title: "GitHub Run Watch",
-								titleColor: "error",
-								meta: [getWatchHeader(watch)],
-							}
-						: {
-								iconOverride: uiTheme.styledSymbol("tool.gh", "accent"),
-								title: "GitHub Run Watch",
-								titleColor: "accent",
-								meta: [getWatchHeader(watch)],
-							},
-				uiTheme,
-			);
-			return framedToolCard(uiTheme, ({ width }) => {
-				const innerWidth = outputBlockContentWidth(width || FALLBACK_WIDTH);
-				const sections = buildWatchSections(watch, uiTheme, options, innerWidth);
-				return {
-					header,
-					sections,
-					phase: isPartial ? "partial" : isError ? "error" : "success",
-					borderColor: isError ? "error" : "borderMuted",
-					applyBg: false,
-				};
-			});
-		}
-
+		if (watch) return renderWatchResult(watch, result, options, uiTheme, args ?? {});
 		return renderFallbackComponent(result, options, uiTheme, args ?? {});
 	},
 
 	describeCall(args: GithubToolRenderArgs): NativeToolView {
-		const op = typeof args.op === "string" && args.op.trim().length > 0 ? args.op.trim() : undefined;
-		if (op !== "run_watch") {
-			return { head: toolHead(formatOpTitle(op), ...buildOpMeta({ ...args, op }, KEEP_TEXT)) };
-		}
-		const runId = typeof args.run === "string" && args.run.trim().length > 0 ? args.run.trim() : undefined;
-		const branch = typeof args.branch === "string" && args.branch.trim().length > 0 ? args.branch.trim() : undefined;
+		const op = trimmedArg(args.op);
 		return {
-			head: toolHead("GitHub Run Watch", runId ? `#${runId}` : (branch ?? "current HEAD")),
-			body: [noteText("waiting for workflow data...")],
+			head: toolHead(GITHUB_TITLE, githubSubject({ ...args, op }, KEEP_TEXT), ...githubContext({ ...args, op })),
 		};
 	},
 
@@ -596,7 +573,7 @@ export const githubToolRenderer = {
 		const watch = result.details?.watch;
 		const deps = [args?.op, options.isPartial, watch?.state, watch?.pollCount];
 		return githubResultMemo.get(result, deps, () =>
-			watch ? describeWatch(watch, result.isError === true) : describeFallback(result, args ?? {}),
+			watch ? describeWatch(watch, result.isError === true, args ?? {}) : describeFallback(result, args ?? {}),
 		);
 	},
 

@@ -68,7 +68,8 @@ describe("hub jobs task model badges", () => {
 			],
 		});
 
-		expect(text).toContain(`${thinkingLevelGlyph(ThinkingLevel.High, uiTheme)} ${identity} Architect`);
+		expect(text).toContain(`Architect${uiTheme.sep.dot}task`);
+		expect(text).toContain(`${thinkingLevelGlyph(ThinkingLevel.High, uiTheme)} ${identity}`);
 		expect(text.split(identity).length - 1).toBe(1);
 		expect(text).not.toContain(`${identity}:high`);
 		expect(text).not.toContain(uiTheme.icon.advisor);
@@ -98,10 +99,10 @@ describe("hub jobs task model badges", () => {
 		);
 		const row = text.split("\n")[1]!;
 
-		expect(row).toContain(`${uiTheme.icon.advisor} Architect`);
+		expect(row).toContain(`Architect${uiTheme.sep.dot}task${uiTheme.sep.dot}1.2s`);
 		expect(row).toContain(thinkingLevelGlyph(ThinkingLevel.High, uiTheme));
 		expect(row).toContain("…");
-		expect(row).toEndWith("1.2s");
+		expect(row).toEndWith(uiTheme.icon.advisor);
 		for (const line of text.split("\n")) expect(visibleWidth(line)).toBeLessThanOrEqual(60);
 	});
 
@@ -129,9 +130,8 @@ describe("hub jobs task model badges", () => {
 		);
 		const row = text.split("\n")[1]!;
 
-		expect(row).toContain(`${uiTheme.icon.advisor} Architect`);
-		expect(row).toContain("task");
-		expect(row).toEndWith("1.2s");
+		expect(row).toContain(`Architect${uiTheme.sep.dot}task${uiTheme.sep.dot}1.2s`);
+		expect(row).toEndWith(uiTheme.icon.advisor);
 		expect(text.split("\n")[2]).toContain("Architect 設計");
 		expect(text.split("\n")[3]).toContain("Follow-up design details");
 		for (const line of text.split("\n")) expect(visibleWidth(line)).toBeLessThanOrEqual(60);
@@ -168,7 +168,7 @@ describe("hub jobs task model badges", () => {
 		const session = { asyncJobManager: manager } as unknown as ToolSession;
 		try {
 			const text = renderJobText({ jobs: snapshotJobs(session, manager.getAllJobs()) }, true, true);
-			const prefix = `${thinkingLevelGlyph(ThinkingLevel.Max, uiTheme)} ${identity} ${uiTheme.icon.advisor} Architect`;
+			const prefix = `${thinkingLevelGlyph(ThinkingLevel.Max, uiTheme)} ${identity} ${uiTheme.icon.advisor}`;
 			expect(text).toContain(prefix);
 			expect(text.split(identity).length - 1).toBe(1);
 			expect(text).not.toContain(`${identity}:max`);
@@ -198,7 +198,7 @@ describe("hub jobs task model badges", () => {
 			],
 		});
 
-		expect(text).toContain("p/model:high Legacy");
+		expect(text).toContain(`Legacy${uiTheme.sep.dot}task${uiTheme.sep.dot}0ms${uiTheme.sep.dot}p/model:high`);
 		expect(text).not.toContain(thinkingLevelGlyph(ThinkingLevel.High, uiTheme));
 	});
 
@@ -275,46 +275,34 @@ describe("hub jobs task model badges", () => {
 		}
 	});
 
-	it("reserves custom tree prefixes and task status for long IDs with badges on or off", () => {
-		const priorTree = Object.getOwnPropertyDescriptor(uiTheme, "tree");
-		try {
-			Object.defineProperty(uiTheme, "tree", {
-				configurable: true,
-				value: { ...uiTheme.tree, branch: "界├", last: "界界└", vertical: "界界│" },
-			});
-			for (const enabled of [true, false]) {
-				cfgTaskShowResolvedModelBadge.override(settings, enabled);
-				for (const width of [40, 120]) {
-					const id = `LongWorker${"界".repeat(40)}`;
-					const text = renderJobText(
-						{
-							jobs: [
-								{
-									id,
-									type: "task",
-									status: "failed",
-									label: id,
-									durationMs: 1000,
-									resolvedModelIdentity: "provider/model",
-									advisor: true,
-								},
-							],
-						},
-						true,
-						false,
-						width,
-					);
-					const row = text.split("\n")[1]!;
-					expect(row).toStartWith("界界└ ");
-					expect(row).toEndWith(formatDuration(1000));
-					expect(row).toContain("LongWorker");
-					expect(row).toContain("task");
-					for (const line of text.split("\n")) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-				}
+	it("truncates long IDs ahead of the type and duration, with badges on or off", () => {
+		for (const enabled of [true, false]) {
+			cfgTaskShowResolvedModelBadge.override(settings, enabled);
+			for (const width of [40, 120]) {
+				const id = `LongWorker${"界".repeat(40)}`;
+				const text = renderJobText(
+					{
+						jobs: [
+							{
+								id,
+								type: "task",
+								status: "failed",
+								label: id,
+								durationMs: 1000,
+								resolvedModelIdentity: "provider/model",
+								advisor: true,
+							},
+						],
+					},
+					true,
+					false,
+					width,
+				);
+				const row = text.split("\n")[1]!;
+				expect(row).toContain("LongWorker");
+				expect(row).toContain(`${uiTheme.sep.dot}task${uiTheme.sep.dot}${formatDuration(1000)}`);
+				for (const line of text.split("\n")) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 			}
-		} finally {
-			if (priorTree) Object.defineProperty(uiTheme, "tree", priorTree);
-			else Reflect.deleteProperty(uiTheme, "tree");
 		}
 	});
 

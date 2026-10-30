@@ -76,7 +76,7 @@ describe("apply_patch rendering", () => {
 
 		expect(rendered).toContain("src/first.ts");
 		expect(rendered).toContain("Edit");
-		expect(rendered).toContain("(+1 more)");
+		expect(rendered).toContain("2 files");
 	});
 
 	it("does not show missing end-marker errors while apply_patch input is streaming", async () => {
@@ -125,7 +125,7 @@ describe("apply_patch rendering", () => {
 
 			const component = new ToolExecutionComponent("apply_patch", { input }, {}, undefined, uiStub, tmpDir);
 			const before = Bun.stripANSI(component.render(160).join("\n"));
-			expect(before).not.toContain("(preview)");
+			expect(before).not.toMatch(/─ preview ─/);
 
 			component.updateStreamPreview({
 				generation: 1,
@@ -140,7 +140,7 @@ describe("apply_patch rendering", () => {
 			});
 			component.setArgsComplete();
 			const after = Bun.stripANSI(component.render(160).join("\n"));
-			expect(after).toContain("(preview)");
+			expect(after).toMatch(/─ preview ─/);
 			expect(after).toContain("const value = 2;");
 		} finally {
 			await removeWithRetries(tmpDir);

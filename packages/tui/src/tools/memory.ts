@@ -4,21 +4,19 @@ import type { NativeToolView, ToolRenderer } from "./renderer";
  * `reflect`).
  *
  * These keep the transcript terse — one status line plus, for `retain`, one
- * `Remember: …` line per stored item — instead of the generic JSON arg tree,
- * which exploded multi-line memory blobs into an unreadable wall. The tool
- * container is a transparent passthrough, so these renderers stay frameless:
- * a status line with a couple of dim bullets reads far cleaner than boxing a
+ * row per stored item — instead of the generic JSON arg tree, which exploded
+ * multi-line memory blobs into an unreadable wall. They are flush cards: a
+ * status line over a few indented rows reads far cleaner than boxing a
  * one-line memory note.
  */
 import type { Component } from "../index";
-import { Text } from "../index";
 import type { RenderResultOptions } from "./renderer";
 import type { Theme } from "../theme/theme";
-import { Ellipsis, renderStatusLine, truncateToWidth } from "../render";
+import { Ellipsis, plainToolCard, type StatusLineOptions, truncateToWidth } from "../render";
 import {
-	createCachedComponent,
-	formatErrorMessage,
+	formatErrorText,
 	formatExpandHint,
+	formatMoreItems,
 	PREVIEW_LIMITS,
 	replaceTabs,
 	type ToolUIStatus,
@@ -27,9 +25,6 @@ import { item, list, md, span, text } from "../native/describe";
 import { OwnerMemo } from "../native/memo";
 import { plainText } from "../native/spans";
 import { errorView, resultText, toolHead } from "./native-view";
-
-// Each stored memory renders as `<bullet> <content>`; the bullet glyph comes
-// from the active theme (`•` by default, a nerd-font dot under nerd themes).
 
 interface RetainRenderArgs {
 	items?: unknown;
@@ -52,37 +47,62 @@ function retainContents(args: RetainRenderArgs | undefined): string[] {
 	return contents;
 }
 
-/** Single-line query header used by `recall`/`reflect` calls and results. */
-function queryHeader(
+/** `pending` before execution starts, `running` (spinner) while it executes. */
+function callIcon(options: RenderResultOptions): ToolUIStatus {
+	return options.executionStarted ? "running" : "pending";
+}
+
+/** Status line for a memory tool: the fixed title and, for recall/reflect, the query as subject. */
+function memoryStatus(
 	title: string,
 	query: string | undefined,
 	icon: ToolUIStatus,
-	theme: Theme,
-	meta?: string[],
-	iconOverride?: string,
-): string {
+	options?: { spinnerFrame?: number; meta?: string[] },
+): StatusLineOptions {
 	const trimmed = replaceTabs((query ?? "").trim());
-	const description = trimmed ? truncateToWidth(trimmed, 80, Ellipsis.Unicode) : undefined;
-	return renderStatusLine({ icon, iconOverride, title, description, meta }, theme);
+	return {
+		icon,
+		spinnerFrame: options?.spinnerFrame,
+		title,
+		description: trimmed ? truncateToWidth(trimmed, 80, Ellipsis.Unicode) : undefined,
+		meta: options?.meta,
+	};
 }
 
-function retainComponent(contents: string[], header: string, getExpanded: () => boolean, theme: Theme): Component {
-	return createCachedComponent(getExpanded, (width, expanded) => {
-		const lines = [header];
-		const limit = expanded ? contents.length : PREVIEW_LIMITS.COLLAPSED_ITEMS;
-		const shown = contents.slice(0, limit);
-		const bullet = theme.format.bullet;
-		const contentWidth = Math.max(8, width - 2 - Bun.stringWidth(bullet) - 1);
-		for (const content of shown) {
-			const value = truncateToWidth(content, contentWidth, Ellipsis.Unicode);
-			lines.push(`  ${theme.fg("muted", bullet)} ${theme.fg("toolOutput", value)}`);
-		}
-		const remaining = contents.length - shown.length;
-		if (remaining > 0) {
-			lines.push(`  ${theme.fg("dim", `… ${remaining} more`)} ${formatExpandHint(theme, expanded, true)}`);
-		}
-		return lines.map(line => truncateToWidth(line, width, Ellipsis.Omit));
+/** Flush card: the status line, then `rows` clipped to one line each while collapsed, then a truncation row. */
+function memoryCard(
+	theme: Theme,
+	status: StatusLineOptions,
+	options: RenderResultOptions,
+	buildRows: (expanded: boolean) => { rows: string[]; more?: string },
+): Component {
+	return plainToolCard(theme, ({ contentWidth }) => {
+		const { expanded } = options;
+		const { rows, more } = buildRows(expanded);
+		const body = expanded ? [...rows] : rows.map(row => truncateToWidth(row, contentWidth));
+		if (more) body.push(more);
+		return { status, body };
 	});
+}
+
+/** Error card: the tool's header with error status, then the error text. */
+function memoryErrorCard(theme: Theme, status: StatusLineOptions, message: string): Component {
+	return plainToolCard(theme, () => ({ status, phase: "error", body: [formatErrorText(message, theme)] }));
+}
+
+/** Stored memories as plain rows (no bullet: it reads as a status glyph in ASCII), clamped while collapsed. */
+function retainRows(contents: string[], theme: Theme): (expanded: boolean) => { rows: string[]; more?: string } {
+	return expanded => {
+		const shown = expanded ? contents : contents.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS);
+		const remaining = contents.length - shown.length;
+		return {
+			rows: shown.map(content => theme.fg("toolOutput", content)),
+			more:
+				remaining > 0
+					? `${theme.fg("dim", formatMoreItems(remaining, "memory", theme))} ${formatExpandHint(theme, expanded, true)}`
+					: undefined,
+		};
+	};
 }
 
 /** Retained memories as a list, clamped to the collapsed item budget. */
@@ -108,9 +128,10 @@ export const retainToolRenderer = {
 	inline: true,
 	mergeCallAndResult: true,
 	renderCall(args: RetainRenderArgs, options: RenderResultOptions, theme: Theme): Component {
-		const contents = retainContents(args);
-		const header = renderStatusLine({ icon: "pending", title: "Retain" }, theme);
-		return retainComponent(contents, header, () => options.expanded, theme);
+		const status = memoryStatus("Retain", undefined, callIcon(options), {
+			spinnerFrame: options.spinnerFrame,
+		});
+		return memoryCard(theme, status, options, retainRows(retainContents(args), theme));
 	},
 	renderResult(
 		result: { content: Array<{ type: string; text?: string }>; details?: { count?: number }; isError?: boolean },
@@ -119,21 +140,14 @@ export const retainToolRenderer = {
 		args?: RetainRenderArgs,
 	): Component {
 		if (result.isError) {
-			return new Text(formatErrorMessage(resultText(result).trim() || "Retain failed", theme), 0, 0);
+			const status = memoryStatus("Retain", undefined, "error");
+			return memoryErrorCard(theme, status, resultText(result).trim() || "Retain failed");
 		}
-		const contents = retainContents(args);
 		// `summary` is the tool's own "N memories stored/queued." line; drop the
 		// trailing period so it reads cleanly as a status meta segment.
 		const summary = resultText(result).trim().replace(/\.$/, "");
-		const header = renderStatusLine(
-			{
-				iconOverride: theme.styledSymbol("tool.memory", "accent"),
-				title: "Retain",
-				meta: summary ? [summary] : undefined,
-			},
-			theme,
-		);
-		return retainComponent(contents, header, () => options.expanded, theme);
+		const status = memoryStatus("Retain", undefined, "success", { meta: summary ? [summary] : undefined });
+		return memoryCard(theme, status, options, retainRows(retainContents(args), theme));
 	},
 	describeCall(args: RetainRenderArgs): NativeToolView | undefined {
 		const contents = retainContents(args);
@@ -156,8 +170,11 @@ export const retainToolRenderer = {
 export const recallToolRenderer = {
 	inline: true,
 	mergeCallAndResult: true,
-	renderCall(args: QueryRenderArgs, _options: RenderResultOptions, theme: Theme): Component {
-		return new Text(queryHeader("Recall", args.query, "pending", theme), 0, 0);
+	renderCall(args: QueryRenderArgs, options: RenderResultOptions, theme: Theme): Component {
+		const status = memoryStatus("Recall", args.query, callIcon(options), {
+			spinnerFrame: options.spinnerFrame,
+		});
+		return memoryCard(theme, status, options, () => ({ rows: [] }));
 	},
 	renderResult(
 		result: { content: Array<{ type: string; text?: string }>; isError?: boolean },
@@ -166,36 +183,24 @@ export const recallToolRenderer = {
 		args?: QueryRenderArgs,
 	): Component {
 		if (result.isError) {
-			return new Text(formatErrorMessage(resultText(result).trim() || "Recall failed", theme), 0, 0);
+			const status = memoryStatus("Recall", args?.query, "error");
+			return memoryErrorCard(theme, status, resultText(result).trim() || "Recall failed");
 		}
 		const text = resultText(result).trim();
-		const match = text.match(/^Found (\d+) relevant/);
-		const found = match ? Number(match[1]) : 0;
-		const meta = [found > 0 ? `${found} found` : "no matches"];
-		const header =
-			found > 0
-				? queryHeader("Recall", args?.query, "success", theme, meta, theme.styledSymbol("tool.memory", "accent"))
-				: queryHeader("Recall", args?.query, "warning", theme, meta);
-		if (found === 0) {
-			return new Text(header, 0, 0);
-		}
-		// Collapsed view is the header alone; expand to inspect the recalled
-		// memories without dumping the whole block into the transcript.
-		const body = text.replace(/^[^\n]*\n+/, "");
-		return createCachedComponent(
-			() => options.expanded,
-			(width, expanded) => {
-				const lines = [header];
-				if (expanded) {
-					const bodyLines = body.split("\n").slice(0, PREVIEW_LIMITS.OUTPUT_EXPANDED);
-					for (const line of bodyLines) {
-						lines.push(`  ${theme.fg("muted", replaceTabs(line))}`);
-					}
-				} else {
-					lines.push(`  ${formatExpandHint(theme, false, true)}`);
-				}
-				return lines.map(line => truncateToWidth(line, width, Ellipsis.Omit));
-			},
+		const found = Number(text.match(/^Found (\d+) relevant/)?.[1] ?? 0);
+		const status = memoryStatus("Recall", args?.query, found > 0 ? "success" : "warning", {
+			meta: [`${found} found`],
+		});
+		if (found === 0) return memoryCard(theme, status, options, () => ({ rows: [] }));
+		// Collapsed view is the header and the expand hint; expanding reveals the
+		// recalled memories without dumping the whole block into the transcript.
+		const memoryLines = text
+			.replace(/^[^\n]*\n+/, "")
+			.split("\n")
+			.slice(0, PREVIEW_LIMITS.OUTPUT_EXPANDED)
+			.map(line => theme.fg("muted", replaceTabs(line)));
+		return memoryCard(theme, status, options, expanded =>
+			expanded ? { rows: memoryLines } : { rows: [], more: formatExpandHint(theme, false, true) },
 		);
 	},
 	describeCall(args: QueryRenderArgs): NativeToolView {
@@ -232,8 +237,11 @@ export const recallToolRenderer = {
 export const reflectToolRenderer = {
 	inline: true,
 	mergeCallAndResult: true,
-	renderCall(args: QueryRenderArgs, _options: RenderResultOptions, theme: Theme): Component {
-		return new Text(queryHeader("Reflect", args.query, "pending", theme), 0, 0);
+	renderCall(args: QueryRenderArgs, options: RenderResultOptions, theme: Theme): Component {
+		const status = memoryStatus("Reflect", args.query, callIcon(options), {
+			spinnerFrame: options.spinnerFrame,
+		});
+		return memoryCard(theme, status, options, () => ({ rows: [] }));
 	},
 	renderResult(
 		result: { content: Array<{ type: string; text?: string }>; isError?: boolean },
@@ -242,36 +250,29 @@ export const reflectToolRenderer = {
 		args?: QueryRenderArgs,
 	): Component {
 		if (result.isError) {
-			return new Text(formatErrorMessage(resultText(result).trim() || "Reflect failed", theme), 0, 0);
+			const status = memoryStatus("Reflect", args?.query, "error");
+			return memoryErrorCard(theme, status, resultText(result).trim() || "Reflect failed");
 		}
-		const header = queryHeader(
-			"Reflect",
-			args?.query,
-			"success",
-			theme,
-			undefined,
-			theme.styledSymbol("tool.memory", "accent"),
-		);
-		const answer = resultText(result).trim();
-		const answerLines = answer.split("\n").filter(line => line.trim().length > 0);
-		return createCachedComponent(
-			() => options.expanded,
-			(width, expanded) => {
-				const limit = expanded ? PREVIEW_LIMITS.OUTPUT_EXPANDED : PREVIEW_LIMITS.OUTPUT_COLLAPSED;
-				const shown = answerLines.slice(0, limit);
-				const lines = [header];
-				for (const line of shown) {
-					lines.push(`  ${theme.fg("toolOutput", replaceTabs(line))}`);
-				}
-				const remaining = answerLines.length - shown.length;
-				if (remaining > 0) {
-					lines.push(
-						`  ${theme.fg("dim", `… ${remaining} more lines`)} ${formatExpandHint(theme, expanded, true)}`,
-					);
-				}
-				return lines.map(line => truncateToWidth(line, width, Ellipsis.Omit));
-			},
-		);
+		const status = memoryStatus("Reflect", args?.query, "success");
+		const answerLines = resultText(result)
+			.trim()
+			.split("\n")
+			.filter(line => line.trim().length > 0)
+			.map(line => theme.fg("toolOutput", replaceTabs(line)));
+		return memoryCard(theme, status, options, expanded => {
+			const shown = answerLines.slice(
+				0,
+				expanded ? PREVIEW_LIMITS.OUTPUT_EXPANDED : PREVIEW_LIMITS.OUTPUT_COLLAPSED,
+			);
+			const remaining = answerLines.length - shown.length;
+			return {
+				rows: shown,
+				more:
+					remaining > 0
+						? `${theme.fg("dim", formatMoreItems(remaining, "line", theme))} ${formatExpandHint(theme, expanded, true)}`
+						: undefined,
+			};
+		});
 	},
 	describeCall(args: QueryRenderArgs): NativeToolView {
 		return { head: toolHead("Reflect", args.query?.trim()), inline: true };

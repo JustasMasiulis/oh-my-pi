@@ -1,7 +1,6 @@
 import type { ToolRenderer } from "./renderer";
 
 import type { Component } from "../index";
-import { Text } from "../index";
 
 import type { NativeToolView, RenderResultOptions } from "./renderer";
 
@@ -13,9 +12,11 @@ import { noteText, toolHead } from "./native-view";
 
 import type { Theme } from "../theme/theme";
 
-import { Ellipsis, padToWidth, renderStatusLine, truncateToWidth } from "../render";
+import { Ellipsis, truncateToWidth } from "../render";
+import type { StatusLineOptions } from "../render/status-line";
+import { plainToolCard } from "../render/tool-card";
 
-import { replaceTabs } from "../render/render-utils";
+import { formatErrorText, replaceTabs } from "../render/render-utils";
 
 /** Device name for applying a staged action. */
 export const RESOLVE_DEVICE_NAME = "resolve";
@@ -47,22 +48,50 @@ export interface ResolveInvocation {
 	reason: string;
 }
 
-/** Streaming-safe call preview for a resolution-device write: `Resolve/Reject/Propose: <text>`. */
+/** Streaming-safe call preview for a resolution-device write: `Resolve: apply|reject` or `Propose: <text>`. */
 export function renderResolutionDeviceCall(device: ResolutionDeviceName, content: unknown, uiTheme: Theme): Component {
-	const title = device === PROPOSE_DEVICE_NAME ? "Propose" : device === REJECT_DEVICE_NAME ? "Reject" : "Resolve";
-	return renderDeviceCallPreview(title, content, uiTheme, Ellipsis.Omit);
+	if (device === PROPOSE_DEVICE_NAME) return renderDeviceCallPreview("Propose", content, uiTheme, Ellipsis.Omit);
+	return resolveRenderer.renderCall(
+		{
+			action: device === REJECT_DEVICE_NAME ? "discard" : "apply",
+			reason: typeof content === "string" ? content : "",
+		},
+		{ expanded: false, isPartial: true },
+		uiTheme,
+	);
 }
 
-/** Native form of {@link renderResolutionDeviceCall}: `Resolve/Reject/Propose` head with the first content line. */
+/** Native form of {@link renderResolutionDeviceCall}. */
 export function describeResolutionDeviceCall(device: ResolutionDeviceName, content: unknown): NativeToolView {
-	const title = device === PROPOSE_DEVICE_NAME ? "Propose" : device === REJECT_DEVICE_NAME ? "Reject" : "Resolve";
-	return describeDeviceCallPreview(title, content);
+	if (device === PROPOSE_DEVICE_NAME) return describeDeviceCallPreview("Propose", content);
+	return resolveRenderer.describeCall({
+		action: device === REJECT_DEVICE_NAME ? "discard" : "apply",
+		reason: typeof content === "string" ? content : "",
+	});
 }
 
 /** Native form of {@link renderDeviceCallPreview}: title head plus the first content line of a pending device write. */
 export function describeDeviceCallPreview(title: string, content: unknown): NativeToolView {
 	const body = typeof content === "string" ? (plainText(content).trim().split("\n")[0] ?? "") : "";
 	return { head: toolHead(title, body || undefined) };
+}
+
+/**
+ * Header subject: `apply`, or `reject` for a discard. Call args name the
+ * discard `reject` (the device name) or `discard` (the details action).
+ */
+function resolveSubject(action: string | undefined): "apply" | "reject" | undefined {
+	if (!action) return undefined;
+	return action === "apply" ? "apply" : "reject";
+}
+
+/** The staged proposal's label (`source: summary`), its source dim. */
+function proposalLabelRow(uiTheme: Theme, label: string): string {
+	const separatorIndex = label.indexOf(": ");
+	if (separatorIndex <= 0) return uiTheme.fg("toolOutput", label);
+	const source = label.slice(0, separatorIndex).trim();
+	const summary = label.slice(separatorIndex + 2).trim();
+	return `${uiTheme.fg("dim", `${source}:`)} ${uiTheme.fg("toolOutput", summary)}`;
 }
 
 const resolveResultMemo = new OwnerMemo<NativeToolView | undefined>();
@@ -75,88 +104,87 @@ export function renderDeviceCallPreview(
 	ellipsis?: Ellipsis,
 ): Component {
 	const body = typeof content === "string" ? replaceTabs(content.trim().split("\n")[0] ?? "") : "";
-	const text = renderStatusLine(
-		{
+	return plainToolCard(uiTheme, () => ({
+		status: {
 			icon: "pending",
 			title,
 			description: body ? truncateToWidth(body, 72, ellipsis) : undefined,
 		},
-		uiTheme,
-	);
-	return new Text(text, 0, 0);
+	}));
 }
 
 /** Render staged-action acceptance or rejection. */
 export const resolveRenderer = {
-	renderCall(args: Partial<ResolveInvocation>, _options: RenderResultOptions, uiTheme: Theme): Component {
-		const reasonTrimmed = args.reason?.trim();
-		const reason = reasonTrimmed ? truncateToWidth(reasonTrimmed, 72, Ellipsis.Omit) : undefined;
-		const text = renderStatusLine(
-			{
-				icon: "pending",
-				title: "Resolve",
-				description: args.action,
-				badge: {
-					label: args.action === "apply" ? "proposed -> resolved" : "proposed -> rejected",
-					color: args.action === "apply" ? "success" : "warning",
-				},
-				meta: reason ? [uiTheme.fg("muted", reason)] : undefined,
-			},
-			uiTheme,
-		);
-		return new Text(text, 0, 0);
+	renderCall(args: Partial<ResolveInvocation>, options: RenderResultOptions, uiTheme: Theme): Component {
+		const subject = resolveSubject(args.action);
+		const status: StatusLineOptions = {
+			icon: options.executionStarted ? "running" : "pending",
+			spinnerFrame: options.spinnerFrame,
+			title: "Resolve",
+			description: subject,
+			badge: subject
+				? {
+						label: `proposed ${uiTheme.format.arrowRight} ${subject === "apply" ? "resolved" : "rejected"}`,
+						color: subject === "apply" ? "success" : "warning",
+					}
+				: undefined,
+		};
+		const reason = args.reason?.trim();
+		return plainToolCard(uiTheme, () => ({
+			status,
+			phase: "pending",
+			body: reason ? [uiTheme.italic(uiTheme.fg("muted", replaceTabs(reason)))] : undefined,
+		}));
 	},
 
 	renderResult(
 		result: { content: Array<{ type: string; text?: string }>; details?: ResolveDetails; isError?: boolean },
 		_options: RenderResultOptions,
 		uiTheme: Theme,
+		args?: Partial<ResolveInvocation>,
 	): Component {
 		const details = result.details;
-		const label = replaceTabs(details?.label ?? "pending action");
-		const reason = replaceTabs(details?.reason?.trim() || "No reason provided");
-		const action = details?.action ?? "apply";
-		const isApply = action === "apply" && !result.isError;
-		const isFailedApply = action === "apply" && result.isError;
-		const bgColor = result.isError ? "error" : isApply ? "success" : "warning";
-		// Bare symbol: the line is wrapped in inverse(fg(...)), so any embedded fg
-		// reset (styledSymbol/status glyphs carry their own \x1b[39m) would drop the
-		// inverse block back to the default background mid-line.
-		const icon = uiTheme.symbol(isApply ? "tool.resolve" : "status.error");
-		const verb = isApply ? "Accept" : isFailedApply ? "Failed" : "Discard";
-		const separator = ": ";
-		const separatorIndex = label.indexOf(separator);
-		const sourceLabel = separatorIndex > 0 ? label.slice(0, separatorIndex).trim() : undefined;
-		const summaryLabel = separatorIndex > 0 ? label.slice(separatorIndex + separator.length).trim() : label;
-		const sourceBadge = sourceLabel
-			? uiTheme.bold(`${uiTheme.format.bracketLeft}${sourceLabel}${uiTheme.format.bracketRight}`)
-			: undefined;
-		const headerLine = `${icon} ${uiTheme.bold(`${verb}:`)} ${summaryLabel}${sourceBadge ? ` ${sourceBadge}` : ""}`;
-		const lines = ["", headerLine, "", uiTheme.italic(reason), ""];
+		const subject = resolveSubject(details?.action ?? args?.action) ?? "apply";
+		const label = details?.label ? replaceTabs(details.label) : undefined;
+		const reason = (details?.reason ?? args?.reason)?.trim();
 
-		return {
-			render(width: number): readonly string[] {
-				const lineWidth = Math.max(3, width);
-				const innerWidth = Math.max(1, lineWidth - 2);
-				return lines.map(line => {
-					const truncated = truncateToWidth(line, innerWidth, Ellipsis.Omit);
-					const framed = ` ${padToWidth(truncated, innerWidth)} `;
-					const padded = padToWidth(framed, lineWidth);
-					return uiTheme.inverse(uiTheme.fg(bgColor, padded));
-				});
-			},
-			invalidate() {},
+		if (result.isError) {
+			const message = result.content.find(content => content.type === "text")?.text;
+			return plainToolCard(uiTheme, () => ({
+				status: { icon: "error", title: "Resolve", description: subject },
+				phase: "error",
+				body: [
+					...(label ? [proposalLabelRow(uiTheme, label)] : []),
+					formatErrorText(message || "Resolve failed", uiTheme),
+				],
+			}));
+		}
+
+		const status: StatusLineOptions = {
+			icon: "success",
+			title: "Resolve",
+			description: subject,
+			badge: subject === "apply" ? { label: "resolved", color: "success" } : { label: "rejected", color: "warning" },
 		};
+		return plainToolCard(uiTheme, () => ({
+			status,
+			phase: "success",
+			body: [
+				...(label ? [proposalLabelRow(uiTheme, label)] : []),
+				...(reason ? [uiTheme.italic(uiTheme.fg("muted", replaceTabs(reason)))] : []),
+			],
+		}));
 	},
 
 	describeCall(args: Partial<ResolveInvocation>): NativeToolView {
-		const head: TspSpan[] = toolHead("Resolve", args.action);
-		if (args.action) {
+		const subject = resolveSubject(args.action);
+		const head: TspSpan[] = toolHead("Resolve", subject);
+		if (subject) {
 			head.push(
 				span(" "),
 				span(
-					args.action === "apply" ? "proposed → resolved" : "proposed → rejected",
-					args.action === "apply" ? "success" : "warning",
+					subject === "apply" ? "proposed → resolved" : "proposed → rejected",
+					subject === "apply" ? "success" : "warning",
 				),
 			);
 		}
@@ -171,22 +199,29 @@ export const resolveRenderer = {
 	}): NativeToolView | undefined {
 		return resolveResultMemo.get(result, [], () => {
 			const details = result.details;
-			const label = plainText(details?.label ?? "pending action");
-			const reason = plainText(details?.reason?.trim() || "No reason provided");
-			const action = details?.action ?? "apply";
-			const isApply = action === "apply" && !result.isError;
-			const verb = isApply ? "Accept" : action === "apply" ? "Failed" : "Discard";
-			const tone = result.isError ? "error" : isApply ? "success" : "warning";
-			const separatorIndex = label.indexOf(": ");
-			const sourceLabel = separatorIndex > 0 ? label.slice(0, separatorIndex).trim() : undefined;
-			const summaryLabel = separatorIndex > 0 ? label.slice(separatorIndex + 2).trim() : label;
-			const head: TspSpan[] = [span(`${verb}:`, `strong ${tone}`), span(" "), span(summaryLabel)];
-			if (sourceLabel) head.push(span(" "), span(`[${sourceLabel}]`, "strong muted"));
+			const subject = resolveSubject(details?.action) ?? "apply";
+			const head: TspSpan[] = toolHead("Resolve", subject);
+			if (!result.isError) {
+				head.push(
+					span(" "),
+					span(subject === "apply" ? "resolved" : "rejected", subject === "apply" ? "success" : "warning"),
+				);
+			}
+			const label = details?.label ? plainText(details.label) : undefined;
+			const reason = details?.reason?.trim();
+			const message = result.content.find(content => content.type === "text")?.text;
 			return {
 				head,
-				tone,
+				tone: result.isError ? "error" : "success",
 				inline: true,
-				body: [text([span(reason, "muted")], { wrap: "word" })],
+				body: [
+					...(label ? [text([span(label)], { wrap: "word" })] : []),
+					...(result.isError
+						? [noteText(message || "Resolve failed", "error")]
+						: reason
+							? [text([span(plainText(reason), "muted")], { wrap: "word" })]
+							: []),
+				],
 			};
 		});
 	},

@@ -51,11 +51,13 @@ function detailsFor(progress: AgentProgress): TaskToolDetails {
 	return { projectAgentsDir: null, results: [], totalDurationMs: 0, progress: [progress] };
 }
 
+/** First body row containing `needle`; the header row also carries the agent's name, so it is skipped. */
 function findRow(component: { render: (w: number) => readonly string[] }, needle: string): string {
 	const row = component
 		.render(120)
 		.join("\n")
 		.split("\n")
+		.slice(1)
 		.find(line => Bun.stripANSI(line).includes(needle));
 	expect(row).toBeDefined();
 	return row!;
@@ -225,7 +227,8 @@ describe("task progress rendering", () => {
 		expect(row).toContain(`openai/gpt-5 ${theme.icon.advisor} BadgeWorker: Inspect rendering`);
 		expect(row).not.toContain(":high");
 		expect(row).toContain(`${theme.thinking.high.split(" ")[0]} openai/gpt-5`);
-		expect(row.indexOf(theme.status.done)).toBeLessThan(row.indexOf("openai/gpt-5"));
+		expect(row.indexOf(theme.status.running)).toBeGreaterThanOrEqual(0);
+		expect(row.indexOf(theme.status.running)).toBeLessThan(row.indexOf("openai/gpt-5"));
 		expect(row).toContain(`${theme.format.bracketLeft}scout${theme.format.bracketRight}`);
 		expect(row.indexOf("3 req")).toBeGreaterThan(row.indexOf("BadgeWorker"));
 		expect(row).toContain("$0.25");
@@ -282,13 +285,13 @@ describe("task progress rendering", () => {
 			resolvedThinkingLevel: ThinkingLevel.High,
 			advisor: true,
 		};
-		const snapshots: { details: TaskToolDetails; status?: string }[] = [
+		const snapshots: { details: TaskToolDetails; icon?: string }[] = [
 			{ details: detailsFor(runningProgress(metadata)) },
 			{ details: detailsFor(runningProgress({ ...metadata, status: "completed" })) },
-			{ details: detailsFor(runningProgress({ ...metadata, status: "failed" })), status: "failed" },
+			{ details: detailsFor(runningProgress({ ...metadata, status: "failed" })), icon: theme.status.error },
 			{
 				details: { projectAgentsDir: null, totalDurationMs: 0, results: [finishedResult(metadata)] },
-				status: "done",
+				icon: theme.status.success,
 			},
 			{
 				details: {
@@ -296,10 +299,10 @@ describe("task progress rendering", () => {
 					totalDurationMs: 0,
 					results: [finishedResult({ ...metadata, exitCode: 1 })],
 				},
-				status: "failed",
+				icon: theme.status.error,
 			},
 		];
-		for (const { details, status } of snapshots) {
+		for (const { details, icon } of snapshots) {
 			const component = taskToolRenderer.renderResult(
 				{ content: [], details },
 				{ expanded: false, isPartial: !!details.progress },
@@ -309,13 +312,12 @@ describe("task progress rendering", () => {
 				const rows = component.render(width);
 				for (const row of rows) expect(visibleWidth(row)).toBeLessThanOrEqual(width);
 				const plainRows = rows.map(row => Bun.stripANSI(row));
-				const firstStatusRow = plainRows.find(row => row.startsWith(theme.boxRound.vertical));
+				// Row 0 is the header (it carries the agent's name too); the first body row is the agent.
+				const firstStatusRow = plainRows.slice(1).find(row => row.startsWith(theme.boxRound.vertical));
 				expect(firstStatusRow).toBeDefined();
 				expect(firstStatusRow).toContain(metadata.id);
 				expect(firstStatusRow).toContain(`${theme.format.bracketLeft}scout${theme.format.bracketRight}`);
-				if (status) {
-					expect(firstStatusRow).toContain(`${theme.format.bracketLeft}${status}${theme.format.bracketRight}`);
-				}
+				if (icon) expect(firstStatusRow).toContain(`${theme.boxRound.vertical} ${icon} `);
 				expect(plainRows.join("\n")).toContain(metadata.description);
 				if (width === 160) {
 					const thinkingGlyph = theme.thinking.high.split(" ")[0];
@@ -357,7 +359,8 @@ describe("task progress rendering", () => {
 					"HiddenBadge",
 				),
 			);
-			expect(row).toContain(`${theme.status.done} HiddenBadge`);
+			const icon = details.progress ? theme.status.running : theme.status.success;
+			expect(row).toContain(`${icon} HiddenBadge`);
 			expect(row).not.toContain("openai/gpt-5");
 			expect(row).not.toContain(theme.icon.advisor);
 		}
@@ -374,7 +377,7 @@ describe("task progress rendering", () => {
 		const text = Bun.stripANSI(component.render(120).join("\n"));
 		expect(text).toContain("UnknownWidthWorker");
 		expect(text).toContain(`${theme.format.bracketLeft}scout${theme.format.bracketRight}`);
-		expect(text).toContain(`${theme.format.bracketLeft}failed${theme.format.bracketRight}`);
+		expect(text).toContain(`${theme.status.error} UnknownWidthWorker`);
 	});
 
 	it("preserves long descriptions below bounded IDs and required status with badges on or off", async () => {
@@ -401,9 +404,8 @@ describe("task progress rendering", () => {
 				for (const width of [40, 160, 40]) {
 					const rows = component.render(width).map(row => Bun.stripANSI(row));
 					for (const row of rows) expect(visibleWidth(row)).toBeLessThanOrEqual(width);
-					const statusRow = rows.find(row => row.includes("LongWorker"))!;
-					expect(statusRow).toContain("LongWorker");
-					expect(statusRow).toContain(`${theme.format.bracketLeft}failed${theme.format.bracketRight}`);
+					const statusRow = rows.slice(1).find(row => row.includes("LongWorker"))!;
+					expect(statusRow).toContain(`${theme.status.error} LongWorker`);
 					const text = rows.join("").replaceAll(theme.boxRound.vertical, "").replace(/\s+/g, "");
 					expect(text).toContain(description.replace(/\s+/g, ""));
 				}
@@ -430,12 +432,13 @@ describe("task progress rendering", () => {
 					"LegacyWorker",
 				),
 			);
-			expect(row).toContain(`${theme.status.done} custom/model:high LegacyWorker`);
+			const icon = details.progress ? theme.status.running : theme.status.success;
+			expect(row).toContain(`${icon} custom/model:high LegacyWorker`);
 			expect(row).not.toContain(theme.thinking.high.split(" ")[0]);
 		}
 	});
 
-	it("renders running task rows static with the agent dot", async () => {
+	it("renders running task rows static with the running status icon", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		expect(theme).toBeDefined();
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
@@ -457,9 +460,7 @@ describe("task progress rendering", () => {
 		const rawRow1 = renderRow(700);
 		const strippedRow = Bun.stripANSI(rawRow0);
 
-		expect(strippedRow).toContain(`${theme.status.done} CountPackages: List workspace packages`);
-		expect(strippedRow).not.toContain(theme.symbol("tool.task"));
-		expect(strippedRow).not.toContain(theme.status.running);
+		expect(strippedRow).toContain(`${theme.status.running} CountPackages: List workspace packages`);
 		expect(strippedRow).not.toContain(theme.getSpinnerFrames("status")[0]);
 		expect(rawRow0).toBe(rawRow1);
 	});
@@ -532,41 +533,19 @@ describe("task progress rendering", () => {
 			],
 		};
 		const header = Bun.stripANSI(
-			findRow(
-				taskToolRenderer.renderResult(
+			taskToolRenderer
+				.renderResult(
 					{ content: [{ type: "text", text: "" }], details },
 					{ expanded: false, isPartial: true, spinnerFrame: 0 },
 					theme,
-				),
-				"2 agents",
-			),
+				)
+				.render(120)[0]!,
 		);
-		expect(header).not.toContain("2 agents:");
+		expect(header).toContain("Task: 2 agents");
 		expect(header).not.toContain("scout, sonic");
 	});
 
-	it("keeps the agent dot when shimmer is disabled", async () => {
-		const theme = (await getThemeByName("dark"))!;
-		setShimmerMode("disabled");
-		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
-
-		const strippedRow = Bun.stripANSI(
-			findRow(
-				taskToolRenderer.renderResult(
-					{ content: [{ type: "text", text: "" }], details: detailsFor(runningProgress()) },
-					options,
-					theme,
-				),
-				"KeySettingsHotPaths",
-			),
-		);
-
-		expect(strippedRow).toContain(`${theme.status.done} KeySettingsHotPaths`);
-		expect(strippedRow).not.toContain(theme.status.running);
-		expect(strippedRow).not.toContain(theme.getSpinnerFrames("status")[0]);
-	});
-
-	it("renders pending task rows with the agent dot, not the pending glyph", async () => {
+	it("renders pending task rows with the pending status icon", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
 		const progress = runningProgress({
@@ -591,12 +570,11 @@ describe("task progress rendering", () => {
 		const rawRow1 = renderRow(700);
 		const strippedRow = Bun.stripANSI(rawRow0);
 
-		expect(strippedRow).toContain(`${theme.status.done} BestGpt: Combine winners for gpt`);
-		expect(strippedRow).not.toContain(theme.status.pending);
+		expect(strippedRow).toContain(`${theme.status.pending} BestGpt: Combine winners for gpt`);
 		expect(rawRow0).toBe(rawRow1);
 	});
 
-	it("settles completed rows to the foreground color with the same dot", async () => {
+	it("settles completed rows to the success status icon", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
 		const progress = runningProgress({
@@ -615,30 +593,22 @@ describe("task progress rendering", () => {
 		);
 
 		const stripped = Bun.stripANSI(row);
-		expect(stripped).toContain(`${theme.status.done} DonePkg: List workspace packages`);
-		expect(stripped).not.toContain(theme.symbol("tool.task"));
-		// Same dot as live rows; completion reads as the label settling from
-		// accent to the plain foreground color.
-		const titlePart = `${theme.bold("DonePkg")}: List workspace packages`;
-		expect(row).toContain(theme.fg("text", titlePart));
-		expect(row).not.toContain(theme.fg("accent", titlePart));
+		expect(stripped).toContain(`${theme.status.success} DonePkg: List workspace packages`);
 	});
 
-	it("shows the dispatch glyph in the header while agents run, not a spinner", async () => {
+	it("shows a static running status in the header while agents run, not a spinner", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
-		const header = findRow(
-			taskToolRenderer.renderResult(
+		const header = taskToolRenderer
+			.renderResult(
 				{ content: [{ type: "text", text: "" }], details: detailsFor(runningProgress()) },
 				options,
 				theme,
-			),
-			"Task",
-		);
+			)
+			.render(120)[0]!;
 
 		const stripped = Bun.stripANSI(header);
-		expect(stripped).toContain(`${theme.symbol("tool.task")} Task`);
-		expect(stripped).not.toContain(theme.status.running);
+		expect(stripped).toContain(`${theme.status.running} Task: KeySettingsHotPaths`);
 		expect(stripped).not.toContain(theme.getSpinnerFrames("status")[0]);
 	});
 
@@ -751,9 +721,8 @@ describe("task progress rendering", () => {
 		for (const id of ["DoneOne", "DoneTwo", "DoneThree"]) {
 			expect(collapsed).not.toContain(id);
 		}
-		expect(collapsed).toContain("… 3 more agents (3 done)");
-		// The summary line sits above the visible rows (live edge at the bottom).
-		expect(collapsed.indexOf("more agents")).toBeLessThan(collapsed.indexOf("LiveOne"));
+		// The fold marker lives in the bottom border, below the live edge.
+		expect(collapsed.split("\n").at(-1)).toContain("… 3 more agents (3 done)");
 
 		const expanded = Bun.stripANSI(
 			taskToolRenderer
@@ -871,15 +840,13 @@ describe("task result detail-less state", () => {
 		);
 		const stripped = Bun.stripANSI(component.render(120).join("\n"));
 
-		// A failed task must surface the error glyph and never the "done" bullet.
-		expect(stripped).toContain(theme.status.error);
-		expect(stripped).not.toContain(theme.status.done);
-		expect(stripped).toContain("Task");
-		expect(stripped).toContain("scout");
+		// A failed task must surface the error status and never the success one.
+		expect(stripped).toContain(`${theme.status.error} Task`);
+		expect(stripped).not.toContain(theme.status.success);
 		expect(stripped).toContain("Validation failed");
 	});
 
-	it("renders a detail-less success with the accent bullet, not an error glyph", async () => {
+	it("renders a detail-less success with the success status, not an error glyph", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		setThemeInstance(theme);
 		const options: RenderResultOptions = { expanded: false, isPartial: false };
@@ -889,7 +856,7 @@ describe("task result detail-less state", () => {
 		});
 		const stripped = Bun.stripANSI(component.render(120).join("\n"));
 
-		expect(stripped).toContain(theme.status.done);
+		expect(stripped).toContain(`${theme.status.success} Task`);
 		expect(stripped).not.toContain(theme.status.error);
 	});
 });

@@ -1,3 +1,5 @@
+import type { BoxSymbols } from "../symbols";
+
 // ============================================================================
 // Symbol Presets
 // ============================================================================
@@ -19,7 +21,6 @@ export type SymbolKey =
 	| "status.running"
 	| "status.shadowed"
 	| "status.aborted"
-	| "status.done"
 	// Navigation
 	| "nav.cursor"
 	| "nav.selected"
@@ -49,6 +50,8 @@ export type SymbolKey =
 	| "boxRound.bottomRight"
 	| "boxRound.horizontal"
 	| "boxRound.vertical"
+	| "boxRound.teeRight"
+	| "boxRound.teeLeft"
 	// Box Drawing - Dotted (selection outlines)
 	| "boxDotted.horizontal"
 	| "boxDotted.vertical"
@@ -203,6 +206,9 @@ export type SymbolKey =
 	| "format.dash"
 	| "format.bracketLeft"
 	| "format.bracketRight"
+	| "format.ellipsis"
+	| "format.arrowRight"
+	| "format.arrowLeft"
 	// Markdown-specific
 	| "md.quoteBorder"
 	| "md.hrChar"
@@ -265,31 +271,6 @@ export type SymbolKey =
 	| "tab.memory"
 	| "tab.tasks"
 	| "tab.providers"
-	// Tool identity icons
-	| "tool.write"
-	| "tool.edit"
-	| "tool.bash"
-	| "tool.ssh"
-	| "tool.lsp"
-	| "tool.gh"
-	| "tool.webSearch"
-	| "tool.exa"
-	| "tool.browser"
-	| "tool.eval"
-	| "tool.debug"
-	| "tool.mcp"
-	| "tool.job"
-	| "tool.launch"
-	| "tool.task"
-	| "tool.todo"
-	| "tool.memory"
-	| "tool.ask"
-	| "tool.resolve"
-	| "tool.review"
-	| "tool.goal"
-	| "tool.irc"
-	| "tool.delete"
-	| "tool.move"
 	// Keyboard keys (rendered by formatKeyHint). `*Mac` variants replace the
 	// generic modifier on macOS, whose keycaps are labelled with ⌃ ⌥ ⌘.
 	| "key.ctrl"
@@ -404,7 +385,6 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"status.running": "⟳",
 	"status.shadowed": "○",
 	"status.aborted": "⏹",
-	"status.done": "•",
 	// Navigation
 	"nav.cursor": "❯",
 	"nav.selected": "➤",
@@ -434,6 +414,9 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"boxRound.bottomRight": "╯",
 	"boxRound.horizontal": "─",
 	"boxRound.vertical": "│",
+	// Section dividers inside a rounded card or overlay (`├─── Output ───┤`)
+	"boxRound.teeRight": "├",
+	"boxRound.teeLeft": "┤",
 	// Box (dotted)
 	"boxDotted.horizontal": "┄",
 	"boxDotted.vertical": "┆",
@@ -590,6 +573,9 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"format.dash": "—",
 	"format.bracketLeft": "⟦",
 	"format.bracketRight": "⟧",
+	"format.ellipsis": "…",
+	"format.arrowRight": "→",
+	"format.arrowLeft": "←",
 	// Markdown
 	"md.quoteBorder": "▏",
 	"md.hrChar": "─",
@@ -653,31 +639,6 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"tab.memory": "🧠",
 	"tab.tasks": "📦",
 	"tab.providers": "🌐",
-	// Tool identity icons (per-tool signature glyph on the success header)
-	"tool.write": "✎",
-	"tool.edit": "✎",
-	"tool.bash": "❯",
-	"tool.ssh": "⇄",
-	"tool.lsp": "💡",
-	"tool.gh": "⎇",
-	"tool.webSearch": "⌕",
-	"tool.exa": "🔭",
-	"tool.browser": "🌐",
-	"tool.eval": "▶",
-	"tool.debug": "🐞",
-	"tool.mcp": "🔌",
-	"tool.job": "⚙",
-	"tool.launch": "🚀",
-	"tool.task": "⇶",
-	"tool.todo": "☑",
-	"tool.memory": "🧠",
-	"tool.ask": "?",
-	"tool.resolve": "✓",
-	"tool.review": "◉",
-	"tool.goal": "◎",
-	"tool.irc": "✉",
-	"tool.delete": "🗑",
-	"tool.move": "➜",
 	// Keys: word modifiers off macOS (⌃/⌥/⌘ name no key on a PC keyboard)
 	"key.ctrl": "Ctrl",
 	"key.ctrlMac": "⌃",
@@ -721,8 +682,6 @@ const NERD_SYMBOLS: SymbolMap = {
 	"status.shadowed": "\uf10c",
 	// pick:  | alt:  
 	"status.aborted": "\uf04d",
-	// pick: • | alt: ● ·
-	"status.done": "•",
 	// Navigation
 	// pick:  | alt:  
 	"nav.cursor": "\uf054",
@@ -770,6 +729,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"boxRound.horizontal": "─",
 	// pick: │ | alt: ┃ ║ ▏
 	"boxRound.vertical": "│",
+	"boxRound.teeRight": "├",
+	"boxRound.teeLeft": "┤",
 	// Box Drawing - Dotted (same as unicode)
 	// pick: ┄ | alt: ╌ ┈ ⋯
 	"boxDotted.horizontal": "┄",
@@ -1060,6 +1021,9 @@ const NERD_SYMBOLS: SymbolMap = {
 	"format.bracketLeft": "⟨",
 	// pick: ⟩ | alt: ] ⟧
 	"format.bracketRight": "⟩",
+	"format.ellipsis": "…",
+	"format.arrowRight": "→",
+	"format.arrowLeft": "←",
 	// Markdown-specific
 	// pick: │ | alt: ┃ ║
 	"md.quoteBorder": "│",
@@ -1128,31 +1092,6 @@ const NERD_SYMBOLS: SymbolMap = {
 	"tab.memory": "󰧑",
 	"tab.tasks": "󰐱",
 	"tab.providers": "󰖟",
-	// Tool identity icons (per-tool signature glyph on the success header)
-	"tool.write": "\uEA7F",
-	"tool.edit": "\uEA73",
-	"tool.bash": "\uEBCA",
-	"tool.ssh": "\uEB3A",
-	"tool.lsp": "\uEA61",
-	"tool.gh": "\uEA84",
-	"tool.webSearch": "\uEB01",
-	"tool.exa": "\uEB68",
-	"tool.browser": "\uEAAE",
-	"tool.eval": "\uEBAF",
-	"tool.debug": "\uEAD8",
-	"tool.mcp": "\uEB2D",
-	"tool.job": "\uEBA2",
-	"tool.launch": "\uF135",
-	"tool.task": "\uf4a0",
-	"tool.todo": "\uEAB3",
-	"tool.memory": "\uEACE",
-	"tool.ask": "\uEAC7",
-	"tool.resolve": "\uEBB1",
-	"tool.review": "\uEA70",
-	"tool.goal": "\uEBF8",
-	"tool.irc": "\uF086",
-	"tool.delete": "\uf12d",
-	"tool.move": "\uf061",
 	// Keys: word modifiers off macOS; arrows stay Unicode (nerd arrows add nothing)
 	"key.ctrl": "Ctrl",
 	// pick: 󰘴 (nf-md-apple_keyboard_control) | alt: ⌃
@@ -1186,17 +1125,16 @@ const NERD_SYMBOLS: SymbolMap = {
 
 const ASCII_SYMBOLS: SymbolMap = {
 	// Status Indicators
-	"status.success": "[ok]",
-	"status.error": "[!!]",
+	"status.success": "[+]",
+	"status.error": "[-]",
 	"status.warning": "[!]",
 	"status.info": "[i]",
-	"status.pending": "[*]",
+	"status.pending": "[ ]",
 	"status.disabled": "[ ]",
 	"status.enabled": "[x]",
 	"status.running": "[~]",
 	"status.shadowed": "[/]",
-	"status.aborted": "[-]",
-	"status.done": "*",
+	"status.aborted": "[#]",
 	// Navigation
 	"nav.cursor": ">",
 	"nav.selected": "->",
@@ -1226,6 +1164,10 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"boxRound.bottomRight": "+",
 	"boxRound.horizontal": "-",
 	"boxRound.vertical": "|",
+	// Divider tees stay on the vertical rail so a card's inner divider
+	// (`|--- Output ---|`) never reads as a closing border (`+------+`).
+	"boxRound.teeRight": "|",
+	"boxRound.teeLeft": "|",
 	// Box Drawing - Dotted (ASCII fallback)
 	"boxDotted.horizontal": "-",
 	"boxDotted.vertical": ":",
@@ -1239,6 +1181,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"boxSharp.cross": "+",
 	"boxSharp.teeDown": "+",
 	"boxSharp.teeUp": "+",
+	// Tables keep `+` at every junction, edges included (`+---+---+`).
 	"boxSharp.teeRight": "+",
 	"boxSharp.teeLeft": "+",
 	// Separators
@@ -1379,6 +1322,9 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"format.dash": "-",
 	"format.bracketLeft": "[",
 	"format.bracketRight": "]",
+	"format.ellipsis": "...",
+	"format.arrowRight": "->",
+	"format.arrowLeft": "<-",
 	// Markdown-specific
 	"md.quoteBorder": "|",
 	"md.hrChar": "-",
@@ -1439,31 +1385,6 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"tab.memory": "[Y]",
 	"tab.tasks": "[K]",
 	"tab.providers": "[P]",
-	// Tool identity icons (per-tool signature glyph on the success header)
-	"tool.write": "+f",
-	"tool.edit": "~",
-	"tool.bash": "$",
-	"tool.ssh": "ssh",
-	"tool.lsp": "lsp",
-	"tool.gh": "gh",
-	"tool.webSearch": "web",
-	"tool.exa": "exa",
-	"tool.browser": "[w]",
-	"tool.eval": ">_",
-	"tool.debug": "dbg",
-	"tool.mcp": "<>",
-	"tool.job": "job",
-	"tool.launch": "run",
-	"tool.task": ">>>",
-	"tool.todo": "[x]",
-	"tool.memory": "mem",
-	"tool.ask": "[?]",
-	"tool.resolve": "[v]",
-	"tool.review": "rev",
-	"tool.goal": "(o)",
-	"tool.irc": "#",
-	"tool.delete": "rm",
-	"tool.move": "mv",
 	"key.ctrl": "Ctrl",
 	"key.ctrlMac": "Ctrl",
 	"key.shift": "Shift",
@@ -1490,6 +1411,44 @@ export const SYMBOL_PRESETS: Record<SymbolPreset, SymbolMap> = {
 	ascii: ASCII_SYMBOLS,
 };
 
+/** Sharp box glyphs from a symbol map. */
+export function sharpBoxSymbols(symbols: SymbolMap): BoxSymbols {
+	return {
+		topLeft: symbols["boxSharp.topLeft"],
+		topRight: symbols["boxSharp.topRight"],
+		bottomLeft: symbols["boxSharp.bottomLeft"],
+		bottomRight: symbols["boxSharp.bottomRight"],
+		horizontal: symbols["boxSharp.horizontal"],
+		vertical: symbols["boxSharp.vertical"],
+		cross: symbols["boxSharp.cross"],
+		teeDown: symbols["boxSharp.teeDown"],
+		teeUp: symbols["boxSharp.teeUp"],
+		teeRight: symbols["boxSharp.teeRight"],
+		teeLeft: symbols["boxSharp.teeLeft"],
+	};
+}
+
+/**
+ * Rounded box glyphs from a symbol map. Corners and side tees have rounded-box
+ * tokens; the inner junctions have no rounded variant, so they reuse the sharp
+ * `boxSharp.*` glyphs.
+ */
+export function roundBoxSymbols(symbols: SymbolMap): BoxSymbols {
+	return {
+		topLeft: symbols["boxRound.topLeft"],
+		topRight: symbols["boxRound.topRight"],
+		bottomLeft: symbols["boxRound.bottomLeft"],
+		bottomRight: symbols["boxRound.bottomRight"],
+		horizontal: symbols["boxRound.horizontal"],
+		vertical: symbols["boxRound.vertical"],
+		cross: symbols["boxSharp.cross"],
+		teeDown: symbols["boxSharp.teeDown"],
+		teeUp: symbols["boxSharp.teeUp"],
+		teeRight: symbols["boxRound.teeRight"],
+		teeLeft: symbols["boxRound.teeLeft"],
+	};
+}
+
 export type SpinnerType = "status" | "activity";
 
 export const SPINNER_FRAMES: Record<SymbolPreset, Record<SpinnerType, string[]>> = {
@@ -1502,7 +1461,9 @@ export const SPINNER_FRAMES: Record<SymbolPreset, Record<SpinnerType, string[]>>
 		activity: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
 	},
 	ascii: {
-		status: ["|", "/", "-", "\\"],
+		// Parenthesised so a live frame never matches a bracketed `status.*`
+		// glyph (`[-]` error, `[/]` shadowed) yet reads as the same family.
+		status: ["(|)", "(/)", "(-)", "(\\)"],
 		activity: ["-", "\\", "|", "/"],
 	},
 };

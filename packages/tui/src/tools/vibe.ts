@@ -1,5 +1,4 @@
 import type { Component } from "../tui";
-import { Text } from "../components/text";
 import { describeShimmer, shimmerEnabled, shimmerText } from "../theme/shimmer";
 import type { TspCardStatus, TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import { compact, elapsed, node, row, span, text } from "../native/describe";
@@ -9,16 +8,18 @@ import { plainText } from "../native/spans";
 import { errorView, noteText, resultText, toolHead } from "./native-view";
 import type { Theme } from "../theme/theme";
 import { oneLineLabel } from "./task";
-import { renderStatusLine } from "../render/index";
+import { formatCount } from "@oh-my-pi/pi-utils";
+import { plainToolCard } from "../render/tool-card";
 import {
-	Ellipsis,
 	formatBadge,
 	formatDuration,
+	formatErrorText,
+	formatExpandHint,
+	formatMoreItems,
 	formatStatusIcon,
 	replaceTabs,
-	type ToolUIColor,
+	sanitizeDisplayLines,
 	type ToolUIStatus,
-	truncateToWidth,
 } from "../render/render-utils";
 import type { NativeToolView, RenderResultOptions, ToolRenderer, ToolRenderResult } from "./renderer";
 /** Operation represented by a worker-session tool result. */
@@ -114,37 +115,30 @@ export type VibeCli = "fast" | "good";
 // TUI Renderer — mini composer (spawn/send) + TV wall (wait/list)
 // =============================================================================
 
+const TITLE = "Vibe";
+const COMPOSER_ROWS_COLLAPSED = 2;
+const COMPOSER_ROWS_EXPANDED = 6;
 const COMPOSER_LINE_MAX = 96;
 const TV_LINE_MAX = 110;
 const TV_TRACE_COLLAPSED = 2;
 const TV_TRACE_EXPANDED = 6;
 const TV_OUTPUT_COLLAPSED = 1;
 const TV_OUTPUT_EXPANDED = 3;
-const CURSOR_GLYPH = "▌";
 
-function stateToIcon(state: VibeSessionState): ToolUIStatus {
+/** A worker's lifecycle as an item status icon. */
+function screenStatus(state: VibeSessionState, settled?: "completed" | "failed" | "cancelled"): ToolUIStatus {
+	if (settled === "failed") return "error";
+	if (settled === "cancelled") return "aborted";
+	if (settled === "completed") return "success";
 	switch (state) {
 		case "running":
 			return "running";
 		case "starting":
 			return "pending";
 		case "idle":
-			return "done";
-		case "dead":
-			return "aborted";
-	}
-}
-
-function stateToColor(state: VibeSessionState): ToolUIColor {
-	switch (state) {
-		case "running":
-			return "accent";
-		case "starting":
-			return "accent";
-		case "idle":
 			return "success";
 		case "dead":
-			return "muted";
+			return "aborted";
 	}
 }
 
@@ -157,169 +151,99 @@ interface VibeRenderArgs {
 	sessions?: string[];
 }
 
-/** One-line, escape-stripped fragment for embedding in a frame row. */
+/** One-line, escape-stripped fragment for embedding in a row. */
 function frameText(text: string, max: number): string {
 	return oneLineLabel(replaceTabs(text), max);
 }
 
-/**
- * Draw a left-railed mini terminal:
- * ```
- * ╭─ <header>
- * │ <body…>
- * ╰─ <footer>
- * ```
- */
-function miniFrame(uiTheme: Theme, header: string, body: string[], footer?: string): string[] {
-	const box = uiTheme.boxRound;
-	const rail = (glyph: string) => uiTheme.fg("dim", glyph);
-	const lines = [`${rail(`${box.topLeft}${box.horizontal}`)} ${header}`];
-	for (const row of body) {
-		lines.push(`${rail(box.vertical)} ${row}`);
+/** Header subject `op target`, shared by the call, the result, and the native head. */
+function vibeSubject(op: VibeOp, args: VibeRenderArgs | undefined, sep: string, details?: VibeToolDetails): string {
+	switch (op) {
+		case "spawn": {
+			const name = details?.spawned?.id ?? args?.name;
+			return `spawn ${details?.spawned?.cli ?? args?.cli ?? "fast"}${name ? `${sep}${frameText(name, 40)}` : ""}`;
+		}
+		case "send":
+			return args?.session ? `send ${frameText(args.session, 40)}` : "send";
+		case "wait":
+			return args?.sessions?.length ? `wait ${frameText(args.sessions.join(", "), 60)}` : "wait all";
+		case "kill": {
+			const target = details?.killed?.id ?? args?.session;
+			return target ? `kill ${frameText(target, 40)}` : "kill";
+		}
+		case "list":
+			return "list";
 	}
-	lines.push(
-		footer ? `${rail(`${box.bottomLeft}${box.horizontal}`)} ${footer}` : rail(`${box.bottomLeft}${box.horizontal}`),
-	);
-	return lines;
 }
 
-/** The `>` composer rows of the mini CLI: the director's message being typed in. */
-function composerRows(uiTheme: Theme, message: string, options: { cursor: boolean; expanded: boolean }): string[] {
-	const promptGlyph = uiTheme.fg("accent", ">");
+/** The director's message being sent, indented as body rows. */
+function messageRows(uiTheme: Theme, message: string, expanded: boolean): string[] {
 	const rawLines = message.split(/\r?\n/).filter(line => line.trim().length > 0);
-	const maxRows = options.expanded ? 6 : 2;
-	const visible = rawLines.slice(0, maxRows).map(line => frameText(line, COMPOSER_LINE_MAX));
-	if (visible.length === 0) visible.push("");
+	const maxRows = expanded ? COMPOSER_ROWS_EXPANDED : COMPOSER_ROWS_COLLAPSED;
+	const rows = rawLines.slice(0, maxRows).map(line => uiTheme.fg("toolOutput", frameText(line, COMPOSER_LINE_MAX)));
 	if (rawLines.length > maxRows) {
-		visible[visible.length - 1] = `${visible[visible.length - 1]} …`;
-	} else if (options.cursor) {
-		visible[visible.length - 1] = `${visible[visible.length - 1]}${uiTheme.fg("accent", CURSOR_GLYPH)}`;
+		rows.push(
+			`${uiTheme.fg("dim", formatMoreItems(rawLines.length - maxRows, "line", uiTheme))} ${formatExpandHint(uiTheme, expanded, true)}`,
+		);
 	}
-	return visible.map((line, index) =>
-		index === 0 ? `${promptGlyph} ${uiTheme.fg("toolOutput", line)}` : `  ${uiTheme.fg("toolOutput", line)}`,
-	);
+	return rows;
 }
 
-/** Render one worker "TV": header + live tool calls + streamed text tail. */
-function tvScreen(
+/** One worker: `<icon> id [cli] - state - 3t - 1m2s - model`, its live trace nested below. */
+function screenRows(
 	uiTheme: Theme,
 	screen: VibeScreenSnapshot,
 	options: RenderResultOptions,
-	settledStatus?: "completed" | "failed" | "cancelled",
-	nowMs = Date.now(),
+	settledStatus: "completed" | "failed" | "cancelled" | undefined,
+	nowMs: number,
 ): string[] {
 	const live = screen.state === "running" || screen.state === "starting";
-	const spinnerFrame = live ? options.spinnerFrame : undefined;
+	const animate = live && options.spinnerFrame !== undefined;
 	const icon = formatStatusIcon(
-		settledStatus === "failed" ? "error" : settledStatus === "cancelled" ? "aborted" : stateToIcon(screen.state),
+		screenStatus(screen.state, settledStatus),
 		uiTheme,
-		spinnerFrame,
+		animate ? options.spinnerFrame : undefined,
 	);
-	const badge = formatBadge(screen.cli, stateToColor(screen.state), uiTheme);
-	const idText =
-		live && options.spinnerFrame !== undefined && shimmerEnabled()
-			? shimmerText(screen.id, uiTheme)
-			: uiTheme.fg(live ? "accent" : "toolOutput", screen.id);
-	const headParts = [icon, badge, idText, uiTheme.fg("dim", settledStatus ?? screen.state)];
-	const turnsLabel = `${screen.turns}t${screen.queued > 0 ? `+${screen.queued}q` : ""}`;
-	headParts.push(uiTheme.fg("muted", turnsLabel));
-	if (screen.turnStartedAt !== undefined) {
-		headParts.push(uiTheme.fg("dim", formatDuration(nowMs - screen.turnStartedAt)));
-	}
-	if (screen.model) headParts.push(uiTheme.fg("muted", frameText(screen.model, 40)));
+	const idText = animate && shimmerEnabled() ? shimmerText(screen.id, uiTheme) : uiTheme.fg("accent", screen.id);
+	const facts = compact([
+		uiTheme.fg("muted", settledStatus ? `turn ${settledStatus}` : screen.state),
+		uiTheme.fg("muted", `${screen.turns}t${screen.queued > 0 ? `+${screen.queued}q` : ""}`),
+		screen.turnStartedAt !== undefined ? uiTheme.fg("dim", formatDuration(nowMs - screen.turnStartedAt)) : undefined,
+		screen.model ? uiTheme.fg("dim", frameText(screen.model, 40)) : undefined,
+	]).join(uiTheme.sep.dot);
+	const head = `${icon} ${idText} ${formatBadge(screen.cli, "muted", uiTheme)}${uiTheme.sep.dot}${facts}`;
 
-	const body: string[] = [];
-	const hook = uiTheme.tree.hook;
+	const details: string[] = [];
 	if (live) {
-		if (screen.turnMessage) {
-			body.push(`${uiTheme.fg("accent", ">")} ${uiTheme.fg("dim", frameText(screen.turnMessage, TV_LINE_MAX))}`);
-		}
+		if (screen.turnMessage) details.push(uiTheme.fg("dim", frameText(screen.turnMessage, TV_LINE_MAX)));
 		const traceCap = options.expanded ? TV_TRACE_EXPANDED : TV_TRACE_COLLAPSED;
-		for (const line of screen.trace.slice(-traceCap)) {
-			body.push(`${uiTheme.fg("dim", hook)} ${uiTheme.fg("dim", frameText(line, TV_LINE_MAX))}`);
-		}
-		if (screen.currentTool) {
-			const detail = screen.lastIntent ?? screen.currentToolArgs;
-			const label = `${screen.currentTool}${detail ? `: ${detail}` : ""}`;
-			const painted =
-				options.spinnerFrame !== undefined && shimmerEnabled()
-					? shimmerText(frameText(label, TV_LINE_MAX), uiTheme)
-					: uiTheme.fg("muted", frameText(label, TV_LINE_MAX));
-			body.push(`${uiTheme.fg("accent", hook)} ${painted}`);
-		} else if (screen.lastIntent) {
-			body.push(`${uiTheme.fg("accent", hook)} ${uiTheme.fg("muted", frameText(screen.lastIntent, TV_LINE_MAX))}`);
+		for (const line of screen.trace.slice(-traceCap)) details.push(uiTheme.fg("dim", frameText(line, TV_LINE_MAX)));
+		const current = screen.currentTool
+			? `${screen.currentTool}${(screen.lastIntent ?? screen.currentToolArgs) ? `: ${screen.lastIntent ?? screen.currentToolArgs}` : ""}`
+			: screen.lastIntent;
+		if (current) {
+			const label = frameText(current, TV_LINE_MAX);
+			details.push(animate && shimmerEnabled() ? shimmerText(label, uiTheme) : uiTheme.fg("muted", label));
 		}
 		const outputCap = options.expanded ? TV_OUTPUT_EXPANDED : TV_OUTPUT_COLLAPSED;
 		for (const line of screen.outputTail.slice(-outputCap)) {
-			if (line.trim().length === 0) continue;
-			body.push(`  ${uiTheme.fg("muted", frameText(line, TV_LINE_MAX))}`);
+			if (line.trim()) details.push(uiTheme.fg("toolOutput", frameText(line, TV_LINE_MAX)));
 		}
 	} else if (screen.lastActivity) {
-		body.push(`${uiTheme.fg("dim", hook)} ${uiTheme.fg("muted", frameText(screen.lastActivity, TV_LINE_MAX))}`);
+		details.push(uiTheme.fg("muted", frameText(screen.lastActivity, TV_LINE_MAX)));
 	}
-	const footer = settledStatus
-		? uiTheme.fg(
-				settledStatus === "completed" ? "success" : settledStatus === "failed" ? "error" : "warning",
-				`turn ${settledStatus} — result delivered`,
-			)
-		: undefined;
-	return miniFrame(uiTheme, headParts.join(" "), body, footer);
-}
-
-/**
- * Width-aware component over prebuilt lines, or — given a builder — lines
- * recomputed on every paint. Spinner ticks repaint the tool block WITHOUT
- * re-invoking renderCall/renderResult, so time-based content (shimmer sweep,
- * spinner glyph, cursor blink, elapsed turn duration) must be produced inside
- * a builder that reads the shared mutable `options` at paint time; prebuilt
- * arrays are for static frames only.
- */
-function linesComponent(lines: string[] | (() => string[])): Component {
-	return {
-		render(width: number): readonly string[] {
-			const rows = typeof lines === "function" ? lines() : lines;
-			return rows.map(line => truncateToWidth(line, width, Ellipsis.Unicode));
-		},
-		invalidate() {},
-	};
-}
-
-function describeCall(op: VibeOp, args: VibeRenderArgs | undefined): string {
-	switch (op) {
-		case "spawn":
-			return `spawn ${args?.cli ?? "?"}${args?.name ? ` · ${frameText(args.name, 40)}` : ""}`;
-		case "send":
-			return `send → ${args?.session ? frameText(args.session, 40) : "?"}`;
-		case "wait":
-			return args?.sessions?.length
-				? `wait on ${frameText(args.sessions.join(", "), 60)}`
-				: "wait on running sessions";
-		case "kill":
-			return `kill ${args?.session ? frameText(args.session, 40) : "?"}`;
-		case "list":
-			return "sessions";
-	}
+	return [
+		head,
+		...details.map(
+			(line, index) =>
+				`${uiTheme.fg("dim", index === details.length - 1 ? uiTheme.tree.last : uiTheme.tree.branch)} ${line}`,
+		),
+	];
 }
 
 // =============================================================================
 // Native (TSP) Description — the terminal clocks spinners, shimmer and timers
 // =============================================================================
-
-/** Untruncated head detail for a vibe call (native twin of the ANSI call label). */
-function vibeNativeLabel(op: VibeOp, args: VibeRenderArgs | undefined): string {
-	switch (op) {
-		case "spawn":
-			return `spawn ${args?.cli ?? "?"}${args?.name ? ` · ${args.name}` : ""}`;
-		case "send":
-			return `send → ${args?.session ?? "?"}`;
-		case "wait":
-			return args?.sessions?.length ? `wait on ${args.sessions.join(", ")}` : "wait on running sessions";
-		case "kill":
-			return `kill ${args?.session ?? "?"}`;
-		case "list":
-			return "sessions";
-	}
-}
 
 /** The director's composed message as `>`-prefixed wrapped text, or undefined when empty. */
 function vibeComposer(message: string): NativeNode | undefined {
@@ -395,7 +319,7 @@ function describeVibeScreen(
 		body.push(
 			text([
 				span(
-					`turn ${settled} — result delivered`,
+					`turn ${settled}, result delivered`,
 					settled === "completed" ? "success" : settled === "failed" ? "error" : "warning",
 				),
 			]),
@@ -423,7 +347,7 @@ function describeVibeResult(
 	args: VibeRenderArgs | undefined,
 ): NativeToolView {
 	const details = result.details;
-	const label = vibeNativeLabel(op, args);
+	const label = vibeSubject(op, args, " · ", details);
 	if (result.isError) return { ...errorView("Vibe", resultText(result) || "vibe failed", label), inline: true };
 	if (!details) {
 		const fallback = resultText(result).trim();
@@ -432,23 +356,14 @@ function describeVibeResult(
 
 	if (op === "spawn" || op === "send") {
 		const message = op === "spawn" ? (args?.prompt ?? "") : (args?.message ?? "");
-		const head: TspSpan[] =
-			op === "spawn"
-				? [
-						...toolHead("Vibe", "spawn"),
-						span(" "),
-						span(details.spawned?.cli ?? args?.cli ?? "?", "accent strong"),
-						span(" "),
-						span(plainText(details.spawned?.id ?? args?.name ?? ""), "accent"),
-					]
-				: [...toolHead("Vibe", "send →"), span(" "), span(plainText(args?.session ?? "?"), "accent")];
+		const head = toolHead("Vibe", label);
 		const ack: TspSpan =
 			op === "spawn"
 				? span(`turn started${details.spawned ? ` (job ${details.spawned.jobId})` : ""}`, "success")
 				: details.send?.mode === "steered"
 					? span("steered into the running turn", "success")
 					: details.send?.mode === "queued"
-						? span("mid-turn — queued as the next turn", "warning")
+						? span("mid-turn, queued as the next turn", "warning")
 						: span(`turn started${details.send?.jobId ? ` (job ${details.send.jobId})` : ""}`, "success");
 		return {
 			head,
@@ -461,7 +376,7 @@ function describeVibeResult(
 
 	if (op === "kill") {
 		const note = details.killed?.cancelledTurn ? "in-flight turn cancelled" : undefined;
-		return { head: toolHead("Vibe", `kill ${details.killed?.id ?? args?.session ?? "?"}`, note), inline: true };
+		return { head: toolHead("Vibe", label, note), inline: true };
 	}
 
 	const screens = details.screens;
@@ -469,19 +384,13 @@ function describeVibeResult(
 	const killedMeta = hiddenKilled > 0 ? span(` · ${hiddenKilled} killed hidden`, "dim") : undefined;
 	if (screens.length === 0) {
 		const gist = hiddenKilled > 0 ? "no live sessions" : resultText(result).trim() || "no sessions";
-		const head = toolHead("Vibe", op, gist);
+		const head = toolHead("Vibe", label, gist);
 		if (killedMeta) head.push(killedMeta);
 		return { head, tone: "warning", inline: true };
 	}
 	const settledById = new Map(details.wait?.settled.map(entry => [entry.id, entry.status] as const) ?? []);
 	const running = screens.filter(screen => screen.state === "running" || screen.state === "starting").length;
-	const title =
-		op === "wait"
-			? details.wait?.waiting === true
-				? "wait — watching the wall"
-				: "wait"
-			: `sessions (${screens.length})`;
-	const head: TspSpan[] = toolHead("Vibe", title);
+	const head: TspSpan[] = toolHead("Vibe", label, `${screens.length} sessions`);
 	if (running > 0) head.push(span(` · ${running} on air`, "accent"));
 	if (settledById.size > 0) head.push(span(` · ${settledById.size} settled`, "success"));
 	if (details.wait?.timedOut) head.push(span(" · timed out", "warning"));
@@ -508,20 +417,17 @@ export function createVibeToolRenderer(op: VibeOp) {
 		animatedPartialResult: op === "wait",
 
 		renderCall(args: VibeRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
-			const title = uiTheme.fg("muted", `vibe ${describeCall(op, args)}`);
-			if (composerOp) {
-				const message = op === "spawn" ? (args?.prompt ?? "") : (args?.message ?? "");
-				return linesComponent(() => {
-					const cursorOn = ((options.spinnerFrame ?? 0) & 1) === 0;
-					return miniFrame(
-						uiTheme,
-						title,
-						composerRows(uiTheme, message, { cursor: cursorOn, expanded: options.expanded }),
-						uiTheme.fg("dim", op === "spawn" ? "booting CLI…" : "delivering…"),
-					);
-				});
-			}
-			return new Text(renderStatusLine({ icon: "pending", title: `vibe ${describeCall(op, args)}` }, uiTheme), 0, 0);
+			const message = op === "spawn" ? (args?.prompt ?? "") : op === "send" ? (args?.message ?? "") : "";
+			return plainToolCard(uiTheme, () => ({
+				status: {
+					icon: options.executionStarted ? "running" : "pending",
+					spinnerFrame: options.spinnerFrame,
+					title: TITLE,
+					description: vibeSubject(op, args, uiTheme.sep.dot),
+				},
+				phase: options.executionStarted ? "running" : "pending",
+				body: messageRows(uiTheme, message, options.expanded),
+			}));
 		},
 
 		renderResult(
@@ -531,123 +437,98 @@ export function createVibeToolRenderer(op: VibeOp) {
 			args?: VibeRenderArgs,
 		): Component {
 			const details = result.details;
+			const subject = vibeSubject(op, args, uiTheme.sep.dot, details);
+			const fallback = result.content.find(part => part.type === "text")?.text?.trim() ?? "";
 			if (!details || result.isError) {
-				const fallback = result.content.find(part => part.type === "text")?.text ?? "";
-				const header = renderStatusLine(
-					{ icon: result.isError ? "error" : "done", title: `vibe ${describeCall(op, args)}` },
-					uiTheme,
-				);
-				const body = fallback
-					? `\n  ${uiTheme.fg(result.isError ? "error" : "dim", frameText(fallback, TV_LINE_MAX))}`
-					: "";
-				return new Text(`${header}${body}`, 0, 0);
+				return plainToolCard(uiTheme, () => ({
+					status: { icon: result.isError ? "error" : "success", title: TITLE, description: subject },
+					phase: result.isError ? "error" : "success",
+					body: fallback
+						? sanitizeDisplayLines(fallback).map(line =>
+								result.isError ? formatErrorText(line, uiTheme) : uiTheme.fg("muted", line),
+							)
+						: [],
+				}));
 			}
 
 			if (composerOp) {
 				const message = op === "spawn" ? (args?.prompt ?? "") : (args?.message ?? "");
-				const target =
-					op === "spawn"
-						? `${uiTheme.fg("muted", "vibe spawn")} ${formatBadge(details.spawned?.cli ?? args?.cli ?? "?", "accent", uiTheme)} ${uiTheme.fg("accent", frameText(details.spawned?.id ?? args?.name ?? "", 40))}`
-						: `${uiTheme.fg("muted", "vibe send →")} ${uiTheme.fg("accent", frameText(args?.session ?? "?", 40))}`;
-				const ack =
-					op === "spawn"
-						? uiTheme.fg("success", `turn started${details.spawned ? ` (job ${details.spawned.jobId})` : ""}`)
-						: details.send?.mode === "steered"
-							? uiTheme.fg("success", "steered into the running turn")
-							: details.send?.mode === "queued"
-								? uiTheme.fg("warning", "mid-turn — queued as the next turn")
-								: uiTheme.fg(
-										"success",
-										`turn started${details.send?.jobId ? ` (job ${details.send.jobId})` : ""}`,
-									);
-				const lines = miniFrame(
-					uiTheme,
-					target,
-					composerRows(uiTheme, message, { cursor: false, expanded: options.expanded }),
-					ack,
-				);
-				return linesComponent(lines);
+				const queued = details.send?.mode === "queued";
+				const jobId = op === "spawn" ? details.spawned?.jobId : details.send?.jobId;
+				const mode = op === "send" ? details.send?.mode : undefined;
+				return plainToolCard(uiTheme, () => ({
+					status: {
+						icon: queued ? "warning" : "success",
+						title: TITLE,
+						description: subject,
+						badge: mode ? { label: mode, color: queued ? "warning" : "success" } : undefined,
+						meta: jobId ? [`job ${jobId}`] : undefined,
+					},
+					phase: queued ? "warning" : "success",
+					body: messageRows(uiTheme, message, options.expanded),
+				}));
 			}
 
 			if (op === "kill") {
-				const killedNote = details.killed?.cancelledTurn ? " (in-flight turn cancelled)" : "";
-				const header = renderStatusLine(
-					{
-						icon: "done",
-						title: `vibe kill ${frameText(details.killed?.id ?? args?.session ?? "?", 40)}${killedNote}`,
+				return plainToolCard(uiTheme, () => ({
+					status: {
+						icon: "success",
+						title: TITLE,
+						description: subject,
+						meta: details.killed?.cancelledTurn ? ["in-flight turn cancelled"] : undefined,
 					},
-					uiTheme,
-				);
-				return new Text(header, 0, 0);
+					phase: "success",
+				}));
 			}
 
 			// wait/list: the TV wall. Director-killed sessions arrive pre-filtered
 			// (see `hiddenKilled`) so a long-running director's wall stays legible.
 			const screens = details.screens;
 			const hiddenKilled = details.hiddenKilled?.length ?? 0;
-			const killedMeta = hiddenKilled > 0 ? [uiTheme.fg("dim", `${hiddenKilled} killed hidden`)] : [];
+			const killedMeta = hiddenKilled > 0 ? [`${hiddenKilled} killed hidden`] : [];
 			if (screens.length === 0) {
-				const fallback = result.content.find(part => part.type === "text")?.text ?? "no sessions";
-				const gist = hiddenKilled > 0 ? "no live sessions" : fallback;
-				return new Text(
-					renderStatusLine(
-						{
-							icon: "warning",
-							title: `vibe ${op}`,
-							meta: [uiTheme.fg("dim", frameText(gist, 60)), ...killedMeta],
-						},
-						uiTheme,
-					),
-					0,
-					0,
-				);
+				return plainToolCard(uiTheme, () => ({
+					status: {
+						icon: "warning",
+						title: TITLE,
+						description: subject,
+						meta: ["0 sessions", ...killedMeta],
+					},
+					phase: "warning",
+				}));
 			}
-			const waiting = details.wait?.waiting === true;
 			const settledById = new Map(details.wait?.settled.map(entry => [entry.id, entry.status] as const) ?? []);
 			const snapshotTime = Date.now();
 			const wallOptions = options.isPartial ? options : { ...options, spinnerFrame: undefined };
-			return linesComponent(() => {
+			return plainToolCard(uiTheme, () => {
 				const running = screens.filter(screen => screen.state === "running" || screen.state === "starting").length;
-				const meta: string[] = [];
-				if (running > 0) meta.push(uiTheme.fg("accent", `${running} on air`));
-				if (settledById.size > 0) meta.push(uiTheme.fg("success", `${settledById.size} settled`));
-				if (details.wait?.timedOut) meta.push(uiTheme.fg("warning", "timed out"));
+				const meta = [formatCount("session", screens.length)];
+				if (running > 0) meta.push(`${running} on air`);
+				if (settledById.size > 0) meta.push(`${settledById.size} settled`);
+				if (details.wait?.timedOut) meta.push("timed out");
 				meta.push(...killedMeta);
-				const title =
-					op === "wait"
-						? waiting
-							? "vibe wait — watching the wall"
-							: "vibe wait"
-						: `vibe sessions (${screens.length})`;
-				const header = renderStatusLine(
-					{
-						icon: details.wait?.timedOut ? "warning" : running > 0 ? "info" : "done",
-						spinnerFrame: running > 0 ? wallOptions.spinnerFrame : undefined,
-						title,
-						meta,
-					},
-					uiTheme,
-				);
-				const lines = [header];
-				for (const screen of screens) {
-					lines.push(
-						...tvScreen(
-							uiTheme,
-							screen,
-							wallOptions,
-							settledById.get(screen.id),
-							options.isPartial ? Date.now() : snapshotTime,
-						),
-					);
-				}
-				return lines;
+				const icon: ToolUIStatus = options.isPartial
+					? options.spinnerFrame !== undefined
+						? "running"
+						: "pending"
+					: details.wait?.timedOut
+						? "warning"
+						: "success";
+				const nowMs = options.isPartial ? Date.now() : snapshotTime;
+				return {
+					status: { icon, spinnerFrame: wallOptions.spinnerFrame, title: TITLE, description: subject, meta },
+					phase: icon === "pending" ? "partial" : icon,
+					body: screens.flatMap(screen =>
+						screenRows(uiTheme, screen, wallOptions, settledById.get(screen.id), nowMs),
+					),
+				};
 			});
 		},
 
 		describeCall(args: VibeRenderArgs): NativeToolView | undefined {
 			const message = op === "spawn" ? (args?.prompt ?? "") : op === "send" ? (args?.message ?? "") : "";
-			return callMemo.get(args, [vibeNativeLabel(op, args), message], () => {
-				const head = toolHead("Vibe", vibeNativeLabel(op, args));
+			return callMemo.get(args, [vibeSubject(op, args, " · "), message], () => {
+				const head = toolHead("Vibe", vibeSubject(op, args, " · "));
 				if (!composerOp) return { head, inline: true };
 				return {
 					head,

@@ -3,6 +3,7 @@ import { getComposerShapeOptions } from "@oh-my-pi/pi-tui/overlays/composer-shap
 import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
 import { statusLineHost } from "../../modes/status-line-host";
 import { createGallerySession } from "./preview-session";
+import { theme } from "@oh-my-pi/pi-tui/theme";
 import type { GalleryPreviewEntry } from "./types";
 
 /** Production composer registry in selector order. */
@@ -32,7 +33,7 @@ function renderComposer(shape: string, width: number): readonly string[] {
 export function getComposerGalleryEntries(): readonly GalleryPreviewEntry[] {
 	return getComposerShapeOptions().map(option => ({
 		id: option.value,
-		heading: `composer · ${option.value} — ${option.label}`,
+		heading: `composer${theme.sep.dot}${option.value}${theme.sep.dot}${option.label}`,
 		variants: [
 			{
 				label: "canonical preview",

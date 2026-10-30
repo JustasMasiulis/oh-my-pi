@@ -345,7 +345,8 @@ describe("#9816 focus blackout across an in-flight wait", () => {
 		await returning;
 
 		const rendered = Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
-		expect(rendered).toContain("Sleeper1 done");
+		expect(rendered).toContain("Wait: 1 job 1 done");
+		expect(rendered).toContain("Sleeper1");
 		expect(ctx.pendingTools.has("wait-1")).toBe(false);
 	});
 });

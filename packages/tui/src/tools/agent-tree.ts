@@ -1,7 +1,6 @@
 import { formatContextUsage } from "../chrome/context-thresholds";
 import {
 	FEED_MODEL_BADGE_WIDTH,
-	formatBadge,
 	formatDuration,
 	formatFeedModelBadge,
 	formatNumber,
@@ -22,25 +21,43 @@ export interface AgentStats {
 	cost?: number;
 }
 
-/** Format the shared tool-count, request, context, and cost stat run. */
-export function formatAgentStatRun(stats: AgentStats, theme: Theme): string {
-	let line = "";
+/** Format the shared tool-count, request, context, and cost stats as separate, individually styled parts. */
+export function formatAgentStats(stats: AgentStats, theme: Theme): string[] {
+	const parts: string[] = [];
 	if (stats.toolCount) {
-		line += `${theme.sep.dot}${theme.fg("dim", `${formatNumber(stats.toolCount)} ${theme.icon.extensionTool}`)}`;
+		parts.push(theme.fg("dim", `${formatNumber(stats.toolCount)} ${theme.icon.extensionTool}`));
 	}
 	if (stats.requests) {
-		line += `${theme.sep.dot}${theme.fg("dim", `${formatNumber(stats.requests)} req`)}`;
+		parts.push(theme.fg("dim", `${formatNumber(stats.requests)} req`));
 	}
 	if (stats.contextTokens && stats.contextTokens > 0) {
 		const context =
 			stats.contextWindow && stats.contextWindow > 0
 				? formatContextUsage((stats.contextTokens / stats.contextWindow) * 100, stats.contextWindow)
 				: formatNumber(stats.contextTokens);
-		line += `${theme.sep.dot}${theme.fg("dim", context)}`;
+		parts.push(theme.fg("dim", context));
 	}
-	if (stats.cost && stats.cost > 0)
-		line += `${theme.sep.dot}${theme.fg("statusLineCost", `$${stats.cost.toFixed(2)}`)}`;
-	return line;
+	if (stats.cost && stats.cost > 0) parts.push(theme.fg("statusLineCost", `$${stats.cost.toFixed(2)}`));
+	return parts;
+}
+
+/** Join row meta parts after a single space, separated by the theme's dot separator. */
+export function formatAgentRowMeta(parts: readonly string[], theme: Theme): string {
+	return parts.length > 0 ? ` ${parts.join(theme.fg("dim", theme.sep.dot))}` : "";
+}
+
+/** Map an agent lifecycle state onto the shared tool status icon vocabulary. */
+export function agentStatusIcon(status: AgentTreeRowOptions["status"], theme: Theme, spinnerFrame?: number): string {
+	switch (status) {
+		case "completed":
+			return formatStatusIcon("success", theme);
+		case "failed":
+			return formatStatusIcon("error", theme);
+		case "running":
+			return formatStatusIcon("running", theme, spinnerFrame);
+		default:
+			return formatStatusIcon(status, theme);
+	}
 }
 
 /** Tool-specific presentation layered onto a bounded agent progress row. */
@@ -73,21 +90,12 @@ export function renderAgentTreeRow(
 	const { status, width, description } = options;
 	const task = options.presentation === "task";
 	const live = status === "pending" || status === "running";
-	const failed = status === "failed" || status === "aborted";
-	const iconColor = status === "completed" ? "success" : failed ? "error" : "accent";
-	const nameColor = task && live && options.frozen ? "dim" : task && status === "completed" ? "text" : "accent";
-	const iconStatus = status === "failed" ? "error" : status === "completed" ? "done" : status;
-	const icon =
-		task && !failed
-			? theme.styledSymbol("status.done", nameColor)
-			: !task && status === "completed"
-				? theme.styledSymbol("tool.eval", "accent")
-				: theme.fg(
-						iconColor,
-						formatStatusIcon(iconStatus, theme, status === "running" ? options.spinnerFrame : undefined),
-					);
-	const lead = `${options.prefix}${options.prefix || !task ? " " : ""}${icon} `;
-	const statusBadge = options.statusBadge ?? (failed ? ` ${formatBadge(status, iconColor, theme)}` : "");
+	const nameColor = live && options.frozen ? "dim" : "accent";
+	// Task rows sit inside a framed card whose committed rows must not repaint, so they never animate.
+	const animate = !task && live && !options.frozen;
+	const icon = agentStatusIcon(status, theme, animate ? options.spinnerFrame : undefined);
+	const lead = `${options.prefix}${options.prefix ? " " : ""}${icon} `;
+	const statusBadge = options.statusBadge ?? "";
 	const id = Number.isFinite(width)
 		? truncateToWidth(options.id, Math.max(0, width - visibleWidth(lead) - visibleWidth(statusBadge)))
 		: options.id;
@@ -114,20 +122,20 @@ export function renderAgentTreeRow(
 	const descriptionShown = Boolean(
 		description && visibleWidth(`${lead}${modelLead}${id}: ${description}${badges}`) <= width,
 	);
-	let title = descriptionShown ? `${theme.bold(id)}: ${description}` : task ? id : theme.bold(id);
-	if (task && live && descriptionShown) {
-		title = `${theme.fg(nameColor, theme.bold(id))}${theme.fg(nameColor, ":")} ${theme.fg(nameColor, description!)}`;
-	} else {
-		title = theme.fg(nameColor, title);
-	}
+	const name = theme.fg(nameColor, theme.bold(id));
+	const title = descriptionShown
+		? `${name}${theme.fg(nameColor, ":")} ${theme.fg(live && options.frozen ? "dim" : "text", description!)}`
+		: name;
 	let line = `${lead}${modelLead}${title}${badges}`;
 	if (options.preview) line += options.preview;
+	const meta: string[] = [];
 	if (live && options.completionPercent !== undefined) {
-		line += `${theme.sep.dot}${theme.fg("accent", `${options.completionPercent}%`)}`;
+		meta.push(theme.fg("accent", `${options.completionPercent}%`));
 	}
-	if (options.stats) line += formatAgentStatRun(options.stats, theme);
+	if (options.stats) meta.push(...formatAgentStats(options.stats, theme));
 	if (options.durationMs !== undefined && options.durationMs > 0) {
-		line += `${theme.sep.dot}${theme.fg("dim", formatDuration(options.durationMs))}`;
+		meta.push(theme.fg("dim", formatDuration(options.durationMs)));
 	}
+	line += formatAgentRowMeta(meta, theme);
 	return { line: Number.isFinite(width) ? truncateToWidth(line, width, "") : line, descriptionShown };
 }

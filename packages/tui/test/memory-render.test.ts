@@ -23,9 +23,8 @@ describe("retainToolRenderer", () => {
 		],
 	};
 
-	it("renders one inline bullet line per item with a count summary", async () => {
+	it("renders one flush row per item with a count summary", async () => {
 		const uiTheme = await theme();
-		const bullet = uiTheme.format.bullet;
 		const result = { content: [{ type: "text", text: "3 memories stored." }], details: { count: 3 } };
 		const rendered = lines(
 			retainToolRenderer.renderResult(result as never, { expanded: false, isPartial: false }, uiTheme, args),
@@ -33,7 +32,7 @@ describe("retainToolRenderer", () => {
 
 		expect(rendered[0]).toContain("Retain");
 		expect(rendered[0]).toContain("3 memories stored");
-		const items = rendered.filter(line => line.includes(bullet));
+		const items = rendered.filter(line => line.includes("fact to remember"));
 		expect(items).toHaveLength(3);
 		expect(items[0]).toContain("First fact to remember");
 		expect(items[2]).toContain("Third fact to remember");
@@ -44,7 +43,6 @@ describe("retainToolRenderer", () => {
 
 	it("truncates long memory content to one line", async () => {
 		const uiTheme = await theme();
-		const bullet = uiTheme.format.bullet;
 		const long = "x".repeat(400);
 		const result = { content: [{ type: "text", text: "1 memory stored." }], details: { count: 1 } };
 		const rendered = lines(
@@ -53,27 +51,25 @@ describe("retainToolRenderer", () => {
 			}),
 			80,
 		);
-		const item = rendered.find(line => line.includes(bullet));
+		const item = rendered.find(line => line.includes("xxx"));
 		expect(item!.length).toBeLessThanOrEqual(80);
 		expect(item).toContain("…");
 	});
 
-	it("shows pending bullet lines while the call streams", async () => {
+	it("shows pending item rows while the call streams", async () => {
 		const uiTheme = await theme();
-		const bullet = uiTheme.format.bullet;
 		const rendered = lines(retainToolRenderer.renderCall(args, { expanded: false, isPartial: true }, uiTheme));
-		expect(rendered.filter(line => line.includes(bullet))).toHaveLength(3);
+		expect(rendered.filter(line => line.includes("fact to remember"))).toHaveLength(3);
 	});
 
 	it("ignores transient non-array items while the call streams", async () => {
 		const uiTheme = await theme();
-		const bullet = uiTheme.format.bullet;
 		const rendered = lines(
 			retainToolRenderer.renderCall({ items: "[" }, { expanded: false, isPartial: true }, uiTheme),
 		);
 
+		expect(rendered).toHaveLength(1);
 		expect(rendered[0]).toContain("Retain");
-		expect(rendered.some(line => line.includes(bullet))).toBe(false);
 	});
 });
 
@@ -116,7 +112,7 @@ describe("recallToolRenderer", () => {
 			}),
 		);
 		expect(rendered).toHaveLength(1);
-		expect(rendered[0]).toContain("no matches");
+		expect(rendered[0]).toContain("0 found");
 	});
 });
 

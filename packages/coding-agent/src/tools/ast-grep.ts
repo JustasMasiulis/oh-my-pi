@@ -32,7 +32,12 @@ import {
 import { searchApprovalCacheTargets } from "./search-approval-targets";
 import { toPathList } from "@oh-my-pi/pi-tui/render/render-utils";
 import { isRawSelector } from "./read-selector";
-import { capParseErrors, formatCodeFrameLine, formatParseErrors } from "@oh-my-pi/pi-tui/render/render-utils";
+import {
+	CODE_FRAME_GUTTER,
+	capParseErrors,
+	formatCodeFrameLine,
+	formatParseErrors,
+} from "@oh-my-pi/pi-tui/render/render-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { toolResult } from "./tool-result";
 
@@ -351,7 +356,9 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 						modelOut.push(
 							formatMatchLine(lineNumber, line, isMatch, { useHashLines: hashContext !== undefined }),
 						);
-						displayOut.push(formatCodeFrameLine(isMatch ? "*" : " ", lineNumber, line, lineNumberWidth));
+						displayOut.push(
+							formatCodeFrameLine(isMatch ? "*" : " ", lineNumber, line, lineNumberWidth, CODE_FRAME_GUTTER),
+						);
 					}
 					if (match.metaVariables && Object.keys(match.metaVariables).length > 0) {
 						const serializedMeta = Object.entries(match.metaVariables)

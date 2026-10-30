@@ -1,16 +1,16 @@
 import type { Component } from "../tui";
-import { Text } from "../components/text";
 import type { Theme } from "../theme/theme";
-import { renderStatusLine } from "../render/status-line";
-import { framedToolCard } from "../render/tool-card";
+import type { StatusLineOptions } from "../render/status-line";
+import { framedToolCard, plainToolCard, type ToolCardSection } from "../render/tool-card";
 import {
+	clipCollapsed,
+	formatErrorText,
 	formatExpandHint,
-	formatStatusIcon,
+	formatMoreItems,
 	PREVIEW_LIMITS,
 	replaceTabs,
 	TRUNCATE_LENGTHS,
 	truncateToWidth,
-	clipCollapsed,
 } from "../render/render-utils";
 import type { NativeToolView, RenderResultOptions, ToolRenderer, ToolRenderResult } from "./renderer";
 import { ansi, kv } from "../native/describe";
@@ -182,12 +182,24 @@ function describeDebugResult(
 
 const debugResultMemo = new OwnerMemo<NativeToolView | undefined>();
 
+/** The Debug header in every state: the call's action and target as the subject. */
+function debugStatus(args: DebugRenderArgs, icon: StatusLineOptions["icon"], spinnerFrame?: number): StatusLineOptions {
+	return {
+		icon,
+		spinnerFrame,
+		title: "Debug",
+		description: summarizeDebugCall(args),
+	};
+}
+
 /** Renders debugger calls and captured execution snapshots. */
 export const debugToolRenderer = {
 	animatedPartialResult: true,
-	renderCall(args: DebugRenderArgs, _options: RenderResultOptions, theme: Theme): Component {
-		const text = renderStatusLine({ icon: "pending", title: "Debug", description: summarizeDebugCall(args) }, theme);
-		return new Text(text, 0, 0);
+	renderCall(args: DebugRenderArgs, options: RenderResultOptions, theme: Theme): Component {
+		return plainToolCard(theme, () => {
+			const phase = options.executionStarted ? "running" : "pending";
+			return { status: debugStatus(args, phase, options.spinnerFrame), phase };
+		});
 	},
 
 	renderResult(
@@ -196,36 +208,51 @@ export const debugToolRenderer = {
 		theme: Theme,
 		args?: DebugRenderArgs,
 	): Component {
+		const callArgs = args ?? { action: result.details?.action };
+		const text = result.content.find(block => block.type === "text")?.text ?? "";
+		if (result.isError) {
+			return plainToolCard(theme, () => ({
+				status: debugStatus(callArgs, "error"),
+				phase: "error",
+				body: [formatErrorText(text || "Debug failed", theme)],
+			}));
+		}
+		const sessionLines = result.details?.snapshot
+			? formatSessionSnapshot(result.details.snapshot).map(line => theme.fg("muted", replaceTabs(line)))
+			: [];
+		const outputLines = text.trim() ? replaceTabs(text).split("\n") : [];
+		if (sessionLines.length === 0 && outputLines.length === 0) {
+			return plainToolCard(theme, () => {
+				const partial = options.isPartial === true;
+				return {
+					status: debugStatus(callArgs, partial ? "running" : "success", options.spinnerFrame),
+					phase: partial ? "partial" : "success",
+				};
+			});
+		}
 		return framedToolCard(theme, () => {
-			const action = (args?.action ?? result.details?.action ?? "debug").replaceAll("_", " ");
-			const success = !options.isPartial && !result.isError;
-			const statusIcon = success
-				? theme.styledSymbol("tool.debug", "accent")
-				: formatStatusIcon(options.isPartial ? "running" : "error", theme, options.spinnerFrame);
-			const header = `${statusIcon} Debug ${action}`;
-			const summaryLines = result.details?.snapshot
-				? formatSessionSnapshot(result.details.snapshot).map(line => replaceTabs(line))
-				: [];
-			const text = result.content.find(block => block.type === "text")?.text ?? "No output";
-			const rawLines = replaceTabs(text).split("\n");
+			const partial = options.isPartial === true;
 			const previewLimit = options.expanded ? PREVIEW_LIMITS.EXPANDED_LINES : PREVIEW_LIMITS.COLLAPSED_LINES;
-			const displayedLines = rawLines
+			const displayedLines = outputLines
 				.slice(0, previewLimit)
 				.map(line => clipCollapsed(line, TRUNCATE_LENGTHS.LINE, options.expanded));
-			const remaining = rawLines.length - displayedLines.length;
-			if (remaining > 0) {
-				displayedLines.push(
-					theme.fg("muted", `… ${remaining} more lines ${formatExpandHint(theme, options.expanded, true)}`),
-				);
+			const remaining = outputLines.length - displayedLines.length;
+			const hint = formatExpandHint(theme, options.expanded, remaining > 0);
+			const marker = formatMoreItems(remaining, "line", theme);
+			// Session facts open the frame unlabelled; the output follows under its own bar.
+			const sections: ToolCardSection[] = [];
+			if (sessionLines.length > 0) sections.push({ content: sessionLines });
+			if (displayedLines.length > 0) {
+				sections.push({
+					label: sessionLines.length > 0 ? theme.fg("toolTitle", "Output") : undefined,
+					content: displayedLines,
+				});
 			}
 			return {
-				header,
-				phase: options.isPartial ? "partial" : result.isError ? "error" : "success",
-				sections: [
-					...(summaryLines.length > 0 ? [{ label: theme.fg("toolTitle", "Session"), content: summaryLines }] : []),
-					{ label: theme.fg("toolTitle", "Output"), content: displayedLines },
-				],
-				applyBg: false,
+				status: debugStatus(callArgs, partial ? "running" : "success"),
+				phase: partial ? "partial" : "success",
+				footerMeta: remaining > 0 ? theme.fg("dim", hint ? `${marker} ${hint}` : marker) : undefined,
+				sections,
 			};
 		});
 	},

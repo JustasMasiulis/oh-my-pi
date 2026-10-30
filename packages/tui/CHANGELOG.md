@@ -2,9 +2,43 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Tool cards are built from a status line: `ToolCardSnapshot.status` replaces `header`/`headerMeta`, `footerMeta` sits in the bottom border, and `applyBg`, `borderColor` and the `paddingX`/`paddingY` card options are gone. Tool blocks no longer tint or pad their background, custom renderers included.
+- Removed `formatTitle`, `formatErrorMessage`, `formatErrorDetail`, `formatEmptyMessage`, `ToolUITitleOptions`, the `"done"` `ToolUIStatus` and the `iconOverride`/`titleColor` status-line options; use `renderStatusLine` and `formatErrorText`.
+- Tool headers no longer show a per-tool icon next to the status glyph. The `tool.*` symbol keys are removed, so theme `symbols.overrides` entries for them are ignored. The `status.done` key and `theme.status.done` are removed as well.
+- `renderCodeCell` and `renderMarkdownCell` take `header: StatusLineOptions` plus `footerMeta`, `formatCodeFrameLine` requires a `gutter`, `formatMoreItems` takes the theme and an optional `"earlier"` direction, `renderMCPCall` takes render options, and the JSON tree's `"hooked"` layout is now `"flush"`.
+- Removed `formatAgentStatRun`; use `formatAgentStats`. `ShellRendererConfig` takes a fixed `title` plus `resolveSubject`/`resolveBadge` instead of `resolveTitle`/`showHeader`, the LSP `renderCall` returns a `Component`, and `formatErrorText` keeps every line of the message instead of truncating it.
+- `buildFileMentionBlock` drops its `indent` argument and `FramedMessageOptions` drops `icon`. `buildExecutionFrame` also returns its `bottomBorder`, and `buildStatusFooter` no longer takes `status`/`exitCode`.
+- Divider tees in rounded cards and overlays read the new `boxRound.teeRight`/`boxRound.teeLeft` symbol keys; theme overrides of `boxSharp.teeRight`/`boxSharp.teeLeft` now affect only sharp boxes and tables.
+
 ### Added
 
 - Added a `maxRows` callback to `FigureMarkdown`, `SvgFigure` and `TableChartFigure` so surfaces shorter than the screen can fit their figures; zero hides a figure without delaying transcript completion ([#15661](https://github.com/can1357/oh-my-pi/issues/15661), [#15853](https://github.com/can1357/oh-my-pi/pull/15853) by [@KunoLu](https://github.com/KunoLu))
+
+### Changed
+
+- Every tool renderer now shows the same header, `<status> <Title>: <subject> [badge] <meta>`, in both the framed and flush layouts. Only content blocks (file reads, writes, diffs, command output, subagent tasks, web results and questions) are framed; other tools render as a flush header with indented rows, top-level list items sit flush, and tree connectors appear only for nested items.
+- The header keeps the tool title on errors and shows the call's outcome: partial and empty results are warnings, and user cancellations show as aborted. Calls show pending until they start executing, then running.
+- Error messages in tool cards are shown in full instead of being cut at 110 characters.
+- The ASCII symbol preset gives every status glyph three columns, so a header doesn't shift when a call settles: success is `[+]`, error `[-]` and aborted `[#]`, alongside `[ ]` pending, `[~]` running, `[!]` warning and `[i]` info. Status spinners animate as `(|) (/) (-) (\)` so a live frame can't be mistaken for `[-]` or `[/]` (shadowed). Card and overlay dividers keep their side tees on the rail (`|--- Output ---|`) while tables keep `+` at every junction, and ellipses and arrows are `...`, `->` and `<-`, including `truncateToWidth`'s default ellipsis.
+- Success glyphs on tool headers and transcript status rows (background jobs, supervised processes, read file mentions, Ask answers) are neutral gray instead of green, and the pending glyph shown while a call streams in is the theme's blue.
+- Bash and Eval cards for a run that printed nothing say `No output` in the bottom border instead of showing an Output section holding `(no output)`, and Bash shows its wall time as a plain duration (`180ms`, `5.1s`) without the `Wall:` label.
+- Background job, supervised process, tangent and prompt file-mention rows start at column 0 with a status glyph: `[+]` when done, `[-]` when failed, `[!]` for a skipped file and `[i]` for a tangent.
+- The idle recap leads with `[i]` instead of `※`, collab guest prompts show the author's name in bold instead of `«name» ›`, and rule-injection banners drop the rewind glyph and end with the `[Ctrl+O: Expand]` hint.
+- Advisor notes open with an `[i] Advisor` header at column 0 and end with `… N more notes [Ctrl+O: Expand]` while collapsed; extension and hook messages drop their icons.
+- User `!`/`$` runs show `exit N` or `cancelled` in their bottom border instead of a `(exit N)` / `(cancelled)` row under the output.
+- Compaction, branch and handoff dividers show the `[Ctrl+O: Expand]` hint until expanded, the expanded summary no longer leaves two blank rows under the divider, and collapsed provider errors end with the shared `… N more lines` row.
+- IRC message cards name the recipient with an arrow (`IRC: → Reviewer`), like incoming and relayed messages, and their delivery badges (`injected`, `revived`, `failed`) are gray.
+- Tool cards and skill prompts that hide detail while collapsed always say so with the `Ctrl+O: Expand` hint: GitHub search results whose rows omit fields, Find's search accounting, Wait's job output, Task results with clipped output, the earlier lines of a streaming Write or Edit (Edit only when expanding widens its tail), the clipped arguments of tools without their own renderer, and a skill message's folded SKILL.md prompt.
+- Tool headers stay on one row: a subject too long for the terminal is cut in its middle, keeping the title, badge and result counts visible instead of wrapping them under the body.
+- Glob, Grep and AST Grep headers list `;`-separated search paths as `a, b`, and Glob and Grep give each skipped missing path its own warning row.
+- Grep, AST Grep and AST Edit results label each file with its full path instead of the model-facing `# dir/` and `## file#tag` headers.
+- File paths in tool output share one style: a dim directory and the file name in the custom-message label color (bronze in titanium), with line locations and selectors (`:1-175`, `148:8`, `?q=`) muted. This covers Grep, AST Grep, AST Edit, Glob, Find, LSP, diagnostics, grouped Reads and file mentions; file-type icons are muted, and paths in tool headers stay in the plain subject color.
+- Grouped Read cards show their count as header meta (`Read 4 files`).
+- Search headers dim the `in` between the pattern and its scope (`useState in src`).
+- `… N more` rows and card footers are dim everywhere, like the expand hint; only facts the tool colors itself, such as `+2 -1` or `No output`, stand out.
+- A color applied over already-styled text now holds after the inner styling ends, so a footer such as `+2 -1 · … 3 more lines` stays dim past the colored counts.
 
 ### Fixed
 

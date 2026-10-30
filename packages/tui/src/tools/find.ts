@@ -4,19 +4,25 @@
  * its strongest verified line ranges with a verbatim snippet.
  */
 import * as path from "node:path";
+import { Ellipsis } from "@oh-my-pi/pi-natives";
 import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
 import { renderProgressBar } from "../components/progress-bar";
-import { Text } from "../components/text";
-import { fileHyperlink, getTreeBranch, renderStatusLine, renderTreeList, uriHyperlink } from "../render";
+import { fileHyperlink, getTreeBranch, uriHyperlink } from "../render";
+import type { StatusLineOptions } from "../render/status-line";
+import { plainToolCard } from "../render/tool-card";
 import {
-	createCachedComponent,
-	fitHeaderedRows,
+	FILE_NAME_COLOR,
 	formatCount,
-	formatEmptyMessage,
-	formatErrorMessage,
+	formatErrorText,
+	formatExpandHint,
+	formatMoreItems,
+	formatScopedSubject,
+	formatStyledPath,
 	PREVIEW_LIMITS,
 	replaceTabs,
+	type ToolUIStatus,
 } from "../render/render-utils";
+import { truncateToWidth } from "../utils";
 import type { Theme, ThemeColor } from "../theme/theme";
 import type { Component } from "../tui";
 import type { OutputMeta } from "./output-meta";
@@ -115,6 +121,8 @@ interface FindRenderArgs {
 const GAUGE_WIDTH = 6;
 /** Hits shown before expansion. */
 const COLLAPSED_HITS = 5;
+/** Rows a collapsed hit list may fill, including its `… N more hits` row. */
+const COLLAPSED_LINE_BUDGET = PREVIEW_LIMITS.EXPANDED_LINES;
 /** Ranges shown per hit: one collapsed, three expanded. */
 const RANGES_COLLAPSED = 1;
 const RANGES_EXPANDED = 3;
@@ -157,6 +165,7 @@ function findLinkTargets(details: FindToolDetails, rawDetails: unknown) {
 	};
 }
 
+/** A hit row (gauge, score, path, coverage) over its strongest ranges as nested tree children. */
 function renderHit(hit: FindHit, rangeLimit: number, cwd: string | undefined, rawRel: string, theme: Theme): string[] {
 	// `scheme://` hits (e.g. virtual docs) are not files under `cwd`: link the
 	// URL itself instead of joining it onto a filesystem base.
@@ -167,16 +176,16 @@ function renderHit(hit: FindHit, rangeLimit: number, cwd: string | undefined, ra
 		return absPath === undefined ? text : fileHyperlink(absPath, text, { line });
 	};
 	const coverage = hit.truncated ? `${hit.linesSeen} lines judged, partial` : `${hit.linesSeen} lines judged`;
-	const lines = [
-		`${gauge(hit.contentScore, theme)} ${theme.fg(scoreColor(hit.contentScore), hit.contentScore.toFixed(2))} ${link(theme.fg("accent", hit.rel))} ${theme.fg("dim", coverage)}`,
-	];
+	const label = isUrlHit ? theme.fg(FILE_NAME_COLOR, hit.rel) : formatStyledPath(hit.rel, theme);
+	const score = theme.fg(scoreColor(hit.contentScore), hit.contentScore.toFixed(2));
+	const lines = [`${gauge(hit.contentScore, theme)} ${score} ${link(label)} ${theme.fg("dim", coverage)}`];
 	const ranges = [...hit.ranges].sort((a, b) => b.p - a.p || a.start - b.start).slice(0, rangeLimit);
 	ranges.forEach((range, index) => {
 		const span = range.start === range.end ? String(range.start) : `${range.start}-${range.end}`;
 		const ref = link(theme.fg("muted", `:${span}`), range.start);
 		const snippet = theme.fg("toolOutput", replaceTabs(range.snippet.trim()));
 		const branch = theme.fg("dim", getTreeBranch(index === ranges.length - 1, theme));
-		lines.push(`  ${branch} ${ref} ${theme.fg("dim", range.p.toFixed(2))} ${snippet}`);
+		lines.push(`${branch} ${ref} ${theme.fg("dim", range.p.toFixed(2))} ${snippet}`);
 	});
 	return lines;
 }
@@ -228,28 +237,25 @@ function findNativeHead(
 	return { title: "Find", target: query ?? "", targetKind: "query", meta };
 }
 
-function quoteQuery(query: string | undefined): string | undefined {
-	return query === undefined ? undefined : `"${query}"`;
+/** `"query" in scope`, the same in the call and the result. */
+function findSubject(query: string | undefined, scope: string | undefined, theme: Theme): string | undefined {
+	if (query === undefined) return undefined;
+	return formatScopedSubject(`"${query}"`, scope, theme);
 }
 
 /** Render find calls and results in the transcript. */
 export const findToolRenderer = {
 	renderCall(args: FindRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 		const keywords = args.grep_keywords ?? [];
-		const meta = keywords.length > 0 ? [keywords.join(" ")] : [];
-		if (args.path) meta.push(`in ${args.path}`);
-		const text = renderStatusLine(
-			{
-				icon: "pending",
+		return plainToolCard(uiTheme, () => ({
+			status: {
+				icon: options.executionStarted ? "running" : "pending",
 				spinnerFrame: options.spinnerFrame,
 				title: "Find",
-				titleColor: "toolTitle",
-				description: quoteQuery(args.query),
-				meta,
+				description: findSubject(args.query, args.path, uiTheme),
+				meta: keywords.length > 0 ? [keywords.join(" ")] : [],
 			},
-			uiTheme,
-		);
-		return new Text(text, 0, 0);
+		}));
 	},
 
 	renderResult(
@@ -260,98 +266,94 @@ export const findToolRenderer = {
 	): Component {
 		const details = result.details;
 		const text = result.content?.find(c => c.type === "text")?.text ?? "";
+		const status = (icon: ToolUIStatus, meta?: string[]): StatusLineOptions => ({
+			icon,
+			spinnerFrame: options.spinnerFrame,
+			title: "Find",
+			description: findSubject(args?.query ?? details?.query, args?.path ?? details?.scopePath, uiTheme),
+			meta,
+		});
 
 		if (result.isError) {
-			return new Text(formatErrorMessage(text || "Unknown error", uiTheme), 0, 0);
+			return plainToolCard(uiTheme, () => ({
+				status: status("error"),
+				phase: "error",
+				body: [formatErrorText(text || "Unknown error", uiTheme)],
+			}));
 		}
 
 		// Streaming progress: the tool reports the phase it is in.
 		if (options.isPartial || details === undefined) {
-			const header = renderStatusLine(
-				{
-					icon: "pending",
-					spinnerFrame: options.spinnerFrame,
-					title: "Find",
-					titleColor: "toolTitle",
-					description: quoteQuery(args?.query ?? details?.query),
-					meta: text ? [text] : [],
-				},
-				uiTheme,
-			);
-			return new Text(header, 0, 0);
+			return plainToolCard(uiTheme, () => ({ status: status("running", text ? [text] : []) }));
 		}
 
 		const { hits, stats, threshold } = details;
 		const linkTargets = findLinkTargets(details, options.renderContext?.rawDetails);
-		const description = quoteQuery(details.query);
-		const scope = details.scopePath === undefined ? [] : [`in ${details.scopePath}`];
+		const failed =
+			stats.failed > 0 ? uiTheme.fg("warning", `${stats.failed}/${stats.requests} requests failed`) : undefined;
+		const failures = stats.failures.map(failure => uiTheme.fg("warning", failure));
+
+		if (hits.length === 0) {
+			const meta = ["0 hits", `$${stats.cost.toFixed(4)}`, formatDuration(details.elapsedMs)];
+			if (failed) meta.push(failed);
+			return plainToolCard(uiTheme, () => ({
+				status: status("warning", meta),
+				phase: "warning",
+				body: failures.length > 0 ? failures : undefined,
+			}));
+		}
+
 		const meta = [
 			formatCount("hit", hits.length),
-			...scope,
 			`${stats.filesRead} files read`,
-			`τ ${threshold.toFixed(2)}`,
-			`${formatNumber(stats.inputTokens)} tokens`,
 			`$${stats.cost.toFixed(4)}`,
 			formatDuration(details.elapsedMs),
 		];
-		const failed = stats.failed > 0 ? `${stats.failed}/${stats.requests} requests failed` : undefined;
-		if (failed) meta.push(uiTheme.fg("warning", failed));
+		// Search accounting beyond the header's counts: shown when expanded.
+		const accounting = [
+			`threshold ${threshold.toFixed(2)}`,
+			`${formatNumber(stats.inputTokens)} tokens`,
+			`keywords: ${details.keywords.join(", ")}`,
+		].join(uiTheme.sep.dot);
+		if (failed) meta.push(failed);
 
-		if (hits.length === 0) {
-			const emptyMeta = ["0 hits", ...scope, `$${stats.cost.toFixed(4)}`, formatDuration(details.elapsedMs)];
-			if (failed) emptyMeta.push(uiTheme.fg("warning", failed));
-			const header = renderStatusLine(
-				{ icon: "warning", title: "Find", titleColor: "toolTitle", description, meta: emptyMeta },
-				uiTheme,
-			);
-			const empty =
-				details.coverage === "partial"
-					? "No relevant passages found in the judged files"
-					: "No relevant passages found";
-			const lines = [header, formatEmptyMessage(empty, uiTheme)];
-			for (const failure of stats.failures) lines.push(uiTheme.fg("warning", failure));
-			return new Text(lines.join("\n"), 0, 0);
-		}
-
-		const header = renderStatusLine(
-			{
-				iconOverride: uiTheme.fg("toolTitle", uiTheme.symbol("icon.search")),
-				title: "Find",
-				titleColor: "toolTitle",
-				description,
-				meta,
-			},
+		// Rows are clipped, never wrapped; recomputed only when width or expansion changes.
+		let memo: { width: number; expanded: boolean; rows: readonly string[] } | undefined;
+		return plainToolCard(
 			uiTheme,
-		);
-
-		return createCachedComponent(
-			() => options.expanded,
-			(width, expanded) => {
-				const hitLines = renderTreeList(
-					{
-						items: hits,
-						expanded,
-						maxCollapsed: COLLAPSED_HITS,
-						maxCollapsedLines: PREVIEW_LIMITS.EXPANDED_LINES,
-						itemType: "hit",
-						renderItem: (hit, context) =>
-							renderHit(
-								hit,
-								expanded ? RANGES_EXPANDED : RANGES_COLLAPSED,
-								linkTargets.cwd,
-								linkTargets.rel(hit, context.index),
-								uiTheme,
-							),
-					},
-					uiTheme,
-				);
-				const extra: string[] = [];
-				if (expanded) {
-					extra.push(uiTheme.fg("dim", `keywords: ${details.keywords.join(", ")}`));
-					for (const failure of stats.failures) extra.push(uiTheme.fg("warning", failure));
-				}
-				return fitHeaderedRows(header, [...hitLines, ...extra], width);
-			},
+			() => ({
+				status: status(failed ? "warning" : "success", meta),
+				phase: failed ? "warning" : "success",
+				body: width => {
+					const expanded = options.expanded;
+					if (memo?.width !== width || memo.expanded !== expanded) {
+						const rangeLimit = expanded ? RANGES_EXPANDED : RANGES_COLLAPSED;
+						const rows: string[] = [];
+						let shown = 0;
+						for (const [index, hit] of hits.entries()) {
+							if (!expanded && shown === COLLAPSED_HITS) break;
+							const hitRows = renderHit(hit, rangeLimit, linkTargets.cwd, linkTargets.rel(hit, index), uiTheme);
+							// Collapsed rows stay within the line budget, keeping one row for the `… N more hits` summary.
+							const reserve = index < hits.length - 1 ? 1 : 0;
+							if (!expanded && shown > 0 && rows.length + hitRows.length + reserve > COLLAPSED_LINE_BUDGET)
+								break;
+							rows.push(...hitRows);
+							shown++;
+						}
+						if (shown < hits.length) {
+							const more = uiTheme.fg("dim", formatMoreItems(hits.length - shown, "hit", uiTheme));
+							rows.push(`${more} ${formatExpandHint(uiTheme)}`);
+						} else if (!expanded) {
+							// The search accounting (and any further ranges) only shows expanded.
+							rows.push(formatExpandHint(uiTheme));
+						}
+						if (expanded) rows.push(uiTheme.fg("dim", accounting), ...failures);
+						memo = { width, expanded, rows: rows.map(row => truncateToWidth(row, width, Ellipsis.Omit)) };
+					}
+					return memo.rows;
+				},
+			}),
+			{ onInvalidate: () => (memo = undefined), onReleaseRenderCaches: () => (memo = undefined) },
 		);
 	},
 	describeCall(args: FindRenderArgs): NativeToolView {

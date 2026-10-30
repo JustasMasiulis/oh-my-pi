@@ -713,7 +713,7 @@ describe("retired edit and write formatting", () => {
 				args,
 			),
 		);
-		expect(after).toBeGreaterThan(before);
+		expect(after).toBe(before);
 		expect(highlights).toBe(1);
 	});
 

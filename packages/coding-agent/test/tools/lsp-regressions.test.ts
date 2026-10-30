@@ -1752,7 +1752,7 @@ describe("lsp regressions", () => {
 		);
 		const resultText = sanitizeText(result.render(120).join("\n"));
 		const normalizedResultText = resultText.replace(/\s+/g, " ");
-		expect(normalizedResultText).toContain("symbol: foo bar baz");
+		expect(normalizedResultText).toContain("src/example.ts:10 (foo bar baz)");
 		expect(resultText).not.toContain("\t");
 	});
 

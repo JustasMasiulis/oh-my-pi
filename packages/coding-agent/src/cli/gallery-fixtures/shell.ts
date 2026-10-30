@@ -64,6 +64,22 @@ export const shellFixtures: Record<string, GalleryFixture> = {
 		},
 	},
 
+	bash_silent: {
+		label: "Bash without output",
+		renderer: "bash",
+		streamingArgs: { command: "mkdir -p dist/gall" },
+		args: { command: "mkdir -p dist/gallery && test -f dist/cli.js", timeout: 30 },
+		result: {
+			content: [{ type: "text", text: "(no output)" }],
+			details: { exitCode: 0, wallTimeMs: 12, timeoutSeconds: 30 },
+		},
+		errorResult: {
+			content: [{ type: "text", text: "(no output)\n\nCommand exited with code 1" }],
+			isError: true,
+			details: { exitCode: 1, wallTimeMs: 9, timeoutSeconds: 30 },
+		},
+	},
+
 	bash_service: {
 		label: "Bash service",
 		renderer: "bash",
@@ -180,6 +196,97 @@ export const shellFixtures: Record<string, GalleryFixture> = {
 						].join("\n"),
 						status: "error",
 						durationMs: 41,
+						exitCode: 1,
+					},
+				],
+			},
+		},
+	},
+
+	eval_cells: {
+		label: "Eval (multi-cell)",
+		renderer: "eval",
+		streamingArgs: {
+			cells: [{ language: "js", title: "count sources", code: 'const files = await glob("src/**/*.ts");' }],
+		},
+		args: {
+			cells: [
+				{
+					language: "js",
+					title: "count sources",
+					code: 'const files = await glob("src/**/*.ts");\nprint(`${files.length} files`);',
+				},
+				{
+					language: "py",
+					title: "largest file",
+					code: 'import glob, os\nfiles = glob.glob("src/**/*.ts", recursive=True)\nbiggest = max(files, key=os.path.getsize)\nprint(biggest, os.path.getsize(biggest))',
+				},
+			],
+		},
+		result: {
+			content: [{ type: "text", text: "412 files\nsrc/session/agent-session.ts 498112" }],
+			details: {
+				language: "js",
+				languages: ["js", "python"],
+				cells: [
+					{
+						index: 0,
+						title: "count sources",
+						language: "js",
+						code: 'const files = await glob("src/**/*.ts");\nprint(`${files.length} files`);',
+						output: "412 files",
+						status: "complete",
+						durationMs: 212,
+						exitCode: 0,
+					},
+					{
+						index: 1,
+						title: "largest file",
+						language: "python",
+						code: 'import glob, os\nfiles = glob.glob("src/**/*.ts", recursive=True)\nbiggest = max(files, key=os.path.getsize)\nprint(biggest, os.path.getsize(biggest))',
+						output: "src/session/agent-session.ts 498112",
+						status: "complete",
+						durationMs: 18,
+						exitCode: 0,
+					},
+				],
+			},
+		},
+		errorResult: {
+			content: [
+				{
+					type: "text",
+					text: "412 files\nFileNotFoundError: [Errno 2] No such file or directory: 'src/generated/schema.ts'",
+				},
+			],
+			isError: true,
+			details: {
+				language: "js",
+				languages: ["js", "python"],
+				isError: true,
+				cells: [
+					{
+						index: 0,
+						title: "count sources",
+						language: "js",
+						code: 'const files = await glob("src/**/*.ts");\nprint(`${files.length} files`);',
+						output: "412 files",
+						status: "complete",
+						durationMs: 212,
+						exitCode: 0,
+					},
+					{
+						index: 1,
+						title: "largest file",
+						language: "python",
+						code: 'import glob, os\nfiles = glob.glob("src/**/*.ts", recursive=True)\nbiggest = max(files, key=os.path.getsize)\nprint(biggest, os.path.getsize(biggest))',
+						output: [
+							"Traceback (most recent call last):",
+							'  File "<cell 1>", line 3, in <module>',
+							"FileNotFoundError: [Errno 2] No such file or directory: 'src/generated/schema.ts'",
+						].join("\n"),
+						status: "error",
+						durationMs: 9,
 						exitCode: 1,
 					},
 				],

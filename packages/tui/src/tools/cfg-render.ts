@@ -7,13 +7,7 @@
  */
 import type { Component } from "../tui";
 import { renderStatusLine } from "../render";
-import {
-	cappedHeadLines,
-	formatBadge,
-	formatErrorDetail,
-	formatMoreItems,
-	PREVIEW_LIMITS,
-} from "../render/render-utils";
+import { cappedHeadLines, formatErrorText, formatMoreItems, PREVIEW_LIMITS } from "../render/render-utils";
 import { highlightCode, type Theme } from "../theme/theme";
 import { parseCfgUrl } from "./cfg-url";
 import type { NativeToolView, RenderResultOptions } from "./renderer";
@@ -63,7 +57,7 @@ export function renderCfgRead(
 		}
 		const header = renderStatusLine(
 			{
-				icon: result === undefined ? "pending" : result.isError ? "error" : "info",
+				icon: result === undefined ? "pending" : result.isError ? "error" : "success",
 				title: "Config",
 				description: (details?.path ?? parseCfgUrl(url)?.segments.join(".")) || "all settings",
 				meta,
@@ -71,11 +65,11 @@ export function renderCfgRead(
 			theme,
 		);
 		if (!result) return [header];
-		if (result.isError) return [header, formatErrorDetail(firstText(result) || "Settings read failed.", theme)];
+		if (result.isError) return [header, `  ${formatErrorText(firstText(result) || "Settings read failed.", theme)}`];
 		const body = firstText(result).trimEnd().split("\n");
 		const shown = cappedHeadLines(body, expanded ? body.length : PREVIEW_LIMITS.COLLAPSED_ITEMS);
 		const lines = [header, ...highlightCode(safe(shown.lines.join("\n")), "yaml", theme).map(line => `  ${line}`)];
-		if (shown.hidden) lines.push(theme.fg("dim", `  ${formatMoreItems(shown.hidden, "line")}`));
+		if (shown.hidden) lines.push(`  ${theme.fg("dim", formatMoreItems(shown.hidden, "line", theme))}`);
 		return lines;
 	}, options);
 }
@@ -162,13 +156,21 @@ export function renderCfgWrite(
 					: details?.outcome === "declined"
 						? "warning"
 						: "success";
-		const badges = [formatBadge(save ? "persist" : "session", save ? "accent" : "muted", theme)];
-		if (details?.outcome === "declined") badges.push(formatBadge("declined", "warning", theme));
-		if (details?.outcome === "unchanged") badges.push(formatBadge("unchanged", "muted", theme));
-		const header = `${renderStatusLine({ icon, title: "Config", description: details?.path ?? target?.segments.join(".") }, theme)} ${badges.join(" ")}`;
-		if (result?.isError) return [header, formatErrorDetail(firstText(result) || "Settings write failed.", theme)];
-		const arrow = theme.fg("dim", "→");
-		const next = theme.fg("toolOutput", details?.value ?? content?.trim() ?? "…");
+		const meta = details?.outcome === "declined" || details?.outcome === "unchanged" ? [details.outcome] : [];
+		const header = renderStatusLine(
+			{
+				icon,
+				title: "Config",
+				description: details?.path ?? target?.segments.join("."),
+				badge: { label: save ? "persist" : "session", color: save ? "accent" : "muted" },
+				meta,
+			},
+			theme,
+		);
+		if (result?.isError)
+			return [header, `  ${formatErrorText(firstText(result) || "Settings write failed.", theme)}`];
+		const arrow = theme.fg("dim", theme.format.arrowRight);
+		const next = theme.fg("toolOutput", details?.value ?? content?.trim() ?? "");
 		const lines = [
 			header,
 			details ? `  ${theme.fg("dim", details.previous)} ${arrow} ${next}` : `  ${arrow} ${next}`,

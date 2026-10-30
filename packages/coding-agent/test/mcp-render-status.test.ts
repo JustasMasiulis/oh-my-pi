@@ -114,7 +114,7 @@ describe("MCP tool rendering", () => {
 	it("replaces the pending call header with a success header after completion", async () => {
 		const uiTheme = await getRequiredTheme();
 		const pendingIcon = Bun.stripANSI(formatStatusIcon("pending", uiTheme));
-		const doneIcon = Bun.stripANSI(uiTheme.styledSymbol("tool.mcp", "accent"));
+		const doneIcon = Bun.stripANSI(formatStatusIcon("success", uiTheme));
 
 		const rendered = await renderCompletedMCPTool(false);
 

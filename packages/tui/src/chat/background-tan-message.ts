@@ -1,5 +1,5 @@
 import type { BackgroundTanDispatchDetails, CustomMessage } from "./messages";
-import { replaceTabs } from "../render/render-utils";
+import { replaceTabs, truncateToWidth } from "../render/render-utils";
 import { theme } from "../theme";
 import type { TranscriptBlock } from "../chrome/transcript-container";
 import { TranscriptStatusBlock } from "../chrome/transcript-status";
@@ -8,9 +8,7 @@ import { span } from "../native/describe";
 const TAN_WORK_PREVIEW_LENGTH = 56;
 
 function previewWork(work: string): string {
-	const singleLine = replaceTabs(work).trim().replace(/\s+/g, " ");
-	if (singleLine.length <= TAN_WORK_PREVIEW_LENGTH) return singleLine;
-	return `${singleLine.slice(0, TAN_WORK_PREVIEW_LENGTH - 1)}…`;
+	return truncateToWidth(replaceTabs(work).trim().replace(/\s+/g, " "), TAN_WORK_PREVIEW_LENGTH);
 }
 
 /**
@@ -28,7 +26,8 @@ export function createBackgroundTanDispatchBlock(message: CustomMessage<unknown>
 	return new TranscriptStatusBlock([
 		{
 			parts: [
-				{ text: `${theme.icon.output} Tangent dispatched`, color: "muted" },
+				{ text: theme.status.info, color: "accent" },
+				{ text: "Tangent dispatched", color: "muted" },
 				{ text: "[task]", color: "dim" },
 				{ text: jobId, color: "accent" },
 				work ? { text: `${theme.format.dash} ${work}`, color: "dim" } : undefined,

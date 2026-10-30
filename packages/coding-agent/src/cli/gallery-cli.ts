@@ -4,11 +4,12 @@
  * For each tool with a registered renderer, the gallery drives a real
  * {@link ToolExecutionComponent} through four states — streaming arguments,
  * arguments complete (in progress), success, and failure — and prints the
- * rendered output to stdout. It exists for visual QA of tool renderers without
- * having to provoke each state through a live agent session.
+ * rendered output to stdout. Transcript messages, composer shapes and
+ * status-line segments render alongside as preview sections. It exists for
+ * visual QA without having to provoke each state through a live agent session.
  */
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
-import type { TUI } from "@oh-my-pi/pi-tui";
+import { type TUI, visibleWidth } from "@oh-my-pi/pi-tui";
 import { getProjectDir } from "@oh-my-pi/pi-utils";
 import { Settings } from "../config/settings";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
@@ -21,6 +22,8 @@ import {
 	galleryFixtures,
 	getComposerGalleryEntries,
 	getComposerGalleryInventory,
+	getMessageGalleryEntries,
+	getMessageGalleryInventory,
 	getSegmentGalleryEntries,
 	getSegmentGalleryInventory,
 } from "./gallery-fixtures";
@@ -55,7 +58,7 @@ const GALLERY_STATE_ALIASES: Record<string, GalleryState> = {
 export const GALLERY_STATE_TOKENS = Object.keys(GALLERY_STATE_ALIASES);
 
 /** Gallery surfaces in stable product order. */
-export const GALLERY_SURFACES = ["tool", "composer", "segment"] as const;
+export const GALLERY_SURFACES = ["tool", "message", "composer", "segment"] as const;
 export type GallerySurface = (typeof GALLERY_SURFACES)[number];
 export const GALLERY_SURFACE_TOKENS = [...GALLERY_SURFACES, "all"] as const;
 
@@ -98,6 +101,8 @@ export interface GalleryCommandArgs {
 	surfaces?: GallerySurface[];
 	/** Restrict to a single tool name. */
 	tool?: string;
+	/** Restrict to a single transcript message kind. */
+	message?: string;
 	/** Restrict to a single composer shape. */
 	composer?: string;
 	/** Restrict to a single status-line segment. */
@@ -227,9 +232,15 @@ function resolveWidth(requested: number | undefined): number {
 }
 
 function sectionRule(label: string, width: number): string {
-	const prefix = `── ${label} `;
-	const fill = Math.max(0, width - prefix.length);
-	return theme.fg("accent", theme.bold(`${prefix}${"─".repeat(fill)}`));
+	const rule = theme.boxSharp.horizontal;
+	const prefix = `${rule.repeat(2)} ${label} `;
+	const fill = Math.max(0, width - visibleWidth(prefix));
+	return theme.fg("accent", theme.bold(`${prefix}${rule.repeat(fill)}`));
+}
+
+/** Dim sub-heading above one rendered state or variant. */
+function variantLabel(label: string): string {
+	return theme.fg("dim", `  ${theme.sep.dot.trim()} ${label}`);
 }
 
 /**
@@ -246,10 +257,10 @@ async function renderGallerySections(
 	const sections: GallerySection[] = [];
 	for (const name of names) {
 		const fixture = resolveFixture(name);
-		const heading = fixture.label && fixture.label !== name ? `${name} — ${fixture.label}` : name;
+		const heading = fixture.label && fixture.label !== name ? `${name}${theme.sep.dot}${fixture.label}` : name;
 		const lines: string[] = ["", sectionRule(heading, width)];
 		for (const state of states) {
-			lines.push("", theme.fg("dim", `  · ${GALLERY_STATE_LABELS[state]}`));
+			lines.push("", variantLabel(GALLERY_STATE_LABELS[state]));
 			try {
 				for (const line of await renderGalleryState(name, fixture, state, width, expanded)) lines.push(line);
 			} catch (err) {
@@ -264,9 +275,10 @@ async function renderGallerySections(
 function resolveSurfaces(args: GalleryCommandArgs): GallerySurface[] {
 	const selected = new Set<GallerySurface>(args.surfaces ?? []);
 	if (!args.surfaces || args.surfaces.length === 0) {
-		if (!args.tool && !args.composer && !args.segment) return [...GALLERY_SURFACES];
+		if (!args.tool && !args.message && !args.composer && !args.segment) return [...GALLERY_SURFACES];
 	}
 	if (args.tool) selected.add("tool");
+	if (args.message) selected.add("message");
 	if (args.composer) selected.add("composer");
 	if (args.segment) selected.add("segment");
 	return GALLERY_SURFACES.filter(surface => selected.has(surface));
@@ -281,7 +293,7 @@ async function renderPreviewSections(
 	for (const entry of entries) {
 		const lines = ["", sectionRule(entry.heading, width)];
 		for (const variant of entry.variants) {
-			lines.push("", theme.fg("dim", `  · ${variant.label}`));
+			lines.push("", variantLabel(variant.label));
 			try {
 				for (const line of await variant.render(width, expanded)) lines.push(line);
 			} catch (err) {
@@ -293,7 +305,7 @@ async function renderPreviewSections(
 	return sections;
 }
 
-/** Build requested sections in the fixed tool → composer → segment order. */
+/** Build requested sections in the fixed tool → message → composer → segment order. */
 export async function renderGallerySurfaceSections(
 	args: GalleryCommandArgs,
 	width = resolveWidth(args.width),
@@ -307,6 +319,10 @@ export async function renderGallerySurfaceSections(
 		const allNames = Array.from(new Set([...Object.keys(toolRenderers), ...Object.keys(galleryFixtures)])).sort();
 		const names = args.tool ? allNames.filter(name => name === args.tool) : allNames;
 		sections.push(...(await renderGallerySections(names, states, width, expanded)));
+	}
+	if (surfaces.includes("message")) {
+		const entries = getMessageGalleryEntries().filter(entry => !args.message || entry.id === args.message);
+		sections.push(...(await renderPreviewSections(entries, width, expanded)));
 	}
 	if (surfaces.includes("composer")) {
 		const entries = getComposerGalleryEntries().filter(entry => !args.composer || entry.id === args.composer);
@@ -346,6 +362,12 @@ export async function runGalleryCommand(args: GalleryCommandArgs): Promise<void>
 			process.stdout.write(`Unknown tool '${args.tool}'. Known tools: ${knownTools.join(", ")}\n`);
 			return;
 		}
+	}
+	if (surfaces.includes("message") && args.message && !getMessageGalleryInventory().includes(args.message)) {
+		process.stdout.write(
+			`Unknown message '${args.message}'. Known messages: ${getMessageGalleryInventory().join(", ")}\n`,
+		);
+		return;
 	}
 	if (surfaces.includes("composer") && args.composer && !getComposerGalleryInventory().includes(args.composer)) {
 		process.stdout.write(

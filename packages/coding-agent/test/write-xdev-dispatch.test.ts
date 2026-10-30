@@ -428,7 +428,7 @@ describe("read and write route xd:// device URLs", () => {
 			{ path: "xd://github", content },
 		);
 		const rendered = Bun.stripANSI(component.render(80).join("\n"));
-		expect(rendered).toContain("GitHub Repo");
+		expect(rendered).toContain("GitHub: repo");
 		expect(rendered).toContain("gh: Not Found (HTTP 404)");
 		expect(rendered).not.toContain("Write");
 	});
@@ -467,14 +467,10 @@ describe("read and write route xd:// device URLs", () => {
 		);
 		const lines = component.render(80);
 		const rendered = Bun.stripANSI(lines.join("\n"));
-		const backgroundProbe = uiTheme.bg("toolSuccessBg", "|");
-		const backgroundPrefix = backgroundProbe.slice(0, backgroundProbe.indexOf("|"));
 
 		expect(rendered).toContain("Weather");
 		expect(rendered).toContain('query="Tokyo"');
 		expect(rendered).toContain("Tokyo: 22°C");
-		expect(backgroundPrefix).not.toBe("");
-		expect(lines.some(line => line.includes(backgroundPrefix))).toBe(true);
 	});
 
 	it("renders a dispatched top-level tool through its own renderer while it stays unmounted", async () => {

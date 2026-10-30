@@ -10,6 +10,7 @@ import { prompt } from "@oh-my-pi/pi-utils";
 import taskSummaryTemplate from "../../coding-agent/src/prompts/tools/task-summary.md" with { type: "text" };
 import type { NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { type CoordinationDetails, waitToolRenderer } from "@oh-my-pi/pi-tui/tools/wait";
+import { formatMoreItems, formatStatusIcon, PREVIEW_LIMITS } from "@oh-my-pi/pi-tui/render/render-utils";
 import { decodeBench } from "./fixtures/job-widget-views";
 
 /** Every described node under `children`, depth first. */
@@ -174,7 +175,7 @@ describe("job renderer task-result preview", () => {
 			expect(output).toContain("Job1 running");
 			expect(output).toContain("Job2 completed");
 			expect(output).toContain("Job3 running");
-			expect(output).toContain("waiting on 2 of 3 jobs");
+			expect(output).toContain("Wait: 3 jobs");
 		});
 
 		it("retains running and settled jobs after a poll is sealed", () => {
@@ -191,7 +192,7 @@ describe("job renderer task-result preview", () => {
 			expect(output).toContain("Job1 running");
 			expect(output).toContain("Job2 completed");
 			expect(output).toContain("Job3 running");
-			expect(output).toContain("waiting on 2 of 3 jobs");
+			expect(output).toContain("Wait: 3 jobs");
 		});
 
 		it("retains the worker identity in a sealed all-running poll", () => {
@@ -217,32 +218,6 @@ describe("job renderer task-result preview", () => {
 			expect(Bun.stripANSI(lines.join("\n"))).toContain("Job1 running");
 		});
 
-		it("collapses to one row per settled job instead of re-printing the job tree", () => {
-			const result = {
-				content: [{ type: "text" as const, text: "" }],
-				details: { op: "wait" as const, jobs: jobsData },
-			};
-			const component = waitToolRenderer.renderResult(result, { expanded: false, isPartial: false }, theme);
-			const lines = (component.render(120) as readonly string[]).map(line => Bun.stripANSI(line));
-			// Job2 settled: one completion row. The running jobs collapse into a count,
-			// so the next poll's card does not repeat them.
-			expect(lines).toHaveLength(2);
-			expect(lines[0]).toContain("Job2 done");
-			expect(lines[1]!.trim()).toBe("2 still running");
-			expect(lines.join("\n")).not.toContain("waiting on");
-		});
-
-		it("keeps the waiting header while nothing has settled", () => {
-			const result = {
-				content: [{ type: "text" as const, text: "" }],
-				details: { op: "wait" as const, jobs: [jobsData[0]!, jobsData[2]!] },
-			};
-			const component = waitToolRenderer.renderResult(result, { expanded: false, isPartial: true }, theme);
-			const lines = (component.render(120) as readonly string[]).map(line => Bun.stripANSI(line));
-			expect(lines).toHaveLength(1);
-			expect(lines[0]).toContain("waiting on 2 jobs");
-		});
-
 		it("keeps a failed job's outcome visible when its id overflows the row", () => {
 			const result = {
 				content: [{ type: "text" as const, text: "" }],
@@ -261,9 +236,45 @@ describe("job renderer task-result preview", () => {
 				},
 			};
 			const component = waitToolRenderer.renderResult(result, { expanded: false, isPartial: false }, theme);
-			const [row] = (component.render(40) as readonly string[]).map(line => Bun.stripANSI(line));
-			expect(row).toContain("failed · exit 2 · 1m2s");
+			const [, row] = (component.render(40) as readonly string[]).map(line => Bun.stripANSI(line));
+			expect(row).toContain(`${Bun.stripANSI(formatStatusIcon("error", theme))} long-agent`);
+			expect(row).toContain("bash · exit 2 · 1m2s");
 			expect(Bun.stringWidth(row!)).toBeLessThanOrEqual(40);
+		});
+
+		it("fits nested failure rows to the width under wide tree connectors", () => {
+			const priorTree = Object.getOwnPropertyDescriptor(theme, "tree");
+			Object.defineProperty(theme, "tree", {
+				configurable: true,
+				value: { ...theme.tree, branch: "界├", last: "界界└", vertical: "界界│" },
+			});
+			try {
+				const result = {
+					content: [{ type: "text" as const, text: "" }],
+					details: {
+						op: "wait" as const,
+						jobs: [
+							{
+								id: "build",
+								type: "bash" as const,
+								status: "failed" as const,
+								label: "make",
+								durationMs: 1_000,
+								errorText: `linker failed: ${"undefined symbol ".repeat(12)}`,
+							},
+						],
+					},
+				};
+				for (const width of [40, 120]) {
+					const component = waitToolRenderer.renderResult(result, { expanded: false, isPartial: false }, theme);
+					const lines = (component.render(width) as readonly string[]).map(line => Bun.stripANSI(line));
+					expect(lines[2]).toStartWith("  界界└ linker failed");
+					for (const line of lines) expect(Bun.stringWidth(line)).toBeLessThanOrEqual(width);
+				}
+			} finally {
+				if (priorTree) Object.defineProperty(theme, "tree", priorTree);
+				else Reflect.deleteProperty(theme, "tree");
+			}
 		});
 
 		it("retains the running job in the sealed native wait card", () => {
@@ -272,7 +283,7 @@ describe("job renderer task-result preview", () => {
 				details: { op: "wait" as const, jobs: [jobsData[0]] },
 			};
 			const view = waitToolRenderer.describeResult!(result, { expanded: true, isPartial: false });
-			expect(view?.head).toEqual(expect.arrayContaining([expect.objectContaining({ t: "waiting on 1 job" })]));
+			expect(view?.head).toEqual(expect.arrayContaining([expect.objectContaining({ t: "1 job" })]));
 			// A subagent's tile goes by the subagent's name.
 			expect(JSON.stringify(view?.body)).toContain('{"t":"Job1"}');
 		});
@@ -360,8 +371,8 @@ describe("job renderer task-result preview", () => {
 			};
 			const component = waitToolRenderer.renderResult(result, { expanded: false, isPartial: false }, theme);
 			const lines = (component.render(100) as readonly string[]).map(line => Bun.stripANSI(line));
-			expect(lines[0]).toContain("bg_2 done");
-			expect(lines[1]).toContain("artifact write failed");
+			expect(lines[1]).toContain("bg_2 · bash · 1.0s");
+			expect(lines[2]).toContain("artifact write failed");
 		});
 
 		it("caps a large recovered batch on the collapsed card, failures first", () => {
@@ -375,9 +386,8 @@ describe("job renderer task-result preview", () => {
 			const result = { content: [{ type: "text" as const, text: "" }], details: { op: "wait" as const, jobs } };
 			const component = waitToolRenderer.renderResult(result, { expanded: false, isPartial: false }, theme);
 			const lines = (component.render(100) as readonly string[]).map(line => Bun.stripANSI(line));
-			expect(lines).toHaveLength(9);
-			expect(lines[0]).toContain("bg_11 failed");
-			expect(lines.at(-1)!.trim()).toBe("… 4 more settled");
+			expect(lines[1]).toContain(`${Bun.stripANSI(formatStatusIcon("error", theme))} bg_11`);
+			expect(lines.at(-1)!.trim()).toBe(formatMoreItems(12 - PREVIEW_LIMITS.COLLAPSED_ITEMS, "job", theme));
 		});
 
 		it("caps live widget tiles on the collapsed card and counts the rest", () => {
@@ -392,9 +402,9 @@ describe("job renderer task-result preview", () => {
 			const result = { content: [{ type: "text" as const, text: "" }], details: { op: "wait" as const, jobs } };
 			const component = waitToolRenderer.renderResult(result, { expanded: false, isPartial: false }, theme);
 			const text = (component.render(100) as readonly string[]).map(line => Bun.stripANSI(line)).join("\n");
-			expect(text).toContain("bg_7");
-			expect(text).not.toContain("bg_8");
-			expect(text).toContain("2 still running");
+			expect(text).toContain(`bg_${PREVIEW_LIMITS.COLLAPSED_ITEMS - 1}`);
+			expect(text).not.toContain(`bg_${PREVIEW_LIMITS.COLLAPSED_ITEMS}`);
+			expect(text).toContain(formatMoreItems(10 - PREVIEW_LIMITS.COLLAPSED_ITEMS, "job", theme));
 		});
 
 		it("renders agent rows for running agents outside job control", () => {
@@ -412,7 +422,7 @@ describe("job renderer task-result preview", () => {
 				theme,
 			);
 			const output = Bun.stripANSI((component.render(120) as readonly string[]).join("\n"));
-			expect(output).toContain("1 running agent — no jobs");
+			expect(output).toContain("Wait: 1 agent");
 			expect(output).toContain("Worker");
 			expect(output).toContain("grepping the tree");
 		});

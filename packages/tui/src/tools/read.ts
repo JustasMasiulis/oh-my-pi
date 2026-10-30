@@ -6,7 +6,6 @@ import * as path from "node:path";
 import { parseArchivePathCandidates } from "@oh-my-pi/pi-utils/ar";
 import { isRecord, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Component } from "../tui";
-import { Text } from "../components/text";
 import type {
 	NativeToolHead,
 	RenderResultContextOptions,
@@ -23,9 +22,9 @@ import { fileHref, footnoteText, inlineErrorView, resultText } from "./native-vi
 import { numberedCode } from "./grouped-file-output";
 import { getLanguageFromPath } from "../lang-from-path";
 import type { Theme } from "../theme/theme";
-import { fileHyperlink, renderCodeCell, renderMarkdownCell, renderStatusLine } from "../render";
+import { fileHyperlink, renderCodeCell, renderMarkdownCell, type StatusLineOptions } from "../render";
 import { markFramedBlockComponent } from "../render/output-block";
-import { framedToolCard } from "../render/tool-card";
+import { plainToolCard } from "../render/tool-card";
 import {
 	describeReadUrlCall,
 	describeReadUrlResult,
@@ -34,7 +33,7 @@ import {
 	renderReadUrlResult,
 } from "./fetch";
 import { formatFullOutputReference, formatStyledTruncationWarning, stripOutputNotice } from "./output-meta";
-import { formatBytes, sanitizeDisplayLines, shortenPath, wrapBrackets } from "../render/render-utils";
+import { formatBytes, formatErrorText, sanitizeDisplayLines, shortenPath, wrapBrackets } from "../render/render-utils";
 
 import type { OutputMeta } from "./output-meta";
 import type { TruncationResult } from "./streaming-output";
@@ -526,27 +525,34 @@ export const readToolRenderer = {
 		if (routed) return { label: routed.card.label, detail: routed.target || routed.card.rootDetail };
 		return { label: "Read", detail: sanitizeText(shortenPath(rawPath)) };
 	},
-	renderCall(args: ReadRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
+	renderCall(args: ReadRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 		const rawPath =
 			typeof args.file_path === "string" ? args.file_path : typeof args.path === "string" ? args.path : "";
 		const routed = readUrlCard(rawPath);
-		if (routed) return routed.card.render(rawPath, routed.target, undefined, undefined, _options, uiTheme);
+		if (routed) return routed.card.render(rawPath, routed.target, undefined, undefined, options, uiTheme);
 		if (isReadableUrlPath(rawPath)) {
-			return renderReadUrlCall({ path: rawPath, raw: args.raw }, _options, uiTheme);
+			return renderReadUrlCall({ path: rawPath, raw: args.raw }, options, uiTheme);
 		}
 
 		const offset = args.offset;
 		const limit = args.limit;
 
-		let pathDisplay = formatReadPathLink(rawPath, { offset, fallbackLabel: "…" }) || "…";
+		const ellipsis = uiTheme.format.ellipsis;
+		let pathDisplay = formatReadPathLink(rawPath, { offset, fallbackLabel: ellipsis }) || ellipsis;
 		if (offset !== undefined || limit !== undefined) {
 			const startLine = offset ?? 1;
 			const endLine = limit !== undefined ? startLine + limit - 1 : "";
 			pathDisplay += `:${startLine}${endLine ? `-${endLine}` : ""}`;
 		}
 
-		const text = renderStatusLine({ icon: "pending", title: "Read", description: pathDisplay }, uiTheme);
-		return new Text(text, 0, 0);
+		return plainToolCard(uiTheme, () => ({
+			status: {
+				icon: options.executionStarted ? "running" : "pending",
+				spinnerFrame: options.spinnerFrame,
+				title: "Read",
+				description: pathDisplay,
+			},
+		}));
 	},
 
 	renderResult(
@@ -584,18 +590,17 @@ export const readToolRenderer = {
 					offset: args?.offset,
 					sourcePath: linkPath ?? result.details?.displayTarget ?? readSourceFsPath(result.details),
 				}) || sanitizeText(shortenPath(rawPath));
-			let title = filePath ? `Read ${filePath}` : "Read";
-			if (args?.offset !== undefined || args?.limit !== undefined) {
-				const startLine = args.offset ?? 1;
-				const endLine = args.limit !== undefined ? startLine + args.limit - 1 : "";
-				title += `:${startLine}${endLine ? `-${endLine}` : ""}`;
+			let description = filePath;
+			if (description && (args?.offset !== undefined || args?.limit !== undefined)) {
+				const startLine = args?.offset ?? 1;
+				const endLine = args?.limit !== undefined ? startLine + args.limit - 1 : "";
+				description += `:${startLine}${endLine ? `-${endLine}` : ""}`;
 			}
-			const header = renderStatusLine({ icon: "error", title }, uiTheme);
-			const errorLines = sanitizeDisplayLines(errorText).map(line => uiTheme.fg("error", line));
-			return framedToolCard(uiTheme, () => ({
-				header,
+			const errorLines = sanitizeDisplayLines(errorText).map(line => formatErrorText(line, uiTheme));
+			return plainToolCard(uiTheme, () => ({
+				status: { icon: "error", title: "Read", description: description || undefined },
 				phase: "error",
-				sections: [{ content: errorLines }],
+				body: errorLines,
 			}));
 		}
 		const details = result.details;
@@ -641,23 +646,19 @@ export const readToolRenderer = {
 				fallbackLabel: "image",
 			});
 			const correction = suffix ? ` ${uiTheme.fg("dim", `(corrected from ${shortenPath(suffix.from)})`)}` : "";
-			const header = renderStatusLine(
-				{ icon: suffix ? "warning" : "success", title: "Read", description: `${displayPath}${correction}` },
-				uiTheme,
-			);
 			const detailLines = contentText
 				? sanitizeDisplayLines(contentText).map(line => uiTheme.fg("toolOutput", line))
 				: [];
 			const lines = [...detailLines, ...warningLines];
-			return framedToolCard(uiTheme, () => ({
-				header,
-				phase: "success",
-				sections: [
-					{
-						label: uiTheme.fg("toolTitle", "Details"),
-						content: lines.length > 0 ? lines : [uiTheme.fg("dim", "(image)")],
-					},
-				],
+			return plainToolCard(uiTheme, () => ({
+				status: {
+					icon: suffix ? "warning" : "success",
+					title: "Read",
+					description: `${displayPath}${correction}`,
+					meta: lines.length > 0 ? [] : ["image"],
+				},
+				phase: suffix ? "warning" : "success",
+				body: lines,
 			}));
 		}
 
@@ -673,19 +674,30 @@ export const readToolRenderer = {
 			offset: args?.offset,
 		});
 		const correction = suffix ? ` ${uiTheme.fg("dim", `(corrected from ${shortenPath(suffix.from)})`)}` : "";
-		let title = displayPath ? `Read ${displayPath}${correction}` : "Read";
-		if (args?.offset !== undefined || args?.limit !== undefined) {
-			const startLine = args.offset ?? 1;
-			const endLine = args.limit !== undefined ? startLine + args.limit - 1 : "";
-			title += `:${startLine}${endLine ? `-${endLine}` : ""}`;
+		let description = `${displayPath}${correction}`;
+		if (displayPath && (args?.offset !== undefined || args?.limit !== undefined)) {
+			const startLine = args?.offset ?? 1;
+			const endLine = args?.limit !== undefined ? startLine + args.limit - 1 : "";
+			description = `${displayPath}:${startLine}${endLine ? `-${endLine}` : ""}${correction}`;
 		}
+		const conflicts = details?.conflictCount ?? 0;
+		const header: StatusLineOptions = {
+			icon: suffix ? "warning" : "success",
+			title: "Read",
+			description: description || undefined,
+			badge:
+				conflicts > 0
+					? { label: `${conflicts} conflict${conflicts === 1 ? "" : "s"}`, color: "warning" }
+					: undefined,
+		};
+		const lineCount = contentText ? contentText.split("\n").length : 0;
+		const footerParts = [`${lineCount} line${lineCount === 1 ? "" : "s"}`];
 		if (details?.summary) {
-			title += ` (summary: ${details.summary.elidedSpans} elided span${details.summary.elidedSpans === 1 ? "" : "s"})`;
+			const spans = details.summary.elidedSpans;
+			footerParts.push(`summary: ${spans} elided span${spans === 1 ? "" : "s"}`);
 		}
-		if (details?.conflictCount && details.conflictCount > 0) {
-			const n = details.conflictCount;
-			title += ` ${uiTheme.fg("warning", `(⚠ ${n} conflict${n === 1 ? "" : "s"})`)}`;
-		}
+		const footerMeta = uiTheme.fg("dim", footerParts.join(uiTheme.sep.dot));
+		const output = warningLines.length > 0 ? warningLines.join("\n") : undefined;
 		const isMarkdown = readResultIsMarkdown(details, args);
 		let cachedWidth: number | undefined;
 		let cachedExpanded: boolean | undefined;
@@ -700,24 +712,14 @@ export const readToolRenderer = {
 				const expanded = options.expanded;
 				if (cachedLines && cachedWidth === width && cachedExpanded === expanded) return cachedLines;
 				cachedLines = isMarkdown
-					? renderMarkdownCell(
-							{
-								content: contentText,
-								title,
-								status: "complete",
-								output: warningLines.length > 0 ? warningLines.join("\n") : undefined,
-								expanded,
-								width,
-							},
-							uiTheme,
-						)
+					? renderMarkdownCell({ content: contentText, header, footerMeta, output, expanded, width }, uiTheme)
 					: renderCodeCell(
 							{
 								code: contentText,
 								language: lang,
-								title,
-								status: "complete",
-								output: warningLines.length > 0 ? warningLines.join("\n") : undefined,
+								header,
+								footerMeta,
+								output,
 								expanded,
 								codeStartLine: details?.displayContent?.startLine,
 								codeLineNumbers: details?.displayContent?.lineNumbers,

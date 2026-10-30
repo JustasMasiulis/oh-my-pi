@@ -140,7 +140,7 @@ describe("lsp expand hint", () => {
 				theme,
 			),
 		);
-		expect(text).toContain("line 5, col 1");
+		expect(text).toContain("5:1");
 		expect(text).not.toContain("more");
 	});
 
@@ -150,23 +150,29 @@ describe("lsp expand hint", () => {
 				renderLspResult({ content: [{ type: "text", text }] }, { expanded: false, isPartial: false }, theme),
 			).includes("Expand");
 		expect(hint(references(1))).toBe(false);
-		expect(hint(references(2))).toBe(true);
+		expect(hint(references(2))).toBe(false);
+		expect(hint(references(3))).toBe(true);
 		expect(hint("Reloaded")).toBe(false);
 		expect(hint(long)).toBe(true);
 		expect(hint(`1 error(s)\nsrc/a.ts:3:5 [error] [ts] ${long} (2345)`)).toBe(true);
 	});
 });
 
-describe("expanded lsp detail rows", () => {
+describe("expanded lsp tree rows", () => {
 	it("keep the active preset's tree rail on wrapped continuation rows", async () => {
 		const ascii = await loadTheme("dark", { symbolPresetOverride: "ascii" });
-		const text = `2 error(s)\nsrc/a.ts:3:5 [error] [ts] ${long} (1)\nsrc/b.ts:9:1 [error] [ts] short (2)`;
+		const text = [
+			"Symbols in src/a.ts:",
+			"class Alpha @ line 1",
+			`  method ${long} @ line 2`,
+			"  method two @ line 5",
+		].join("\n");
 		const rows = renderLspResult({ content: [{ type: "text", text }] }, { expanded: true, isPartial: false }, ascii)
 			.render(70)
 			.map(row => Bun.stripANSI(row));
-		const first = rows.findIndex(row => row.includes("[ts] wide-content"));
+		const first = rows.findIndex(row => row.includes("method wide-content"));
 		const last = rows.findIndex(row => row.includes(MARK));
 		expect(last).toBeGreaterThan(first);
-		for (const row of rows.slice(first, last + 1)) expect(row).toStartWith(`|  ${ascii.tree.vertical}  `);
+		for (const row of rows.slice(first + 1, last + 1)) expect(row).toStartWith(`  ${ascii.tree.vertical}   `);
 	});
 });

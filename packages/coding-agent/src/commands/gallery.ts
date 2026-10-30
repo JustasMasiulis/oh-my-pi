@@ -1,5 +1,6 @@
 /**
- * Render every built-in tool's renderer across its lifecycle states.
+ * Render every built-in tool's renderer across its lifecycle states, plus
+ * transcript messages, composer shapes and status-line segments.
  */
 
 import { Command, Flags } from "@oh-my-pi/pi-utils/cli";
@@ -18,11 +19,12 @@ export default class Gallery extends Command {
 	static description = commandHelp.description;
 	static flags = {
 		surface: Flags.string({
-			description: "Render only tool, composer, or segment surfaces (repeatable; default: all)",
+			description: "Render only tool, message, composer, or segment surfaces (repeatable; default: all)",
 			options: [...GALLERY_SURFACE_TOKENS],
 			multiple: true,
 		}),
 		tool: Flags.string({ char: "t", description: "Render a single tool by name" }),
+		message: Flags.string({ description: "Render a single transcript message kind by name" }),
 		composer: Flags.string({ description: "Render a single composer shape by name" }),
 		segment: Flags.string({ description: "Render a single status-line segment by name" }),
 		state: Flags.string({
@@ -66,6 +68,7 @@ export default class Gallery extends Command {
 		await runGalleryCommand({
 			surfaces,
 			tool: flags.tool,
+			message: flags.message,
 			composer: flags.composer,
 			segment: flags.segment,
 			states,

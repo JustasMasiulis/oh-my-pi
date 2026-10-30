@@ -1,13 +1,13 @@
 /**
  * Contracts: vibe tool renderers.
  *
- * 1. spawn/send render a mini composer — the message typed into a tiny CLI
- *    frame with a prompt glyph and (while pending) a blinking cursor.
- * 2. wait/list render the TV wall: one boxed screen per worker, stacked, a
- *    running screen showing its tool-call trace, current tool, and streamed
- *    text tail; an idle screen its last-activity gist; a settled screen its
- *    delivery footer.
- * 3. Animated content (cursor blink, spinner) re-derives from the shared
+ * 1. spawn/send render a flush `Vibe: <op target>` card with the message
+ *    indented under it.
+ * 2. wait/list render the TV wall: one status row per worker, a running
+ *    worker's tool-call trace, current tool, and streamed text tail nested
+ *    under it; an idle worker its last-activity gist; a settled worker its
+ *    turn outcome.
+ * 3. Animated content (spinner) re-derives from the shared
  *    mutable options on every paint of the SAME component — spinner ticks
  *    repaint the block without re-invoking renderCall/renderResult.
  * 4. Every emitted line respects the render width (sanitized, truncated).
@@ -49,41 +49,18 @@ describe("vibe tool renderers", () => {
 		setThemeInstance(uiTheme);
 	});
 
-	it("send composer types the message into a mini CLI frame with a blinking cursor while pending", () => {
+	it("send call shows the message under the Vibe header", () => {
 		const renderer = createVibeToolRenderer("send");
 		const component = renderer.renderCall(
 			{ session: "Anna", message: "Focus on the API first.\nThen tests." },
 			{ expanded: false, isPartial: true, spinnerFrame: 0 },
 			uiTheme,
 		) as { render(width: number): readonly string[] };
-		const text = renderLines(component).join("\n");
+		const lines = renderLines(component);
 
-		expect(text).toContain("vibe send → Anna");
-		expect(text).toContain("> Focus on the API first.");
-		expect(text).toContain("Then tests.▌");
-		expect(text).toContain("delivering…");
-		// Odd frame: cursor blinks off.
-		const off = renderLines(
-			renderer.renderCall(
-				{ session: "Anna", message: "Hi" },
-				{ expanded: false, isPartial: true, spinnerFrame: 1 },
-				uiTheme,
-			) as { render(width: number): readonly string[] },
-		).join("\n");
-		expect(off).not.toContain("▌");
-	});
-
-	it("composer cursor re-derives from mutated options on the same component", () => {
-		const renderer = createVibeToolRenderer("send");
-		const options = { expanded: false, isPartial: true, spinnerFrame: 0 };
-		const component = renderer.renderCall({ session: "Anna", message: "Hi" }, options, uiTheme) as {
-			render(width: number): readonly string[];
-		};
-		expect(renderLines(component).join("\n")).toContain("▌");
-		// The tool block mutates ONE shared render-state object per spinner tick
-		// and repaints — the component must not have baked frame 0 in.
-		options.spinnerFrame = 1;
-		expect(renderLines(component).join("\n")).not.toContain("▌");
+		expect(lines[0]).toContain("Vibe: send Anna");
+		expect(lines[1]!.trimEnd()).toBe("  Focus on the API first.");
+		expect(lines[2]!.trimEnd()).toBe("  Then tests.");
 	});
 
 	it("wait wall spinner re-derives from mutated options on the same component", () => {
@@ -158,10 +135,9 @@ describe("vibe tool renderers", () => {
 		) as { render(width: number): readonly string[] };
 		const text = renderLines(component).join("\n");
 
-		expect(text).toContain("vibe send → Anna");
-		expect(text).toContain("> Focus on the API first.");
-		expect(text).toContain("steered into the running turn");
-		expect(text).not.toContain("▌");
+		expect(text).toContain("Vibe: send Anna");
+		expect(text).toContain("steered");
+		expect(text).toContain("  Focus on the API first.");
 	});
 
 	it("wait renders stacked TV screens: live trace + streamed text, idle gist, settled footer", () => {
@@ -198,14 +174,13 @@ describe("vibe tool renderers", () => {
 		const lines = renderLines(component);
 		const text = lines.join("\n");
 
-		// One framed screen per worker, stacked.
-		expect(lines.filter(line => line.includes("╭─")).length).toBe(2);
-		expect(lines.filter(line => line.startsWith("╰─")).length).toBe(2);
-		// Live screen: header, typed turn message, trace, current tool, streamed tail.
-		expect(text).toContain("Anna");
+		// One flush row per worker; its live details nest under it.
+		const anna = lines.findIndex((line, index) => index > 0 && line.includes("Anna"));
+		expect(lines[anna]).toStartWith("  ");
+		expect(lines[anna + 1]).toContain(uiTheme.tree.branch);
 		// Badge glyphs are theme-driven (⟦fast⟧ on dark); assert the flavor label itself.
-		expect(text).toMatch(/fast.\s*Anna/u);
-		expect(text).toContain("> Build the widget");
+		expect(text).toMatch(/Anna \S?fast/u);
+		expect(text).toContain("Build the widget");
 		expect(text).toContain("read(src/foo.ts)");
 		expect(text).toContain("bash(bun test)");
 		expect(text).toContain("edit: Fixing the parser");
@@ -214,7 +189,7 @@ describe("vibe tool renderers", () => {
 		// Idle screen + settled footer.
 		expect(text).toContain("Bob");
 		expect(text).toContain("turn 2 completed");
-		expect(text).toContain("turn completed — result delivered");
+		expect(text).toContain("turn completed");
 		// Wall header counts what is on air.
 		expect(text).toContain("1 on air");
 	});
@@ -266,7 +241,7 @@ describe("vibe tool renderers", () => {
 		expect(withLive.join("\n")).not.toContain("GoneA");
 
 		const onlyKilled = render({ op: "list", screens: [], hiddenKilled: ["A", "B"] });
-		expect(onlyKilled.join("\n")).toContain("no live sessions");
+		expect(onlyKilled.join("\n")).toContain("0 sessions");
 		expect(onlyKilled.join("\n")).toContain("2 killed hidden");
 	});
 });

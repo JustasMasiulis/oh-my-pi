@@ -1,6 +1,5 @@
 import { FramedMessageComponent } from "../chrome/message-frame";
 import type { MessageRenderer } from "./extension-types";
-import { theme } from "../theme";
 import { type CustomMessage, LIVE_DELEGATION_MESSAGE_TYPE } from "./messages";
 
 /**
@@ -14,9 +13,7 @@ export class CustomMessageComponent extends FramedMessageComponent<CustomMessage
 		super({
 			message,
 			role: isHook ? "omp.hook" : isLiveDelegation ? "omp.custom.delegation" : "omp.custom",
-			// The transcript dispatch routes both `custom` and legacy `hookMessage` roles here:
-			// tag hooks with the hook glyph, other injected messages with a neutral package.
-			icon: () => (isHook ? theme.icon.extensionHook : theme.icon.package),
+			// The transcript dispatch routes both `custom` and legacy `hookMessage` roles here.
 			hideHeader: isLiveDelegation,
 			borderColor: isLiveDelegation ? "borderAccent" : undefined,
 			customRenderer,

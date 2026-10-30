@@ -757,8 +757,8 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 		this.mcpReadOnlyHint = tool.annotations?.readOnlyHint;
 	}
 
-	renderCall(args: unknown, _options: RenderResultOptions, theme: Theme) {
-		return renderMCPCall(normalizeToolArgs(args), theme, this.label);
+	renderCall(args: unknown, options: RenderResultOptions, theme: Theme) {
+		return renderMCPCall(normalizeToolArgs(args), options, theme, this.label);
 	}
 
 	renderResult(result: CustomToolResult<MCPToolDetails>, options: RenderResultOptions, theme: Theme, args?: unknown) {
@@ -903,8 +903,8 @@ export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
 		this.#fallbackProviderName = source?.providerName;
 	}
 
-	renderCall(args: unknown, _options: RenderResultOptions, theme: Theme) {
-		return renderMCPCall(normalizeToolArgs(args), theme, this.label);
+	renderCall(args: unknown, options: RenderResultOptions, theme: Theme) {
+		return renderMCPCall(normalizeToolArgs(args), options, theme, this.label);
 	}
 
 	renderResult(result: CustomToolResult<MCPToolDetails>, options: RenderResultOptions, theme: Theme, args?: unknown) {

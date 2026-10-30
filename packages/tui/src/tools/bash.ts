@@ -1,19 +1,22 @@
 import type { Component } from "../tui";
 import { getProjectDir, jsonContainerEnd } from "@oh-my-pi/pi-utils";
 import { highlightCode, type Theme } from "../theme/theme";
-import { renderStatusLine } from "../render/status-line";
-import { framedToolCard, type ToolCardSnapshot } from "../render/tool-card";
+import { type StatusLineOptions } from "../render/status-line";
+import { framedToolCard, plainToolCard, type ToolCardSection, type ToolCardSnapshot } from "../render/tool-card";
 import { formatOutputPaneLines } from "../render/output-pane";
 import {
 	capPreviewLines,
 	DEFAULT_TERMINAL_PREVIEW_LINES,
 	formatDuration,
+	formatExpandHint,
+	formatMoreItems,
 	formatToolWorkingDirectory,
 	previewWindowRows,
 	replaceTabs,
 } from "../render/render-utils";
 import {
-	formatStyledTruncationWarning,
+	formatTruncationWarningText,
+	NO_OUTPUT_NOTICE,
 	type OutputMeta,
 	stripOutputNotice,
 	stripRawOutputArtifactNotice,
@@ -235,11 +238,15 @@ export interface BashRenderContext {
 
 /** Caller-supplied shell labels and argument projections. */
 export interface ShellRendererConfig<TArgs> {
-	resolveTitle: (args: TArgs | undefined, options: RenderResultOptions) => string;
+	/** Fixed header title, identical in every state. */
+	title: string;
+	/** Header subject (the run's name), or undefined for none. */
+	resolveSubject?: (args: TArgs | undefined) => string | undefined;
+	/** Header badge label (e.g. `service`), or undefined for none. */
+	resolveBadge?: (args: TArgs | undefined) => string | undefined;
 	resolveCommand?: (args: TArgs | undefined) => string | undefined;
 	resolveCwd?: (args: TArgs | undefined) => string | undefined;
 	resolveEnv?: (args: TArgs | undefined) => Record<string, unknown> | undefined;
-	showHeader?: boolean;
 }
 
 function getPartialJson<TArgs>(args: TArgs | undefined): string | undefined {
@@ -312,9 +319,10 @@ function stripBashNotices(
 		details?.wallTimeMs === undefined || details.wallTimeNoticeEmitted === false
 			? withoutExit
 			: stripTrailingNotice(withoutExit, formatWallTimeNotice(details.wallTimeMs));
-	return stripRawOutputArtifactNotice(withoutWall);
+	const stripped = stripRawOutputArtifactNotice(withoutWall);
+	return stripped.text.trim() === NO_OUTPUT_NOTICE ? { ...stripped, text: "" } : stripped;
 }
-/** `Wall: 1.20s`, `Timeout: 30s`, … metadata parts shown under bash output. */
+/** `1.2s`, `Timeout: 30s`, … metadata parts shown under bash output. */
 function bashStatsParts(
 	details: BashToolDetails | undefined,
 	contextTimeout: number | undefined,
@@ -330,13 +338,14 @@ function bashStatsParts(
 		statsParts.push(`Backgrounded: ${details.async.jobId}`);
 	}
 	if (details?.service) {
+		// The service name is the header subject; the footer carries its state.
 		const service = details.service;
-		statsParts.push(`Service: ${service.name}`, `State: ${service.state}`);
+		statsParts.push(`State: ${service.state}`);
 		statsParts.push(`Ready: ${service.ready ? "yes" : service.timedOut ? "timed out" : "no"}`);
 		if (service.pid !== undefined) statsParts.push(`PID: ${service.pid}`);
 	}
 	if (wallTimeMs !== undefined) {
-		statsParts.push(`Wall: ${formatWallTimeSeconds(wallTimeMs)}s`);
+		statsParts.push(formatDuration(wallTimeMs));
 	}
 	if (timeoutDisabled) {
 		statsParts.push("Timeout: disabled");
@@ -389,6 +398,11 @@ function callIntent(args: unknown): string | undefined {
 	return plainText(value).trim() || undefined;
 }
 
+/** A non-blank `name` starts a supervised service; the bash tool ignores blank names. */
+function serviceName(args: BashRenderArgs | undefined): string | undefined {
+	return typeof args?.name === "string" ? args.name.trim() || undefined : undefined;
+}
+
 /** The run foot's facts under shell output: background job, service state and the full-output artifact. */
 function shellFootParts(details: BashToolDetails | undefined, artifactId: string | undefined): string[] {
 	const parts: string[] = [];
@@ -433,32 +447,44 @@ function toBashRenderArgs<TArgs>(args: TArgs | undefined, config: ShellRendererC
 	};
 }
 
+/** Header row options shared by every state of a shell card. */
+function shellStatus<TArgs>(
+	config: ShellRendererConfig<TArgs>,
+	args: TArgs | undefined,
+	icon: StatusLineOptions["icon"],
+	spinnerFrame?: number,
+): StatusLineOptions {
+	const badge = config.resolveBadge?.(args);
+	return {
+		icon,
+		spinnerFrame,
+		title: config.title,
+		description: config.resolveSubject?.(args),
+		badge: badge ? { label: badge, color: "muted" } : undefined,
+	};
+}
+
 /** Builds a shell transcript renderer with caller-supplied command labels. */
 export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 	return {
 		renderCall(args: TArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 			const renderArgs = toBashRenderArgs(args, config);
+			// Read at render time: execution can start after this card is built.
+			const callStatus = () => {
+				const phase = options.executionStarted ? "running" : "pending";
+				return { status: shellStatus(config, args, phase, options.spinnerFrame), phase } as const;
+			};
+			// Nothing streamed yet: the bare status line, flush.
+			if (!renderArgs.command) return plainToolCard(uiTheme, callStatus);
 			// Highlighting the whole (possibly still-streaming) command is the
 			// expensive part: defer it to the first paint, once per component,
 			// so a rebuild that is replaced before painting never pays for it.
 			let cmdLines: string[] | undefined;
 			return framedToolCard(uiTheme, () => {
 				cmdLines ??= formatBashCommandLines(renderArgs, uiTheme);
-				const header =
-					config.showHeader === false
-						? undefined
-						: renderStatusLine(
-								{
-									icon: options.spinnerFrame !== undefined ? "running" : "pending",
-									spinnerFrame: options.spinnerFrame,
-									title: config.resolveTitle(args, options),
-								},
-								uiTheme,
-							);
 				const elapsedMs = options.executionStarted ? options.elapsedMs : undefined;
 				return {
-					header,
-					phase: options.spinnerFrame !== undefined ? "running" : "pending",
+					...callStatus(),
 					footerMeta:
 						elapsedMs === undefined || elapsedMs < 1000
 							? undefined
@@ -481,25 +507,8 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			const renderArgs = toBashRenderArgs(args, config);
 			let cmdLines: string[] | undefined;
 			const isError = result.isError === true;
-			const isPartial = options.isPartial === true;
-			const success = !isPartial && !isError;
 			const details = result.details;
 			const isTimeout = details?.timedOut === true;
-			const header =
-				config.showHeader === false
-					? undefined
-					: renderStatusLine(
-							success
-								? {
-										iconOverride: uiTheme.styledSymbol("tool.bash", "accent"),
-										title: config.resolveTitle(args, options),
-									}
-								: {
-										icon: isPartial ? "pending" : isTimeout ? "warning" : "error",
-										title: config.resolveTitle(args, options),
-									},
-							uiTheme,
-						);
 			// Per-instance cache for the expensive inner lines computation. Mirrors
 			// the eval-renderer pattern (`eval-render.ts:709-752`): without this,
 			// every TUI repaint (one per keystroke when a long transcript is on
@@ -577,12 +586,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					if (elapsedSecond !== undefined && elapsedSecond > 0) {
 						statsParts.unshift(`elapsed ${formatDuration(elapsedSecond * 1000)}`);
 					}
-					const footerMeta =
-						statsParts.length > 0 ? uiTheme.fg("dim", statsParts.join(uiTheme.sep.dot)) : undefined;
-					let warningLine: string | undefined;
-					if (details?.meta?.artifactError || (details?.meta?.truncation && !showingFullOutput)) {
-						warningLine = formatStyledTruncationWarning(details.meta, uiTheme) ?? undefined;
-					}
+					const hasOutput = displayOutput.trim().length > 0;
 
 					// Cap the collapsed/streaming output to a viewport-sized tail and
 					// measure it at the box's INNER width. Otherwise a growing tail
@@ -591,7 +595,6 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					// spraying duplicate expand banners into native scrollback (the
 					// box never overflows the viewport now). Sixel payload rows stay
 					// unstyled and uncapped via uncapSixel.
-					const hasOutput = displayOutput.trim().length > 0;
 					const formatted = formatOutputPaneLines(
 						{
 							lines: hasOutput ? displayOutput.split("\n") : [],
@@ -602,28 +605,49 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 							width: contentWidth,
 							styleLine: line => uiTheme.fg("toolOutput", replaceTabs(line)),
 							uncapSixel: true,
+							showHiddenMarker: false,
 						},
 						uiTheme,
 					);
-					const outputLines: string[] = [...formatted.lines];
-					if (warningLine) outputLines.push(warningLine);
 
+					// The output is the last section: its hidden-row marker and the
+					// truncation notice ride the bottom border.
+					const footerParts = statsParts.map(part => uiTheme.fg("dim", part));
+					// Settled with nothing printed: say so in the border, in the Output label's color.
+					if (!hasOutput && !isPartial && details?.async?.state !== "running") {
+						footerParts.unshift(uiTheme.fg("toolTitle", "No output"));
+					}
+					if (formatted.hiddenCount > 0) {
+						const hint = formatExpandHint(uiTheme, expanded, true);
+						const marker = formatMoreItems(formatted.hiddenCount, "line", uiTheme, "earlier");
+						footerParts.push(uiTheme.fg("dim", hint ? `${marker} ${hint}` : marker));
+					}
+					const truncationNotice =
+						details?.meta?.artifactError || (details?.meta?.truncation && !showingFullOutput)
+							? formatTruncationWarningText(details.meta)
+							: undefined;
+					if (truncationNotice) footerParts.push(uiTheme.fg("warning", truncationNotice));
+
+					const icon = isPartial ? "running" : isError ? (isTimeout ? "warning" : "error") : "success";
+					const sections: ToolCardSection[] = [
+						{
+							// Viewport-sized tail window in every state — streaming and final
+							// render identically; only ctrl+o uncaps.
+							content: capPreviewLines(
+								args ? (cmdLines ??= formatBashCommandLines(renderArgs, uiTheme)) : [],
+								uiTheme,
+								{ expanded },
+							),
+						},
+					];
+					if (formatted.lines.length > 0) {
+						sections.push({ label: uiTheme.fg("toolTitle", "Output"), content: formatted.lines });
+					}
 					const snapshot: ToolCardSnapshot = {
-						header,
-						phase: isPartial ? "partial" : isError ? (isTimeout ? "warning" : "error") : "success",
-						footerMeta,
-						sections: [
-							{
-								// Viewport-sized tail window in every state — streaming and final
-								// render identically; only ctrl+o uncaps.
-								content: capPreviewLines(
-									args ? (cmdLines ??= formatBashCommandLines(renderArgs, uiTheme)) : [],
-									uiTheme,
-									{ expanded },
-								),
-							},
-							{ label: uiTheme.fg("toolTitle", "Output"), content: outputLines },
-						],
+						status: shellStatus(config, args, icon),
+						phase: isPartial ? "partial" : icon,
+						footerMeta: footerParts.length > 0 ? footerParts.join(uiTheme.fg("dim", uiTheme.sep.dot)) : undefined,
+						sections,
 					};
 
 					cachedWidth = width;
@@ -644,7 +668,13 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			// No foot until the command starts; once it runs (before any output) the clock shows.
 			const started = options.executionStarted === true;
 			return {
-				tool: shellToolHead(config.resolveTitle(args, options), command, callIntent(args), undefined, false),
+				tool: shellToolHead(
+					config.title,
+					command,
+					config.resolveSubject?.(args) ?? callIntent(args),
+					undefined,
+					false,
+				),
 				body: [
 					runBox(
 						[
@@ -688,6 +718,8 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					? undefined
 					: (details?.wallTimeMs ?? options.elapsedMs);
 			const meta = details?.meta;
+			const facts = shellFootParts(details, stripped.artifactId);
+			if (output.trim().length === 0 && !isPartial && state !== "background") facts.unshift("No output");
 			const box = runBox(
 				[
 					runInput(command, SHELL_INPUT),
@@ -696,14 +728,20 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 						state,
 						exitCode: details?.exitCode,
 						elapsedMs,
-						facts: shellFootParts(details, stripped.artifactId),
+						facts,
 						meta: { ...meta, truncation: showingFullOutput ? undefined : meta?.truncation },
 					}),
 				],
 				{ key: "run", tone: RUN_BOX_TONE[state] },
 			);
 			return {
-				tool: shellToolHead(config.resolveTitle(args, options), command, callIntent(args), details, !isPartial),
+				tool: shellToolHead(
+					config.title,
+					command,
+					config.resolveSubject?.(args) ?? callIntent(args),
+					details,
+					!isPartial,
+				),
 				body: [box],
 				tone: state === "timed-out" ? "warning" : undefined,
 				preview: "children",
@@ -717,11 +755,12 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 	} satisfies ToolRenderer<TArgs, BashToolDetails>;
 }
 
-/** Renders bash command previews and output. */
+/** Renders bash command previews and output. A named run is a supervised service. */
 export const bashToolRenderer = createShellRenderer<BashRenderArgs>({
-	resolveTitle: args => (args?.name ? `Bash · ${String(args.name)}` : "Bash"),
+	title: "Bash",
+	resolveSubject: serviceName,
+	resolveBadge: args => (serviceName(args) ? "service" : undefined),
 	resolveCommand: args => args?.command,
 	resolveCwd: args => args?.cwd,
 	resolveEnv: args => args?.env,
-	showHeader: false,
 });

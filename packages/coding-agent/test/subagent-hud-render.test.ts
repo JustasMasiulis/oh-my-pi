@@ -164,7 +164,7 @@ describe("subagent HUD lines", () => {
 			];
 			cfgTaskShowResolvedModelBadge.override(Settings.instance, false);
 			const disabled = render(sessions);
-			expect(disabled).toContain(`${theme.status.done} HiddenBadge: Inspect rendering`);
+			expect(disabled).toContain(`${theme.status.running} HiddenBadge: Inspect rendering`);
 			expect(disabled).not.toContain("openai/gpt-5");
 			expect(disabled).not.toContain(theme.icon.advisor);
 
@@ -244,7 +244,7 @@ describe("subagent HUD lines", () => {
 					progress: makeProgress({ id: "LegacyWorker", resolvedModel: "custom/model:high" }),
 				}),
 			]);
-			expect(out).toContain(`${theme.status.done} custom/model:high LegacyWorker`);
+			expect(out).toContain(`${theme.status.running} custom/model:high LegacyWorker`);
 			expect(out).not.toContain(theme.thinking.high.split(" ")[0]);
 		});
 	});
@@ -376,7 +376,7 @@ describe("subagent HUD lines", () => {
 			}),
 		]);
 		expect(multiLineTask).toContain("ReviewShell");
-		expect(multiLineTask).toContain("Complete assignment thoroughly: ↵ # Tar");
+		expect(multiLineTask).toContain(`Complete assignment thoroughly:${theme.sep.dot}# Tar`);
 		expect(multiLineTask).not.toContain("\n# Target");
 
 		const multiLineDesc = render([
@@ -387,7 +387,7 @@ describe("subagent HUD lines", () => {
 			}),
 		]);
 		expect(multiLineDesc).toContain("ReviewShell");
-		expect(multiLineDesc).toContain("First line ↵ Second line");
+		expect(multiLineDesc).toContain(`First line${theme.sep.dot}Second line`);
 		expect(multiLineDesc).not.toContain("\nSecond line");
 	});
 	it("lists sync and detached spawns alike", () => {
@@ -516,7 +516,7 @@ describe("subagent HUD lines", () => {
 		expect(out).toContain("Worker0: job 0");
 		expect(out).toContain("Worker2: job 2");
 		expect(out).not.toContain("Worker3: job 3");
-		expect(out).toContain("7 more — expand");
+		expect(out).toContain(`7 more agents${theme.sep.dot}expand`);
 		expect(out).not.toContain("show less");
 	});
 
@@ -749,7 +749,7 @@ describe("subagent HUD lines", () => {
 			expect(hud.getClickAgentAtRow(rowOf("Alpha.ts"))).toBe("Alpha");
 			expect(hud.getClickAgentAtRow(rowOf("Beta"))).toBe("Beta");
 			expect(hud.getClickAgentAtRow(rowOf("Gamma.ts"))).toBe("Gamma");
-			expect(hud.getClickAgentAtRow(rowOf("more — expand"))).toBe(PINNED_HUD_TOGGLE_ID);
+			expect(hud.getClickAgentAtRow(rowOf("1 more agent"))).toBe(PINNED_HUD_TOGGLE_ID);
 		});
 
 		it("labels a call with its own intent, never an earlier call's", () => {
@@ -992,7 +992,7 @@ describe("InteractiveMode subagent observer UI sync", () => {
 		expect(hud).toContain("BurstAgent0: Burst job 0");
 		expect(hud).toContain("BurstAgent2: Burst job 2");
 		expect(hud).not.toContain("BurstAgent3: Burst job 3");
-		expect(hud).toContain("3 more — expand");
+		expect(hud).toContain(`3 more agents${theme.sep.dot}expand`);
 		expect(mountHud.mock.calls.length + updateHud.mock.calls.length).toBe(1);
 		expect(requestRender).toHaveBeenCalledTimes(1);
 	});
@@ -1148,7 +1148,7 @@ describe("InteractiveMode subagent observer UI sync", () => {
 
 		mode.applyPinnedAgentsSetting();
 		expect(hudText()).not.toContain("Override4");
-		expect(hudText()).toContain("more — expand");
+		expect(hudText()).toContain("more agents");
 	});
 
 	it("advances a quiet call's elapsed marker by repainting the same HUD in place", async () => {

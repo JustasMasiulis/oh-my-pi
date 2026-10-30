@@ -49,7 +49,7 @@ export interface TreeSelectorNode {
 	children: TreeSelectorNode[];
 	label?: string;
 }
-import { toPathList } from "../render/render-utils";
+import { toDisplayPathList } from "../render/render-utils";
 import { shortenPath } from "../render/render-utils";
 import { canonicalizeMessage } from "../chat/thinking-display";
 import { resolveAssistantErrorPresentation } from "../chat/transcript-render-helpers";
@@ -1246,7 +1246,7 @@ class TreeList implements Component {
 						: typeof args.path === "string"
 							? args.path
 							: undefined;
-				const paths = toPathList(searchPathsInput);
+				const paths = toDisplayPathList(searchPathsInput);
 				const scope = paths.length > 0 ? paths.join(", ") : ".";
 				return `[grep: /${pattern}/ in ${shortenPath(scope)}]`;
 			}
@@ -1257,7 +1257,7 @@ class TreeList implements Component {
 						: typeof args.paths === "string" || Array.isArray(args.paths)
 							? args.paths
 							: undefined;
-				const paths = toPathList(globInput);
+				const paths = toDisplayPathList(globInput);
 				const scope = paths.length > 0 ? paths.join(", ") : ".";
 				return `[glob: ${shortenPath(scope)}]`;
 			}

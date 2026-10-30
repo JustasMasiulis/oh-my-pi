@@ -515,7 +515,7 @@ describe("issue #6879 — tool output appears twice after a superseded turn", ()
 		await runToolCallToCompletion("call-real");
 		expect(countCommand(mode)).toBe(1);
 		// The result routes into the surviving card (no orphaned pending preview).
-		expect(Bun.stripANSI(mode.chatContainer.render(120).join("\n"))).toContain("(no output)");
+		expect(Bun.stripANSI(mode.chatContainer.render(120).join("\n"))).toContain("No output");
 	});
 
 	it("re-keys a grouped read when its id is populated after the block appears", async () => {

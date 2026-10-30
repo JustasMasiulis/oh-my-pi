@@ -222,11 +222,11 @@ export interface JsonTreeRenderOptions {
 	/** Escape inline tabs/newlines as JSON-style sequences. Defaults to true. */
 	escapeStringWhitespace?: boolean;
 	/**
-	 * Root row gutter. `hooked` (default) attaches the tree to the block above:
-	 * the first root draws `└ •`, the rest ` •`, and nested rows branch from
-	 * under the bullet. `siblings` draws standard `├─`/`└─` root connectors.
+	 * Root row gutter. `flush` (default) draws root entries without connectors,
+	 * their children branching from column 0. `siblings` draws standard
+	 * `├─`/`└─` root connectors.
 	 */
-	rootConnectors?: "hooked" | "siblings";
+	rootConnectors?: "flush" | "siblings";
 }
 
 type JsonTreeNodeKind = "array" | "object" | "inline" | "scalar" | "placeholder";
@@ -241,7 +241,7 @@ interface JsonTreeNode {
 	keyColor?: ThemeColor;
 	/** The one-line form of an `inline` container. */
 	inline?: readonly InlineRun[];
-	placeholder?: "…";
+	placeholder?: string;
 	children?: readonly JsonTreeNode[];
 }
 
@@ -291,7 +291,7 @@ export function renderJsonTreeLines(
 	const hiddenRootKeys = options.hiddenRootKeys ?? DEFAULT_HIDDEN_ROOT_KEYS;
 	const multilineStrings = options.multilineStrings ?? true;
 	const escapeStringWhitespace = options.escapeStringWhitespace ?? true;
-	const hookedRoots = (options.rootConnectors ?? "hooked") === "hooked";
+	const flushRoots = (options.rootConnectors ?? "flush") === "flush";
 	let nextId = 0;
 
 	const node = (nodeValue: unknown, key: string | undefined, depth: number, keyColor?: ThemeColor): JsonTreeNode => {
@@ -308,11 +308,7 @@ export function renderJsonTreeLines(
 			: [node(value, undefined, 0)];
 
 	const prefixStyle = { vertical: (symbol: string) => symbol };
-	const hook = theme.tree.hook;
-	const hookPad = " ".repeat(Bun.stringWidth(hook));
-	const bullet = theme.format.bullet;
-	// Nested rows drop the root's three-cell gutter and branch from under the root label.
-	const rootGutter = `${hookPad} ${" ".repeat(Bun.stringWidth(bullet))} `;
+	const ellipsis = theme.format.ellipsis;
 	let renderedLineCount = 0;
 	let scalarTruncated = false;
 
@@ -334,7 +330,7 @@ export function renderJsonTreeLines(
 							value: undefined,
 							depth: item.depth + 1,
 							kind: "placeholder",
-							placeholder: "…",
+							placeholder: ellipsis,
 						},
 					];
 				} else {
@@ -351,7 +347,7 @@ export function renderJsonTreeLines(
 							value: undefined,
 							depth: item.depth + 1,
 							kind: "placeholder",
-							placeholder: "…",
+							placeholder: ellipsis,
 						},
 					];
 				} else if (keys.length === 0) {
@@ -367,13 +363,9 @@ export function renderJsonTreeLines(
 		maxLines,
 		theme,
 		renderPrefix: itemRow => {
-			if (!hookedRoots) return treeRowPrefix(itemRow, theme, prefixStyle);
-			if (itemRow.ancestors.length === 0) {
-				const lead = itemRow.siblingIndex === 0 ? theme.fg("dim", hook) : hookPad;
-				return { first: `${lead} ${theme.fg("dim", bullet)} `, continuation: rootGutter };
-			}
-			const inner = treeRowPrefix({ ...itemRow, ancestors: itemRow.ancestors.slice(1) }, theme, prefixStyle);
-			return { first: `${rootGutter}${inner.first}`, continuation: `${rootGutter}${inner.continuation}` };
+			if (!flushRoots) return treeRowPrefix(itemRow, theme, prefixStyle);
+			if (itemRow.ancestors.length === 0) return { first: "", continuation: "" };
+			return treeRowPrefix({ ...itemRow, ancestors: itemRow.ancestors.slice(1) }, theme, prefixStyle);
 		},
 		renderRow: item => {
 			let body: readonly string[];
@@ -383,7 +375,7 @@ export function renderJsonTreeLines(
 				displayKey || (item.kind === "array" ? "array" : item.kind === "object" ? "object" : "value"),
 			);
 			if (item.kind === "placeholder") {
-				body = [theme.fg("dim", item.placeholder ?? "…")];
+				body = [theme.fg("dim", item.placeholder ?? ellipsis)];
 			} else if (item.kind === "inline") {
 				body = [`${label}: ${(item.inline ?? []).map(([text, color]) => theme.fg(color, text)).join("")}`];
 			} else if (item.kind === "array") {
@@ -410,7 +402,7 @@ export function renderJsonTreeLines(
 					if (sourceLines.length > displayedCount) {
 						scalarTruncated = true;
 						scalarLines.push(
-							`${indent}${theme.fg("dim", `…(${sourceLines.length - displayedCount} more lines)"`)}`,
+							`${indent}${theme.fg("dim", `${ellipsis}(${sourceLines.length - displayedCount} more lines)"`)}`,
 						);
 					} else {
 						const lastIndex = scalarLines.length - 1;

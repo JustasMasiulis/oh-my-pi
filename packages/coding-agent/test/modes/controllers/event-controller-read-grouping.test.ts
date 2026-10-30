@@ -117,7 +117,7 @@ describe("EventController read-group accretion", () => {
 
 		const groups = readGroups(chatContainer);
 		expect(groups.length).toBe(1);
-		expect(header(groups[0]!)).toContain("Read (4)");
+		expect(header(groups[0]!)).toContain("Read 4 files");
 	});
 
 	it("nests a read-only completion's usage inside the active group", async () => {
@@ -214,8 +214,8 @@ describe("EventController read-group accretion", () => {
 
 		const groups = readGroups(chatContainer);
 		expect(groups.length).toBe(2);
-		expect(header(groups[0]!)).toContain("Read (2)");
-		expect(header(groups[1]!)).toContain("Read (2)");
+		expect(header(groups[0]!)).toContain("Read 2 files");
+		expect(header(groups[1]!)).toContain("Read 2 files");
 	});
 
 	it("keeps the active group repaintable until it is finalized", async () => {

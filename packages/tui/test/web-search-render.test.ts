@@ -33,9 +33,9 @@ function buildResult(answer: string): {
 	return { content: [{ type: "text", text: answer }], details: { response } };
 }
 
-/** Slice the sanitized lines belonging to the framed "Answer" section. */
+/** Slice the sanitized lines of the framed answer body: between the top border and the "Sources" bar. */
 function answerSection(lines: string[]): string {
-	const start = lines.findIndex(l => / Answer /.test(l));
+	const start = lines.findIndex(l => /Web Search:/.test(l));
 	const end = lines.findIndex((l, i) => i > start && / Sources /.test(l));
 	expect(start).toBeGreaterThanOrEqual(0);
 	expect(end).toBeGreaterThan(start);

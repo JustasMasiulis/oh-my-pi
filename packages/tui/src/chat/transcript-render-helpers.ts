@@ -15,7 +15,8 @@ import { type CustomMessage, type FileMentionMessage, resolveAbortLabel, shouldR
 import { createIrcMessageCard } from "../tools/wait";
 import { formatArtifactErrorNotice, type OutputMeta } from "../tools/output-meta";
 import type { OutputArtifactError } from "../tools/streaming-output";
-import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../render/render-utils";
+import { formatStyledPath, replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../render/render-utils";
+import { FLUSH_BODY_INDENT } from "../render/tool-card";
 import { canonicalizeMessage } from "./thinking-display";
 import { ToolActivityContainer } from "../chrome/tool-activity";
 import { type TranscriptBlock } from "../chrome/transcript-container";
@@ -65,7 +66,7 @@ export function buildAsyncResultBlock(message: CustomOrHookMessage): ToolActivit
 		const duration = typeof job.durationMs === "number" ? formatDuration(job.durationMs) : undefined;
 		rows.push({
 			parts: [
-				{ text: `${theme.status.done} Background job completed`, color: "success" },
+				{ text: `${theme.status.success} Background job completed`, color: "muted" },
 				{ text: `[${type}]`, color: "dim" },
 				{ text: jobId, color: "accent" },
 				duration ? { text: `(${duration})`, color: "dim" } : undefined,
@@ -81,10 +82,14 @@ export function buildAsyncResultBlock(message: CustomOrHookMessage): ToolActivit
 	return new ToolActivityContainer(new TranscriptStatusBlock(rows));
 }
 
-/** The warning row under a background job whose output artifact could not be saved. */
+/** The warning row hung under a background job whose output artifact could not be saved. */
 function artifactErrorRow(error: OutputArtifactError): TranscriptStatusRow {
 	const notice = formatArtifactErrorNotice(error);
-	return { parts: [{ text: notice, color: "warning" }], native: { tone: "warning", message: [span(notice)] } };
+	return {
+		parts: [{ text: notice, color: "warning" }],
+		indent: FLUSH_BODY_INDENT,
+		native: { tone: "warning", message: [span(notice)] },
+	};
 }
 
 /**
@@ -106,7 +111,7 @@ export function buildLaunchCompletionBlock(message: CustomOrHookMessage): ToolAc
 	const daemons = details?.daemons ?? [];
 	if (daemons.length === 0 && typeof message.content === "string") {
 		rows.push({
-			parts: [{ text: `${theme.status.done} ${message.content}`, color: "dim" }],
+			parts: [{ text: `${theme.status.success} ${message.content}`, color: "dim" }],
 			native: { tone: "success", message: [span(message.content)] },
 		});
 	}
@@ -122,7 +127,7 @@ export function buildLaunchCompletionBlock(message: CustomOrHookMessage): ToolAc
 			parts: [
 				failed
 					? { text: `${theme.status.error} ${label}`, color: "error" }
-					: { text: `${theme.status.done} ${label}`, color: "success" },
+					: { text: `${theme.status.success} ${label}`, color: "muted" },
 				{ text: daemon.name, color: "accent" },
 				exit ? { text: `(${exit})`, color: "dim" } : undefined,
 				duration ? { text: `(${duration})`, color: "dim" } : undefined,
@@ -179,15 +184,14 @@ export function buildIrcMessageCard(message: CustomOrHookMessage, getExpanded: (
 
 /**
  * Render a `fileMention` message's files as a transcript block of "Read <path>"
- * rows. `indent` sets the left pad: the live chat renders within an outer gutter
- * (0), the transcript viewer renders body rows without one so rows own their pad
- * (1).
+ * rows, each led by its outcome glyph: success when read, warning when skipped.
  */
-export function buildFileMentionBlock(files: FileMentionMessage["files"], indent: number): TranscriptBlock {
+export function buildFileMentionBlock(files: FileMentionMessage["files"]): TranscriptBlock {
 	const rows: TranscriptStatusRow[] = [];
 	for (const file of files) {
 		let detail: string;
-		if (file.skippedReason === "tooLarge" || file.skippedReason === "binary") {
+		const skipped = file.skippedReason === "tooLarge" || file.skippedReason === "binary";
+		if (skipped) {
 			const size = typeof file.byteSize === "number" ? formatBytes(file.byteSize) : "unknown size";
 			detail = file.skippedReason === "binary" ? `skipped: binary, ${size}` : `skipped: ${size}`;
 		} else {
@@ -199,12 +203,12 @@ export function buildFileMentionBlock(files: FileMentionMessage["files"], indent
 		}
 		rows.push({
 			parts: [
-				{ text: theme.tree.last, color: "dim" },
+				skipped ? { text: theme.status.warning, color: "warning" } : { text: theme.status.success, color: "muted" },
 				{ text: "Read", color: "muted" },
-				{ text: file.path, color: "accent" },
+				// The path styles itself; `dim` only covers its directory.
+				{ text: formatStyledPath(file.path, theme), color: "dim" },
 				{ text: `(${detail})`, color: "dim" },
 			],
-			indent,
 			native: {
 				tone: "info",
 				icon: "read",

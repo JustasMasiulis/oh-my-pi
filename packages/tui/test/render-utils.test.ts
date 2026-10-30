@@ -6,11 +6,12 @@ import * as natives from "@oh-my-pi/pi-natives/path";
 import { KeybindingsManager, setKeyHintPlatform } from "@oh-my-pi/pi-tui/app-keybindings";
 import { getThemeByName, initTheme, type Theme, theme } from "@oh-my-pi/pi-tui/theme";
 import {
+	CODE_FRAME_GUTTER,
 	dedupeParseErrors,
 	expandKeyHint,
 	formatCodeFrameLine,
 	formatDiagnostics,
-	formatErrorMessage,
+	formatErrorText,
 	formatExpandHint,
 	formatParseErrors,
 	formatFeedModelBadge,
@@ -348,10 +349,10 @@ describe("formatDiagnostics", () => {
 
 describe("formatCodeFrameLine", () => {
 	it("pads markers as part of the gutter", () => {
-		expect(formatCodeFrameLine(" ", 447, "context", 3)).toBe(" 447│context");
-		expect(formatCodeFrameLine("*", 448, "match", 3)).toBe("*448│match");
-		expect(formatCodeFrameLine("+", 11, "added", 3)).toBe(" +11│added");
-		expect(formatCodeFrameLine("+", 235, "added", 3)).toBe("+235│added");
+		expect(formatCodeFrameLine(" ", 447, "context", 3, CODE_FRAME_GUTTER)).toBe(" 447│context");
+		expect(formatCodeFrameLine("*", 448, "match", 3, CODE_FRAME_GUTTER)).toBe("*448│match");
+		expect(formatCodeFrameLine("+", 11, "added", 3, "|")).toBe(" +11|added");
+		expect(formatCodeFrameLine("+", 235, "added", 3, "|")).toBe("+235|added");
 	});
 });
 
@@ -491,31 +492,23 @@ describe("truncateDiffByHunk", () => {
 	});
 });
 
-describe("formatErrorMessage (F4 sanitization)", () => {
+describe("formatErrorText (F4 sanitization)", () => {
 	beforeAll(async () => {
 		await initTheme();
 	});
 	it("replaces tabs in error content with spaces", () => {
-		const out = formatErrorMessage("apply_patch failed:\n@@\n-old\tindented\n+new", theme);
+		const out = formatErrorText("apply_patch failed:\n@@\n-old\tindented\n+new", theme);
 		expect(out).not.toContain("\t");
 	});
 
-	it("truncates very long error messages to keep TUI from overflowing", () => {
+	it("keeps every line of a long multi-line error so the card can wrap it", () => {
 		const longTail = "x".repeat(500);
-		const out = formatErrorMessage(`crash: ${longTail}`, theme);
-		// Strip ANSI escape sequences so we can measure the user-visible length.
-		const ESC = String.fromCharCode(0x1b);
-		const visible = out
-			.split(ESC)
-			.map((s, i) => (i === 0 ? s : s.replace(/^\[[0-9;]*m/, "")))
-			.join("");
-		// LINE truncation cap is 110 chars; account for the "Error: " prefix and
-		// the leading symbol+space.
-		expect(visible.length).toBeLessThan(180);
+		const visible = Bun.stripANSI(formatErrorText(`Error: crash: ${longTail}\nsecond line\r\n\x1b[2Kthird`, theme));
+		expect(visible.split("\n")).toEqual([`crash: ${longTail}`, "second line", "third"]);
 	});
 
 	it("falls back to 'Unknown error' for empty/missing input", () => {
-		const out = formatErrorMessage(undefined, theme);
+		const out = formatErrorText(undefined, theme);
 		expect(out).toContain("Unknown error");
 	});
 });

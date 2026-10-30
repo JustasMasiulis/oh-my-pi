@@ -5,6 +5,7 @@ import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 const stubTheme = {
 	fg: (_color: string, text: string) => text,
 	tree: { branch: "├", last: "└", vertical: "│", horizontal: "─", hook: "╰" },
+	format: { ellipsis: "…" },
 } as Parameters<typeof renderTreeList>[1];
 
 function expectWithinBudget(lines: string[], budget: number) {

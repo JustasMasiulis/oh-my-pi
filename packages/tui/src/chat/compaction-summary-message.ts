@@ -4,7 +4,7 @@ import { type Component } from "../tui";
 import { Markdown } from "../components/markdown";
 import { formatNumber } from "@oh-my-pi/pi-utils";
 import { getMarkdownTheme, getThemeEpoch, theme } from "../theme";
-import { expandKeyHint } from "../render/render-utils";
+import { formatExpandHint } from "../render/render-utils";
 import type { BranchSummaryMessage, CompactionSummaryMessage, CustomMessage } from "./messages";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { md, node, span, text } from "../native/describe";
@@ -24,7 +24,7 @@ const COMPACTION_METHOD_LABELS: Record<string, string> = {
 /** `256K→20K` amount badge, or undefined when the entry predates `tokensAfter`. */
 function compactionAmount(message: CompactionSummaryMessage): string | undefined {
 	if (message.tokensAfter === undefined || message.tokensBefore <= 0) return undefined;
-	return `${formatNumber(message.tokensBefore)}→${formatNumber(message.tokensAfter)}`;
+	return `${formatNumber(message.tokensBefore)}${theme.format.arrowRight}${formatNumber(message.tokensAfter)}`;
 }
 
 interface SummaryDividerOptions {
@@ -41,13 +41,16 @@ interface SummaryDividerOptions {
 /**
  * Width-aware divider banner shared as every history-collapse summary row:
  * blank, the labeled rule (or the bare label when too narrow to frame), blank.
+ * Expanded, the trailing blank is left to the detail box's own top padding.
  */
 class DividerSummary implements Component {
 	readonly #label: () => string;
-	#cache: { width: number; lines: readonly string[] } | undefined;
+	readonly #expanded: () => boolean;
+	#cache: { width: number; expanded: boolean; lines: readonly string[] } | undefined;
 
-	constructor(label: () => string) {
+	constructor(label: () => string, expanded: () => boolean) {
 		this.#label = label;
+		this.#expanded = expanded;
 	}
 
 	invalidate(): void {
@@ -60,18 +63,20 @@ class DividerSummary implements Component {
 
 	render(width: number): readonly string[] {
 		width = Math.max(1, width);
-		if (this.#cache?.width === width) return this.#cache.lines;
-		const lines = ["", this.#divider(width), ""];
-		this.#cache = { width, lines };
+		const expanded = this.#expanded();
+		if (this.#cache?.width === width && this.#cache.expanded === expanded) return this.#cache.lines;
+		const divider = this.#divider(width, expanded);
+		const lines = expanded ? ["", divider] : ["", divider, ""];
+		this.#cache = { width, expanded, lines };
 		return lines;
 	}
 
-	#divider(width: number): string {
+	#divider(width: number, expanded: boolean): string {
 		const rule = theme.tree.horizontal;
 		const label = this.#label();
-		// sep.dot ships pre-padded (" · "); trim so the hint joins with single spaces.
-		const hint = `${theme.sep.dot.trim()} ${expandKeyHint()}`;
-		const plainWidth = Bun.stringWidth(`${label} ${hint}`, { countAnsiEscapeCodes: false });
+		const hint = formatExpandHint(theme, expanded, true);
+		const content = hint ? `${theme.fg("muted", label)} ${hint}` : theme.fg("muted", label);
+		const plainWidth = Bun.stringWidth(content, { countAnsiEscapeCodes: false });
 		// ` label hint ` framed by rules on both sides.
 		const remaining = width - plainWidth - 2;
 		if (remaining < 4) {
@@ -80,11 +85,7 @@ class DividerSummary implements Component {
 		}
 		const left = Math.floor(remaining / 2);
 		const right = remaining - left;
-		return (
-			theme.fg("dim", rule.repeat(left)) +
-			` ${theme.fg("muted", label)} ${theme.fg("dim", hint)} ` +
-			theme.fg("dim", rule.repeat(right))
-		);
+		return `${theme.fg("dim", rule.repeat(left))} ${content} ${theme.fg("dim", rule.repeat(right))}`;
 	}
 }
 
@@ -171,7 +172,7 @@ class SummaryMessageComponent implements Component {
 
 	#createDisclosure(expanded: boolean): Disclosure {
 		return new Disclosure({
-			summary: new DividerSummary(this.#options.label),
+			summary: new DividerSummary(this.#options.label, () => this.#expanded),
 			body: () => this.#detailBox(),
 			expanded,
 		});

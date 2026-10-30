@@ -26,6 +26,7 @@ import {
 	describeExecutionTool,
 	type ExecutionColorKey,
 	type ExecutionStatus,
+	executionStatusLabel,
 	PREVIEW_LINES,
 	resolveExecutionStatus,
 } from "./execution-shared";
@@ -33,6 +34,7 @@ import { span, text } from "../native/describe";
 import { type DescribeContext, type NativeNode, type NativeUiEvent, rootToggleExpanded } from "../native/node";
 import { NativeImageCache } from "../native/blobs";
 import { imageLinksEnabled, linkedImageSpan, linkedImageText } from "../prompt/image-references";
+import type { DynamicBorder } from "../chrome/dynamic-border";
 import { Memo } from "../native/memo";
 
 const STREAMING_LINE_CAP = PREVIEW_LINES * 5;
@@ -59,6 +61,7 @@ export class BashExecutionComponent extends Container {
 	#status: ExecutionStatus = "running";
 	#exitCode: number | undefined = undefined;
 	#loader: Loader;
+	readonly #bottomBorder: DynamicBorder;
 	#truncation?: TruncationMeta;
 	#artifactError?: OutputArtifactError;
 	#expanded = false;
@@ -103,9 +106,10 @@ export class BashExecutionComponent extends Container {
 		// Use dim border for excluded-from-context commands (!! prefix)
 		const colorKey = excludeFromContext ? "dim" : "bashMode";
 		this.#colorKey = colorKey;
-		const { contentContainer, loader } = buildExecutionFrame(this, ui, colorKey);
+		const { contentContainer, loader, bottomBorder } = buildExecutionFrame(this, ui, colorKey);
 		this.#contentContainer = contentContainer;
 		this.#loader = loader;
+		this.#bottomBorder = bottomBorder;
 		this.#outputPane = new OutputPane(theme, {
 			expanded: false,
 			collapsedMaxLines: PREVIEW_LINES,
@@ -440,13 +444,12 @@ export class BashExecutionComponent extends Container {
 			}
 		}
 
-		// Loader or status
+		// Loader or status; a settled run's exit/cancel marker rides the bottom border.
+		this.#bottomBorder.setLabel(executionStatusLabel(this.#status, this.#exitCode));
 		if (this.#status === "running") {
 			this.#contentContainer.addChild(this.#loader);
 		} else {
 			const footer = buildStatusFooter({
-				status: this.#status,
-				exitCode: this.#exitCode,
 				truncation: this.#truncation,
 				artifactError: this.#artifactError,
 				hiddenLineCount,

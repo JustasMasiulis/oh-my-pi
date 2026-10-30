@@ -11,6 +11,8 @@ import {
 import {
 	type GalleryFixture,
 	getComposerGalleryInventory,
+	getMessageGalleryEntries,
+	getMessageGalleryInventory,
 	getSegmentGalleryInventory,
 } from "@oh-my-pi/pi-coding-agent/cli/gallery-fixtures";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -44,35 +46,44 @@ describe("gallery harness", () => {
 	it("parses repeatable surfaces and expands all in product order", () => {
 		expect(parseGallerySurfaces(["segment", "tool", "segment"])).toEqual(["tool", "segment"]);
 		expect(parseGallerySurfaces(["all"])).toEqual([...GALLERY_SURFACES]);
-		expect(() => parseGallerySurfaces(["bogus"])).toThrow(/Invalid --surface 'bogus'.*tool.*composer.*segment.*all/);
+		expect(() => parseGallerySurfaces(["bogus"])).toThrow(
+			/Invalid --surface 'bogus'.*tool.*message.*composer.*segment.*all/,
+		);
 	});
 
-	it("orders surfaces tool then composer then segment and lets entry filters imply their surface", async () => {
+	it("orders surfaces tool, message, composer, segment and lets entry filters imply their surface", async () => {
+		const message = getMessageGalleryInventory()[0];
 		const composer = getComposerGalleryInventory()[0];
 		const segment = getSegmentGalleryInventory()[0];
-		if (!composer || !segment) throw new Error("Production gallery registries must not be empty");
+		if (!message || !composer || !segment) throw new Error("Production gallery registries must not be empty");
 
 		const sections = await renderGallerySurfaceSections({
 			surfaces: [...GALLERY_SURFACES],
 			tool: "bash",
+			message,
 			composer,
 			segment,
 			states: ["success"],
 		});
+		const dot = theme.sep.dot;
 		expect(sections.map(section => section.heading)).toEqual([
-			"bash — Bash",
-			expect.stringContaining(`composer · ${composer}`),
-			`segment · ${segment}`,
+			`bash${dot}Bash`,
+			expect.stringContaining(`message${dot}${message}`),
+			expect.stringContaining(`composer${dot}${composer}`),
+			`segment${dot}${segment}`,
 		]);
 
 		const toolOnly = await renderGallerySurfaceSections({ tool: "bash", states: ["success"] });
-		expect(toolOnly.map(section => section.heading)).toEqual(["bash — Bash"]);
+		expect(toolOnly.map(section => section.heading)).toEqual([`bash${dot}Bash`]);
+		const messageOnly = await renderGallerySurfaceSections({ message });
+		expect(messageOnly).toHaveLength(1);
+		expect(messageOnly[0]?.heading).toContain(`message${dot}${message}`);
 		const composerOnly = await renderGallerySurfaceSections({ composer });
 		expect(composerOnly).toHaveLength(1);
-		expect(composerOnly[0]?.heading).toContain(`composer · ${composer}`);
+		expect(composerOnly[0]?.heading).toContain(`composer${dot}${composer}`);
 		const segmentOnly = await renderGallerySurfaceSections({ segment });
 		expect(segmentOnly).toHaveLength(1);
-		expect(segmentOnly[0]?.heading).toBe(`segment · ${segment}`);
+		expect(segmentOnly[0]?.heading).toBe(`segment${dot}${segment}`);
 	});
 
 	it("renders every registered tool in every lifecycle state without throwing", async () => {
@@ -83,6 +94,18 @@ describe("gallery harness", () => {
 				// A renderer that produces no lines for a state is a regression: the
 				// component should always emit at least the call header or result.
 				expect(lines.length, `${name}/${state} rendered nothing`).toBeGreaterThan(0);
+			}
+		}
+	});
+
+	it("renders every transcript message sample, collapsed and expanded, without throwing", async () => {
+		for (const entry of getMessageGalleryEntries()) {
+			for (const variant of entry.variants) {
+				for (const expanded of [false, true]) {
+					const lines = await variant.render(100, expanded);
+					// An empty sample means the transcript dispatch dropped this message kind.
+					expect(lines.length, `${entry.id}/${variant.label} rendered nothing`).toBeGreaterThan(0);
+				}
 			}
 		}
 	});
@@ -132,7 +155,7 @@ describe("gallery harness", () => {
 	});
 
 	it("renders curated failed states as failures", async () => {
-		const cases = [["wait", "Subagent exited 1: Redis connection string is missing.", "42 pass"]] as const;
+		const cases = [["wait", "Unknown job id: job_x9", "2 done"]] as const;
 
 		for (const [name, expected, forbidden] of cases) {
 			const output = Bun.stripANSI((await renderGalleryState(name, resolveFixture(name), "error", 100)).join("\n"));
@@ -146,7 +169,7 @@ describe("gallery harness", () => {
 		const success = Bun.stripANSI((await renderGalleryState("read_group", fixture, "success", 140)).join("\n"));
 		const renderPathMatches = success.match(/packages\/coding-agent\/src\/task\/render\.ts/g) ?? [];
 
-		expect(success).toContain("Read (4)");
+		expect(success).toContain("Read 4 files");
 		expect(renderPathMatches).toHaveLength(1);
 		expect(success).toContain("packages/coding-agent/src/task/render.ts:507-605,1070-1194,…,1270-1274");
 		expect(success).not.toContain("1210-1240");
@@ -164,7 +187,7 @@ describe("gallery harness", () => {
 		expect(broadcast).toContain("not running");
 		const failedReceipt = await render("write_agent_failed_receipt", "success");
 		expect(failedReceipt).toContain("failed");
-		expect(failedReceipt).toContain("not running");
+		expect(failedReceipt).toContain("no agent named Missing is registered");
 		const cancel = await render("write_proc_cancel", "success");
 		expect(cancel).toContain("Build assets");
 		expect(cancel).toContain("cancelled");
@@ -173,7 +196,7 @@ describe("gallery harness", () => {
 		expect(error).toContain("Peer messaging is unavailable");
 		expect(error).not.toContain("Write");
 		const procError = await render("read_proc_job", "error");
-		expect(procError).toContain("Proc build-42");
+		expect(procError).toContain("Proc: build-42");
 		expect(procError).not.toContain("Read proc://");
 	});
 

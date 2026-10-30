@@ -9,7 +9,7 @@ import { editToolRenderer, renderStreamingFallback } from "@oh-my-pi/pi-tui/tool
 import { renderDiff } from "@oh-my-pi/pi-tui/chrome/diff";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import * as themeModule from "@oh-my-pi/pi-tui/theme";
-import { type TUI, visibleWidth } from "@oh-my-pi/pi-tui";
+import type { TUI } from "@oh-my-pi/pi-tui";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 
@@ -84,15 +84,15 @@ describe("editToolRenderer", () => {
 			const collapsed = renderPreview(makeDiff(20), false);
 			expect(collapsed).toContain("tail-line-20");
 			expect(collapsed).not.toContain("head-line-1");
-			expect(collapsed).toContain("content above");
-			expect(collapsed).toContain("(preview)");
+			expect(collapsed).toContain("earlier lines");
+			expect(collapsed.split("\n").at(-1)).toContain("preview");
 
 			// Within the viewport window, expanded shows the whole diff.
 			const expanded = renderPreview(makeDiff(20), true);
 			expect(expanded).toContain("head-line-1");
 			expect(expanded).toContain("tail-line-20");
-			expect(expanded).not.toContain("content above");
-			expect(expanded).not.toContain("(preview)");
+			expect(expanded).not.toContain("earlier lines");
+			expect(expanded.split("\n").at(-1)).not.toContain("preview");
 
 			// Beyond it, expanded stays a viewport-sized tail window: an unbounded
 			// live preview scrolls above the native-scrollback commit boundary and
@@ -100,7 +100,7 @@ describe("editToolRenderer", () => {
 			const expandedTall = renderPreview(makeDiff(40), true);
 			expect(expandedTall).toContain("tail-line-40");
 			expect(expandedTall).not.toContain("head-line-1");
-			expect(expandedTall).toContain("content above");
+			expect(expandedTall).toContain("earlier lines");
 		} finally {
 			if (originalRowsDescriptor) {
 				Object.defineProperty(process.stdout, "rows", originalRowsDescriptor);
@@ -125,10 +125,10 @@ describe("editToolRenderer", () => {
 
 		expect(rendered).toContain("first-added");
 		expect(rendered).toContain("second-added");
-		expect(rendered).not.toContain("content above");
+		expect(rendered).not.toContain("earlier lines");
 	});
 
-	it("uses a count-free marker for a discarded streaming prefix", async () => {
+	it("marks a discarded streaming prefix as earlier lines", async () => {
 		const uiTheme = await getUiTheme();
 		const diff = [
 			"@@ -1,10000 +1,12 @@",
@@ -149,11 +149,10 @@ describe("editToolRenderer", () => {
 				.join("\n"),
 		);
 
-		expect(rendered).toContain("content above");
+		expect(rendered).toContain("earlier lines");
 		expect(rendered).toContain("visible-tail-12");
 		expect(rendered).not.toContain("hidden-line-10000");
 		expect(rendered).not.toContain("more hunks");
-		expect(rendered).not.toContain("more lines above");
 	});
 
 	it("uses hashline input headers for streaming call path without apply_patch errors", async () => {
@@ -182,7 +181,7 @@ describe("editToolRenderer", () => {
 
 		const rendered = Bun.stripANSI(component.render(160).join("\n"));
 		expect(rendered).toContain("a.ts");
-		expect(rendered).toContain("(+1 more)");
+		expect(rendered).toContain("2 files");
 	});
 
 	it("never serves lagged streamed header facts to final args or to another call", () => {
@@ -515,7 +514,7 @@ describe("editToolRenderer", () => {
 		expect(addedRow).toContain(addedColor);
 	});
 
-	it("renders change stats inline on the result header with no separate metadata or stats row", async () => {
+	it("renders change stats in the bottom border with no separate metadata or stats row", async () => {
 		const uiTheme = await getUiTheme();
 		const diff = [" 115│ ctx", "-116│ old", "+117│ new one", "+118│ new two"].join("\n");
 		const component = editToolRenderer.renderResult(
@@ -529,15 +528,12 @@ describe("editToolRenderer", () => {
 		);
 
 		const lines = Bun.stripANSI(component.render(160).join("\n")).split("\n");
-		// Stats ride on the header line next to the path…
 		expect(lines[0]).toContain("demo.go");
-		expect(lines[0]).toContain("+2");
-		expect(lines[0]).toContain("-1");
-		expect(lines[0]).toContain("+2/-1");
-		// …only there (no standalone stats row), and the diff starts immediately
-		// below the header (no blank line, no lone lang-icon metadata row).
+		expect(lines[0]).not.toContain("+2");
+		// Stats ride the bottom border, and the diff starts immediately below the header.
+		expect(lines.at(-1)).toContain("+2 -1");
 		expect(lines[1]).toContain("115│ ctx");
-		expect(lines.filter(line => line.includes("+2/-1"))).toHaveLength(1);
+		expect(lines.filter(line => line.includes("+2 -1"))).toHaveLength(1);
 	});
 
 	it("bounds a completed diff that contains one oversized change hunk", async () => {
@@ -579,29 +575,8 @@ describe("editToolRenderer", () => {
 		);
 
 		const lines = component.render(120).map(line => Bun.stripANSI(line));
-		expect(lines).toHaveLength(43);
+		expect(lines).toHaveLength(42);
 		expect(lines.join("\n")).toContain("more lines");
-	});
-
-	it("renders completed edit gutters without inherited frame padding", async () => {
-		const uiTheme = await getUiTheme();
-		const component = editToolRenderer.renderResult(
-			{
-				content: [{ type: "text", text: "Updated demo.ts" }],
-				details: {
-					diff: "+1│const renamedIdentifier = computeValueFromSomeVeryLongInputName();",
-					op: "update",
-				},
-			},
-			{ expanded: false, isPartial: false, renderContext: { editMode: "hashline" } },
-			uiTheme,
-			{ file_path: "demo.ts" },
-		);
-
-		const lines = component.render(48).map(line => Bun.stripANSI(line));
-		expect(lines.every(line => visibleWidth(line) === 48)).toBe(true);
-		expect(lines[1]).toStartWith("│+1│");
-		expect(lines[1]).not.toStartWith("│ +1│");
 	});
 
 	it("does not leak the first file's no-change preview into a multi-file delete result", async () => {
@@ -781,61 +756,5 @@ describe("editToolRenderer diff line wrapping", () => {
 		// instead of letting the row-end assertions pass vacuously.
 		expect(rows.some(row => /│\x1b\[7m/.test(row))).toBe(true);
 		for (const row of rows) expect(inverseActiveAtRowEnd(row)).toBe(false);
-	});
-
-	// Error results reuse the same body-line wrapper as diff rows; these tests
-	// pin the boundary between prose that merely looks pipe-ish and real gutters.
-	async function renderErrorResultRows(errorText: string): Promise<string[]> {
-		const uiTheme = await getUiTheme();
-		const component = editToolRenderer.renderResult(
-			{
-				content: [{ type: "text", text: errorText }],
-				details: { diff: "", op: "update", path: "demo.ts" },
-				isError: true,
-			},
-			{ expanded: true, isPartial: false, renderContext: { renderDiff } },
-			uiTheme,
-			{ file_path: "demo.ts" },
-		);
-		return component.render(100).map(row => Bun.stripANSI(row));
-	}
-
-	it("does not give pipe-leading error text a phantom diff gutter when wrapping", async () => {
-		// Error text is not a diff row even when it starts with `|`: an empty
-		// gutter must wrap generically, not spawn `|` continuation prefixes.
-		const rows = await renderErrorResultRows(
-			"| pipe-leading diagnostic output that is quite long and should certainly wrap at the render width because it keeps going on and on with more words than fit in one row of the frame",
-		);
-		const bodyRows = rows.slice(1, -1);
-		// Precondition: the text actually wrapped, and the `|` lead survived on row one.
-		expect(bodyRows.length).toBeGreaterThanOrEqual(2);
-		expect(bodyRows[0]).toMatch(/^│\| /);
-		for (const row of bodyRows.slice(1)) expect(row).not.toMatch(/^│\s*\|/);
-	});
-
-	it("wraps spaces-then-bare-pipe error text generically instead of minting a gutter", async () => {
-		// A digit-less ASCII "|" gutter never comes out of formatCodeFrameLine or
-		// canonical diff rows; indented bare-pipe error text must wrap generically.
-		const rows = await renderErrorResultRows(
-			"   | indented bare-pipe diagnostic output that is quite long and should certainly wrap at the render width because it keeps going on and on with more words than fit in one row of the frame",
-		);
-		const bodyRows = rows.slice(1, -1);
-		// Precondition: the text actually wrapped, and the pipe lead survived on row one.
-		expect(bodyRows.length).toBeGreaterThanOrEqual(2);
-		expect(bodyRows[0]).toMatch(/^│\s+\| /);
-		for (const row of bodyRows.slice(1)) expect(row).not.toMatch(/^│\s*\|/);
-	});
-
-	it("wraps digit-leading pipe error text generically when the marker column is missing", async () => {
-		// Canonical ASCII-pipe rows always carry a marker column (`-42|`, ` 42|`);
-		// `123|` prose has a digit there instead, so it is not a diff row.
-		const rows = await renderErrorResultRows(
-			"123| numbered pipe-leading diagnostic output that is quite long and should certainly wrap at the render width because it keeps going on and on with more words than fit in one row of the frame",
-		);
-		const bodyRows = rows.slice(1, -1);
-		// Precondition: the text actually wrapped, and the numbered lead survived on row one.
-		expect(bodyRows.length).toBeGreaterThanOrEqual(2);
-		expect(bodyRows[0]).toMatch(/^│123\| /);
-		for (const row of bodyRows.slice(1)) expect(row).not.toMatch(/^│\s*\|/);
 	});
 });

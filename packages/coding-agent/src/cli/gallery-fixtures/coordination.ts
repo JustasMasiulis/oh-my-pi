@@ -40,9 +40,9 @@ export const coordinationFixtures: Record<string, GalleryFixture> = {
 					op: "send",
 					to: "all",
 					receipts: [
-						{ to: "A", outcome: "injected" },
-						{ to: "B", outcome: "revived" },
-						{ to: "C", outcome: "failed", error: "not running" },
+						{ to: "Reviewer", outcome: "injected" },
+						{ to: "AuthLoader", outcome: "revived" },
+						{ to: "Migrator", outcome: "failed", error: "not running" },
 					],
 				},
 			},
@@ -60,7 +60,7 @@ export const coordinationFixtures: Record<string, GalleryFixture> = {
 				message: {
 					op: "send",
 					to: "Missing",
-					receipts: [{ to: "Missing", outcome: "failed", error: "not running" }],
+					receipts: [{ to: "Missing", outcome: "failed", error: "no agent named Missing is registered" }],
 				},
 			},
 		},

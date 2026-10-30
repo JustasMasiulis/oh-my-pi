@@ -63,7 +63,7 @@ describe("provider error expand", () => {
 		const collapsed = Bun.stripANSI(component.render(100).join("\n"));
 		const bodyRows = collapsed.split("\n").filter(row => row.includes("<p>"));
 		expect(bodyRows.length).toBe(8);
-		expect(collapsed).toMatch(/\+\d+ more lines \(.+ to expand\)/);
+		expect(collapsed).toMatch(/\d+ more lines \S+: Expand/);
 
 		component.setExpanded(true);
 		const expanded = Bun.stripANSI(component.render(100).join("\n"));
@@ -78,7 +78,7 @@ describe("provider error expand", () => {
 		const shown = collapsed.match(/provider error detail line \d+/g) ?? [];
 		expect(shown.length).toBe(8);
 		expect(collapsed).not.toContain("provider error detail line 29");
-		expect(collapsed).toMatch(/\+22 more lines/);
+		expect(collapsed).toMatch(/ 22 more lines/);
 
 		component.setExpanded(true);
 		const expanded = Bun.stripANSI(component.render(120).join("\n"));

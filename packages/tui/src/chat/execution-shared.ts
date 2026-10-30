@@ -16,7 +16,7 @@ import { formatArtifactErrorNotice, formatTruncationMetaNotice, type TruncationM
 import { DynamicBorder } from "../chrome/dynamic-border";
 import { Ellipsis, truncateToWidth, visibleWidth } from "../utils";
 import { interruptKey } from "../chrome/keybinding-hints";
-import { DEFAULT_TERMINAL_PREVIEW_LINES, expandKeyHint } from "../render/render-utils";
+import { DEFAULT_TERMINAL_PREVIEW_LINES, formatExpandHint, formatMoreItems } from "../render/render-utils";
 import type { TspCardStatus, TspSpan, TspText, TspTone } from "@oh-my-pi/pi-wire";
 import { card, node, span, text } from "../native/describe";
 import type { NativeChild, NativeNode } from "../native/node";
@@ -47,13 +47,14 @@ export type ExecutionColorKey = "dim" | "bashMode" | "pythonMode";
  * Build the spacer + top border + content container + bottom border scaffold
  * that bash and eval execution components share. The caller appends the
  * header (command vs `>>>` prompt) and the returned loader to
- * `contentContainer` so per-mode order is preserved.
+ * `contentContainer` so per-mode order is preserved, and sets the run's exit
+ * marker into `bottomBorder` once it settles ({@link executionStatusLabel}).
  */
 export function buildExecutionFrame(
 	parent: Container,
 	ui: TUI,
 	colorKey: ExecutionColorKey,
-): { contentContainer: Container; loader: Loader } {
+): { contentContainer: Container; loader: Loader; bottomBorder: DynamicBorder } {
 	const borderColor = (str: string) => theme.fg(colorKey, str);
 
 	parent.addChild(new DynamicBorder(borderColor));
@@ -69,18 +70,24 @@ export function buildExecutionFrame(
 		getSymbolTheme().spinnerFrames,
 	);
 
-	parent.addChild(new DynamicBorder(borderColor));
-	return { contentContainer, loader };
+	const bottomBorder = new DynamicBorder(borderColor);
+	parent.addChild(bottomBorder);
+	return { contentContainer, loader, bottomBorder };
+}
+
+/** The bottom-border marker of a settled run: `exit N` for a failure, `cancelled` for a cancel. */
+export function executionStatusLabel(status: ExecutionStatus, exitCode: number | undefined): string | undefined {
+	if (status === "cancelled") return theme.fg("warning", "cancelled");
+	if (status === "error") return theme.fg("error", `exit ${exitCode}`);
+	return undefined;
 }
 
 /**
- * Build the post-run status block (hidden-line hint, exit/cancel marker,
- * truncation notice). Returns undefined when there is nothing to display so
- * callers can skip appending a stray Text child.
+ * Build the post-run status block (hidden-line hint, truncation notice).
+ * Returns undefined when there is nothing to display so callers can skip
+ * appending a stray Text child.
  */
 export function buildStatusFooter(opts: {
-	status: ExecutionStatus;
-	exitCode: number | undefined;
 	truncation: TruncationMeta | undefined;
 	artifactError?: OutputArtifactError;
 	hiddenLineCount: number;
@@ -90,12 +97,7 @@ export function buildStatusFooter(opts: {
 	const parts: string[] = [];
 
 	if (opts.hiddenLineCount > 0 && !opts.suppressHiddenCount) {
-		parts.push(theme.fg("dim", `… ${opts.hiddenLineCount} more lines (${expandKeyHint()} to expand)`));
-	}
-	if (opts.status === "cancelled") {
-		parts.push(theme.fg("warning", "(cancelled)"));
-	} else if (opts.status === "error") {
-		parts.push(theme.fg("error", `(exit ${opts.exitCode})`));
+		parts.push(`${theme.fg("dim", formatMoreItems(opts.hiddenLineCount, "line", theme))} ${formatExpandHint(theme)}`);
 	}
 	if (opts.truncation) {
 		parts.push(theme.fg("warning", formatTruncationMetaNotice(opts.truncation)));

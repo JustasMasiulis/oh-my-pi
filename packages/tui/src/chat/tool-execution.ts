@@ -40,12 +40,7 @@ import { taskCardAgentIds } from "../tools/task";
 import { TODO_STRIKE_TOTAL_FRAMES, type TodoToolDetails } from "../tools/todo";
 import { isNativeRendering } from "../native/state";
 import { isWaitingPollDetails } from "../tools/wait";
-import {
-	DEFAULT_TERMINAL_PREVIEW_LINES,
-	formatStatusIcon,
-	replaceTabs,
-	resolveImageOptions,
-} from "../render/render-utils";
+import { DEFAULT_TERMINAL_PREVIEW_LINES, replaceTabs, resolveImageOptions } from "../render/render-utils";
 import type { XdevMountedState } from "../tools/xdev";
 import { isFramedBlockComponent, markFramedBlockComponent, renderStatusLine, WidthAwareText } from "../render/index";
 import { cachedPngConversion, convertImageToPngShared, imagePayloadKey } from "./image-loading";
@@ -406,10 +401,6 @@ export class ToolExecutionComponent extends Container {
 	// so a terminal resize re-shapes image-bearing results to rescale them without
 	// forcing the common image-free result to re-shape on every resize tick.
 	#renderedImageCount = 0;
-	// `stateBgKey|themeEpoch` of the tint last handed to #contentText. Re-tinting
-	// drops its wrap cache, so a rebuild whose tint is unchanged skips it and the
-	// inner Text re-wraps only when the reformatted card text actually differs.
-	#contentTextBgKey: string | undefined;
 	// Memoized #getTextOutput(), keyed by every input it reads: the result
 	// (versioned by #resultVersion), #showImages, and the image protocol.
 	#textOutput = "";
@@ -514,12 +505,9 @@ export class ToolExecutionComponent extends Container {
 		if (this.#editMode) this.#previewReady = Promise.withResolvers<void>();
 
 		// Always create both - contentBox for custom tools/bash/tools with renderers, contentText for other built-ins.
-		// paddingY is 1 so background-tinted blocks (custom/extension tools and the
-		// generic fallback) get top/bottom breathing room. TranscriptContainer
-		// strips PLAIN-blank edges, so framed/minimal blocks (no bg set) drop these
-		// lines and keep their tight spacing — only tinted lines survive.
-		this.#contentBox = new Box(0, 1);
-		this.#contentText = new WidthAwareText(contentWidth => this.#renderDefaultCard(contentWidth), 1, 1);
+		// Every card is flush or framed, so neither carries padding or a tint.
+		this.#contentBox = new Box(0, 0);
+		this.#contentText = new WidthAwareText(contentWidth => this.#renderDefaultCard(contentWidth), 0, 0);
 
 		// Use Box for custom tools or built-in tools with rich renderers.
 		const hasCustomRenderer = !!(tool?.renderCall || tool?.renderResult);
@@ -1400,26 +1388,33 @@ export class ToolExecutionComponent extends Container {
 
 	#renderCompact(width: number): readonly string[] {
 		const summary = this.#activitySummary();
-		const detail = summary.detail ? theme.fg("muted", ` · ${summary.detail.replace(/\s+/g, " ")}`) : "";
 		// Elapsed ticks only while the call is genuinely running; a settled
 		// placeholder row must not read as live ("Todo · running 0s").
 		const elapsed =
 			this.#isRunning() && this.#executionStartedAtNow !== undefined
-				? theme.fg(
-						"dim",
-						` ${Math.max(0, Math.floor((this.#presentationFrame.now - this.#executionStartedAtNow) / 1000))}s`,
-					)
-				: "";
-		const text = truncateToWidth(
-			`${theme.fg("toolTitle", theme.bold(summary.label))}${detail}${elapsed}`,
-			Math.max(1, width - 4),
+				? `${Math.max(0, Math.floor((this.#presentationFrame.now - this.#executionStartedAtNow) / 1000))}s`
+				: undefined;
+		const status = this.#nativeStatus();
+		const row = renderStatusLine(
+			{
+				icon:
+					status === "error"
+						? "error"
+						: status === "done"
+							? "success"
+							: status === "cancelled"
+								? "aborted"
+								: status === "running"
+									? "running"
+									: "pending",
+				spinnerFrame: this.#spinnerFrame,
+				title: summary.label,
+				description: summary.detail?.replace(/\s+/g, " "),
+				meta: elapsed ? [elapsed] : undefined,
+			},
+			theme,
 		);
-		if (this.#allocation === 1) {
-			const glyph = this.#spinnerFrame === undefined ? "•" : (theme.spinnerFrames[this.#spinnerFrame] ?? "•");
-			const styledGlyph = theme.fg(this.#spinnerFrame === undefined ? "dim" : "muted", glyph);
-			return [truncateToWidth(`${styledGlyph} ${text}`, width)];
-		}
-		return [truncateToWidth(`${theme.fg("dim", "╭─")} ${text}`, width), theme.fg("dim", "╰")];
+		return [truncateToWidth(row, width)];
 	}
 
 	#activitySummary(): ToolActivitySummary {
@@ -1476,29 +1471,18 @@ export class ToolExecutionComponent extends Container {
 			return;
 		}
 
-		// Non-self-framing tools (custom/extension renderers and the generic
-		// fallback) get a padded, state-tinted block — built-ins that draw their
-		// own frame opt out below via the framed-component mark. A benign skip
-		// (steering/peer interrupt aborted a still-pending call) never ran, so it
-		// gets the neutral pending tint rather than the error tint (#7199).
-		const benignSkip = this.#isBenignSkip();
-		const stateBgKey =
-			this.#isPartial || benignSkip ? "toolPendingBg" : this.#result?.isError ? "toolErrorBg" : "toolSuccessBg";
-		// bgFill, not bg: rows carry nested full resets (e.g. truncateToWidth's
-		// `\x1b[0m` before its ellipsis) that would otherwise punch holes in the tint.
-		const stateBgFn = (t: string) => theme.bgFill(stateBgKey, t);
-
-		// A benign skip is a synthetic placeholder for a call that never executed,
-		// so bypass any bespoke error frame and draw the neutral generic card —
-		// the per-tool ✘/red-border would misread normal mid-turn steering as a
+		// Every renderer path is flush or framed: no padding, no state tint. A
+		// benign skip (steering/peer interrupt aborted a still-pending call)
+		// is a synthetic placeholder for a call that never executed, so it
+		// bypasses any bespoke error frame and draws the neutral generic card —
+		// the per-tool error frame would misread normal mid-turn steering as a
 		// failure (#7199).
-		if (benignSkip) {
-			this.#renderBenignSkipCard(stateBgFn);
+		if (this.#isBenignSkip()) {
+			this.#renderBenignSkipCard();
 		} else if (this.#tool && (this.#tool.renderCall || this.#tool.renderResult)) {
 			const tool = this.#tool;
 			const mergeCallAndResult = Boolean((tool as { mergeCallAndResult?: boolean }).mergeCallAndResult);
 			// Custom tools use Box for flexible component rendering
-			this.#contentBox.setBgFn(undefined);
 			this.#contentBox.clear();
 			// Mirror the built-in renderer branch so custom renderers (notably the
 			// task tool, whose live instance routes through here) receive the same
@@ -1580,11 +1564,6 @@ export class ToolExecutionComponent extends Container {
 					this.#contentBox.addChild(new Text(theme.fg("toolOutput", replaceTabs(output)), 0, 0));
 				}
 			}
-			// Custom tools that draw their own frame (task) render flush; plain
-			// extension renderers get the padded, state-tinted block back.
-			const customFramed = this.#contentBox.children.some(isFramedBlockComponent);
-			this.#contentBox.setPaddingX(customFramed ? 0 : 1);
-			this.#contentBox.setBgFn(customFramed ? undefined : stateBgFn);
 		} else if (this.#renderer) {
 			// The active registry entry is a built-in tool with a rich renderer.
 			const renderer = this.#renderer;
@@ -1602,7 +1581,6 @@ export class ToolExecutionComponent extends Container {
 				| undefined;
 			if (perFileResults && perFileResults.length > 1) {
 				// Multi-file: render each file as its own Box (identical to separate tool calls)
-				this.#contentBox.setBgFn(undefined);
 				this.#contentBox.clear();
 
 				const renderContext = this.#buildRenderContext();
@@ -1653,13 +1631,12 @@ export class ToolExecutionComponent extends Container {
 					this.#multiFileBoxes.push(pendingSpacer);
 					this.addChild(pendingSpacer);
 					const pendingBox = new Box(0, 0);
-					const spinner =
-						this.#spinnerFrame !== undefined ? formatStatusIcon("running", theme, this.#spinnerFrame) : "";
 					const pendingText = renderStatusLine(
 						{
-							iconOverride: spinner,
+							icon: "running",
+							spinnerFrame: this.#spinnerFrame,
 							title: "Edit",
-							description: theme.fg("dim", `${remaining} more file${remaining > 1 ? "s" : ""} pending…`),
+							description: `${remaining} more ${remaining > 1 ? "files" : "file"} pending`,
 						},
 						theme,
 					);
@@ -1669,8 +1646,6 @@ export class ToolExecutionComponent extends Container {
 				}
 			} else {
 				// Single-file or no result: standard rendering
-				// Inline renderers skip background styling
-				this.#contentBox.setBgFn(undefined);
 				this.#contentBox.clear();
 
 				const renderContext = this.#buildRenderContext();
@@ -1735,7 +1710,7 @@ export class ToolExecutionComponent extends Container {
 			// Generic fallback (no custom/built-in renderer). WidthAwareText
 			// reformats at render time so output fills the actual terminal width
 			// instead of a fixed column cap.
-			this.#refreshContentText(stateBgKey, stateBgFn);
+			this.#contentText.reformat();
 		}
 
 		// Handle images (same for both custom and built-in)
@@ -1953,16 +1928,6 @@ export class ToolExecutionComponent extends Container {
 		return output;
 	}
 
-	/** Re-tint (only when the tint changed) and reformat the generic #contentText card. */
-	#refreshContentText(stateBgKey: string, stateBgFn: (text: string) => string): void {
-		const bgKey = `${stateBgKey}|${getThemeEpoch()}`;
-		if (bgKey !== this.#contentTextBgKey) {
-			this.#contentTextBgKey = bgKey;
-			this.#contentText.setCustomBgFn(stateBgFn);
-		}
-		this.#contentText.reformat();
-	}
-
 	/**
 	 * Format the generic call/result card at `contentWidth`. Shared by the
 	 * #contentText fallback and the benign-skip path so both render identically.
@@ -2000,23 +1965,19 @@ export class ToolExecutionComponent extends Container {
 	/**
 	 * Render a benign skip as the neutral generic card, replacing any bespoke
 	 * renderer's error frame. Generic-fallback tools already route through
-	 * {@link #renderDefaultCard} (which emits the info card for a skip); they
-	 * only need the neutral tint. Bespoke-renderer tools get their content box
-	 * swapped for the same neutral card.
+	 * {@link #renderDefaultCard} (which emits the info card for a skip).
+	 * Bespoke-renderer tools get their content box swapped for the same card.
 	 */
-	#renderBenignSkipCard(stateBgFn: (text: string) => string): void {
+	#renderBenignSkipCard(): void {
 		if (!this.#usesContentBox) {
-			this.#refreshContentText("toolPendingBg", stateBgFn);
+			this.#contentText.reformat();
 			return;
 		}
 		for (const box of this.#multiFileBoxes) {
 			this.removeChild(box);
 		}
 		this.#multiFileBoxes = [];
-		this.#contentBox.setBgFn(undefined);
 		this.#contentBox.clear();
-		this.#contentBox.setPaddingX(1);
-		this.#contentBox.setBgFn(stateBgFn);
 		this.#contentBox.addChild(new WidthAwareText(contentWidth => this.#renderDefaultCard(contentWidth), 0, 0));
 	}
 }

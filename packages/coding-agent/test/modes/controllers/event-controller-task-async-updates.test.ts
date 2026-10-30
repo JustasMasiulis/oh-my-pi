@@ -363,7 +363,7 @@ describe("EventController async update finalization", () => {
 		)!;
 		sealed.push(component);
 		component.setExpanded(true);
-		expect(Bun.stripANSI(chatContainer.render(120).join("\n"))).toContain("Job1 Finished work");
+		expect(Bun.stripANSI(chatContainer.render(120).join("\n"))).toContain("Job1 · task · 5ms · Finished work");
 		expect(pendingTools.has("tc-wait")).toBe(false);
 		expect(component.isTranscriptBlockFinalized()).toBe(true);
 	});

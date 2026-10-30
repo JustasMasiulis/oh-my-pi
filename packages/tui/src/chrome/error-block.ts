@@ -1,7 +1,7 @@
 import * as os from "node:os";
 import { replaceTabs, truncateToWidth, wrapTextWithAnsi } from "../utils";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
-import { expandKeyHint, shortenEmbeddedPaths, TRUNCATE_LENGTHS } from "../render/render-utils";
+import { formatExpandHint, formatMoreItems, shortenEmbeddedPaths, TRUNCATE_LENGTHS } from "../render/render-utils";
 import { theme } from "../theme/index";
 /** Indent for every row after the first, so continuations hang under the prefix. */
 const CONTINUATION_INDENT = "  ";
@@ -26,8 +26,8 @@ export function sanitizeErrorLine(
  * `WidthAwareText` of `contentWidth` cells. Lines wrap to the render width
  * instead of being cut at a fixed column, so a long single-line body — a raw
  * 400 JSON envelope, a `raw-http-request=` dump path — stays readable. Blank
- * lines are dropped. When rows are cut, a dim `… +N more lines (<key> to
- * expand)` row follows; pass `Infinity` to keep every row. `styleLine` colors
+ * lines are dropped. When rows are cut, a dim `… N more lines [<key>: Expand]`
+ * row follows; pass `Infinity` to keep every row. `styleLine` colors
  * logical line `index` and supplies line 0's prefix (`Error: `, the banner
  * glyph). Shared by the inline transcript error and the pinned banner.
  */
@@ -53,10 +53,7 @@ export function formatErrorBlock(
 		const hidden = rows.length - maxRows;
 		rows.length = maxRows;
 		rows.push(
-			theme.fg(
-				"dim",
-				`${CONTINUATION_INDENT}… +${hidden} more line${hidden === 1 ? "" : "s"} (${expandKeyHint()} to expand)`,
-			),
+			`${CONTINUATION_INDENT}${theme.fg("dim", formatMoreItems(hidden, "line", theme))} ${formatExpandHint(theme)}`,
 		);
 	}
 	return rows.join("\n");

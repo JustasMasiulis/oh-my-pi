@@ -36,7 +36,7 @@ describe("prefixed tool rows", () => {
 		finished.dispose?.();
 	});
 
-	it("keeps grouped Read's URL on its branch and follows the branch on continuations", () => {
+	it("keeps grouped Read's URL beneath its label on continuations", () => {
 		const group = new ReadToolGroupComponent();
 		for (const [i, path] of [
 			"https://example.com/docs/2026/10/a-fairly-long-article-slug-that-overflows-the-row",
@@ -46,9 +46,11 @@ describe("prefixed tool rows", () => {
 			group.updateResult({ content: [{ type: "text", text: "ok" }] }, false, `r${i}`);
 		}
 		const rows = plain(group.render(width));
-		expect(rows.find(row => row.startsWith("   ├─ "))).toContain("https://example.com/docs");
-		expect(rows.find(row => row.startsWith("   │  "))).toContain("that-overflows-the-row");
-		expect(rows.find(row => row.startsWith("   └─ "))).toContain("https://example.com/short");
+		const long = rows.findIndex(row => row.includes("https://example.com/docs"));
+		expect(long).toBeGreaterThan(0);
+		expect(rows[long + 1]).toContain("that-overflows-the-row");
+		expect(rows[long + 1].search(/\S/)).toBe(rows[long].indexOf("https://"));
+		expect(rows.find(row => row.includes("https://example.com/short"))).toBeDefined();
 	});
 
 	it("keeps a numbered Read preview's long line beneath its gutter", async () => {
@@ -58,6 +60,7 @@ describe("prefixed tool rows", () => {
 				{
 					code: "This sentence is long enough that it has to wrap inside the card at sixty columns.",
 					codeStartLine: 42,
+					header: { icon: "success", title: "Read", description: "src/example.ts" },
 					width,
 				},
 				theme,
@@ -129,7 +132,7 @@ describe("prefixed tool rows", () => {
 		);
 		const branch = rows.findIndex(row => row.includes("├─"));
 		expect(branch).toBeGreaterThan(0);
-		expect(rows[branch + 1]).toMatch(/^│\s+│/);
+		expect(rows[branch + 1]).toMatch(/^\s+│\s+/);
 		expect(rows[branch + 1]).toContain("remaining details");
 	});
 
@@ -151,11 +154,9 @@ describe("prefixed tool rows", () => {
 			const chosenRow = rows.findIndex(row => row.includes("◉ Choose"));
 			const otherRow = rows.findIndex(row => row.includes("○ Leave"));
 			expect(chosenRow).toBeGreaterThan(0);
-			expect(rows[chosenRow + 1]).toStartWith("│    ");
-			expect(rows[chosenRow + 1]).toContain("information important");
+			expect(rows[chosenRow + 1].indexOf("information important")).toBe(rows[chosenRow].indexOf("Choose"));
 			expect(otherRow).toBeGreaterThan(0);
-			expect(rows[otherRow + 1]).toStartWith("│    ");
-			expect(rows[otherRow + 1]).toContain("ending still");
+			expect(rows[otherRow + 1].indexOf("ending still")).toBe(rows[otherRow].indexOf("Leave"));
 		}
 	});
 
@@ -179,23 +180,21 @@ describe("prefixed tool rows", () => {
 				)
 				.render(width),
 		);
-		const description = ask.findIndex(row => row.includes("↳"));
+		const description = ask.findIndex(row => row.includes("This detailed"));
 		expect(description).toBeGreaterThan(0);
-		expect(ask[description + 1]).toStartWith("│     ");
 		expect(ask[description + 1]).toContain("card.");
+		expect(ask[description + 1].search(/[^│\s]/)).toBe(ask[description].indexOf("This detailed"));
 
-		for (const expanded of [true, false]) {
-			const hover = plain(
-				renderLspResult(
-					{ content: [{ type: "text", text: `\`\`\`ts\nconst note = "${"long text ".repeat(12)}";\n\`\`\`` }] },
-					{ expanded, isPartial: false },
-					theme,
-				).render(width),
-			);
-			const codeRow = hover.findIndex(row => row.startsWith("│  │ "));
-			expect(codeRow).toBeGreaterThan(0);
-			expect(hover[codeRow + 1]).toStartWith("│  │ ");
-			expect(hover[codeRow + 1]).toContain("long text");
-		}
+		const hover = plain(
+			renderLspResult(
+				{ content: [{ type: "text", text: `\`\`\`ts\nconst note = "${"long text ".repeat(12)}";\n\`\`\`` }] },
+				{ expanded: true, isPartial: false },
+				theme,
+			).render(width),
+		);
+		const codeRow = hover.findIndex(row => row.includes("const note"));
+		expect(codeRow).toBeGreaterThan(0);
+		expect(hover[codeRow + 1]).toContain("long text");
+		expect(hover[codeRow + 1].search(/\S/)).toBe(hover[codeRow].indexOf("const note"));
 	});
 });

@@ -6,18 +6,17 @@ import { fencedCode } from "../components/markdown";
 import { Text } from "../components/text";
 import { getLanguageFromPath } from "../lang-from-path";
 import { createHighlightStream, highlightCode, type Theme } from "../theme/theme";
-import { fileHyperlink, renderStatusLine } from "../render";
-import { framedToolCard } from "../render/tool-card";
+import { fileHyperlink } from "../render";
+import type { StatusLineOptions } from "../render/status-line";
+import { framedToolCard, plainToolCard } from "../render/tool-card";
 import { wrapPrefixedLine } from "../render/hanging-wrap";
 import {
 	cachedRenderedString,
 	createRenderedStringCache,
-	Ellipsis,
-	formatDiagnostics,
-	formatErrorDetail,
+	formatCount,
+	formatErrorText,
 	formatExpandHint,
 	formatMoreItems,
-	formatStatusIcon,
 	PREVIEW_LIMITS,
 	type RenderedStringCache,
 	replaceTabs,
@@ -25,6 +24,7 @@ import {
 	TRUNCATE_LENGTHS,
 	truncateToWidth,
 } from "../render/render-utils";
+import { diagnosticsCardSection, flushDiagnosticsSection } from "./edit";
 import type { CoordinationDetails } from "./wait";
 import {
 	describeAgentWrite,
@@ -195,9 +195,19 @@ function writeContentOf(args: unknown): string {
 	return typeof content === "string" ? content : "";
 }
 
-function formatLineCountSuffix(lineCount: number, uiTheme: Theme): string {
-	if (lineCount <= 0) return "";
-	return uiTheme.fg("dim", ` · ${lineCount} line${lineCount === 1 ? "" : "s"}`);
+/** The status line of every file-write state: `Write: path`, the path linked to `linkTarget` when known. */
+function writeStatus(
+	icon: StatusLineOptions["icon"],
+	rawPath: string,
+	linkTarget: string | undefined,
+	uiTheme: Theme,
+): StatusLineOptions {
+	const filePath = sanitizeText(shortenPath(rawPath));
+	return {
+		icon,
+		title: "Write",
+		description: filePath && linkTarget ? fileHyperlink(linkTarget, filePath) : filePath || uiTheme.format.ellipsis,
+	};
 }
 
 function normalizeDisplayText(text: unknown): string {
@@ -337,17 +347,21 @@ function updateStreamingPreview(
 	return state;
 }
 
+/**
+ * Streaming preview rows: a tail window over the content, led by an
+ * `… N earlier lines` marker once the head scrolls out. Line numbers keep a
+ * fixed-width gutter so streamed rows stay byte-stable.
+ */
 function formatStreamingContent(
 	content: string,
 	expanded: boolean,
 	language: string | undefined,
 	uiTheme: Theme,
-	spinnerFrame?: number,
 	cache?: RenderedStringCache,
 	streamKey?: WriteStreamingPreviewStateCarrier,
 	argsComplete?: boolean,
-): string {
-	if (!content) return "";
+): string[] {
+	if (!content) return [];
 	const bodyText = cachedRenderedString(cache, uiTheme, expanded, language ?? "", content, () => {
 		const state = updateStreamingPreview(streamKey, content, language, uiTheme, argsComplete === true);
 		let totalLines: number;
@@ -368,31 +382,23 @@ function formatStreamingContent(
 			startIndex = expanded ? 0 : Math.max(0, totalLines - PREVIEW_LIMITS.EXPANDED_LINES);
 			visibleLines = highlightCode(lines.slice(startIndex).join("\n"), language);
 		}
-		const hidden = startIndex;
 		const lineNumberWidth = Math.max(WRITE_GUTTER_MIN_WIDTH, String(totalLines).length);
-
-		let text = "\n\n";
-		if (hidden > 0) {
-			text += `${uiTheme.fg("dim", `… (${hidden} earlier line${hidden === 1 ? "" : "s"})`)}\n`;
+		const rows: string[] = [];
+		if (startIndex > 0) {
+			const marker = uiTheme.fg("dim", formatMoreItems(startIndex, "line", uiTheme, "earlier"));
+			const hint = formatExpandHint(uiTheme, expanded, true);
+			rows.push(hint ? `${marker} ${hint}` : marker);
 		}
 		for (let i = 0; i < visibleLines.length; i++) {
-			const lineNum = startIndex + i + 1;
-			const gutter = uiTheme.fg("dim", `${String(lineNum).padStart(lineNumberWidth, " ")} `);
-			const body = replaceTabs(visibleLines[i] ?? "");
-			text += `${gutter}${body}\n`;
+			const gutter = uiTheme.fg("dim", `${String(startIndex + i + 1).padStart(lineNumberWidth, " ")} `);
+			rows.push(`${gutter}${replaceTabs(visibleLines[i] ?? "")}`);
 		}
-		return text;
+		return rows.join("\n");
 	});
-	if (bodyText.length === 0) return "";
-	// The animated glyph lives on this trailing line — inside the transcript's
-	// volatile-tail holdback — never in the header: an animating head row pins
-	// the native-scrollback commit boundary at the top of the block, so a long
-	// expanded preview could never scroll-append mid-stream.
-	const spinner = spinnerFrame !== undefined ? `${formatStatusIcon("running", uiTheme, spinnerFrame)} ` : "";
-	return `${bodyText}${spinner}${uiTheme.fg("dim", `… (streaming)`)}`;
+	return bodyText ? bodyText.split("\n") : [];
 }
 
-function wrapWritePreviewRows(lines: string[], width: number): string[] {
+function wrapWritePreviewRows(lines: readonly string[], width: number): string[] {
 	return lines.flatMap(line => {
 		const gutter = /^(\x1b\[[0-9;]*m)( *\d+ )(\x1b\[[0-9;]*m)(.*)$/.exec(line);
 		if (!gutter) return line;
@@ -401,37 +407,27 @@ function wrapWritePreviewRows(lines: string[], width: number): string[] {
 	});
 }
 
+/** The written file's head rows (`rawLines` are its display lines) and the count of lines hidden below them. */
 function renderContentPreview(
 	content: string,
+	rawLines: readonly string[],
 	expanded: boolean,
 	language: string | undefined,
 	uiTheme: Theme,
 	cache?: RenderedStringCache,
-): string {
-	if (!content) return "";
-	return cachedRenderedString(cache, uiTheme, expanded, language ?? "", content, () => {
-		const rawLines = normalizeDisplayText(content).split("\n");
-		const totalLines = rawLines.length;
-		const maxLines = expanded ? totalLines : Math.min(totalLines, WRITE_PREVIEW_LINES);
-		const visibleLines = rawLines.slice(0, maxLines);
-		const highlighted = highlightCode(visibleLines.join("\n"), language);
-		const lineNumberWidth = Math.max(WRITE_GUTTER_MIN_WIDTH, String(totalLines).length);
-		const hidden = totalLines - maxLines;
-
-		let text = "\n\n";
-		for (let i = 0; i < highlighted.length; i++) {
-			const lineNum = i + 1;
-			const gutter = uiTheme.fg("dim", `${String(lineNum).padStart(lineNumberWidth, " ")} `);
-			const body = replaceTabs(highlighted[i] ?? "");
-			text += `${gutter}${body}\n`;
-		}
-		if (!expanded && hidden > 0) {
-			const hint = formatExpandHint(uiTheme, expanded, hidden > 0);
-			const moreLine = `${formatMoreItems(hidden, "line")}${hint ? ` ${hint}` : ""}`;
-			text += uiTheme.fg("dim", moreLine);
-		}
-		return text.trimEnd();
+): { lines: string[]; hidden: number } {
+	const shown = expanded ? rawLines.length : Math.min(rawLines.length, WRITE_PREVIEW_LINES);
+	if (shown === 0) return { lines: [], hidden: 0 };
+	const text = cachedRenderedString(cache, uiTheme, expanded, language ?? "", content, () => {
+		const highlighted = highlightCode(rawLines.slice(0, shown).join("\n"), language);
+		const lineNumberWidth = Math.max(WRITE_GUTTER_MIN_WIDTH, String(rawLines.length).length);
+		return highlighted
+			.map(
+				(line, i) => `${uiTheme.fg("dim", `${String(i + 1).padStart(lineNumberWidth, " ")} `)}${replaceTabs(line)}`,
+			)
+			.join("\n");
 	});
+	return { lines: text.split("\n"), hidden: rawLines.length - shown };
 }
 
 /** Render context for the write tool: resolves an `xd://`-mounted tool so its live renderer drives device dispatch previews. */
@@ -635,60 +631,48 @@ export const writeToolRenderer = {
 			if (xdev.name === REPORT_ISSUE_DEVICE_NAME) return renderReportIssueDeviceCall(args.content, uiTheme);
 			return renderXdevCall(xdev.name, args.content, options, uiTheme, options.renderContext?.resolveXdevMounted);
 		}
-		const filePath = sanitizeText(shortenPath(rawPath));
-		const lang = rawPath ? (getLanguageFromPath(rawPath) ?? "text") : "text";
-		const langIcon = uiTheme.fg("muted", uiTheme.getLangIcon(lang));
-		const styledPath = filePath ? uiTheme.fg("accent", filePath) : uiTheme.fg("toolOutput", "…");
 		// The result has not resolved its target yet. Link the containing file
 		// rather than an archive member or database row selector.
-		const pathDisplay =
-			filePath && args.content !== undefined ? fileHyperlink(pendingFileLinkPath(rawPath), styledPath) : styledPath;
-		// No status icon on the head row: it's the head of the framed block, and
-		// native-scrollback commits are prefix-only — an animated glyph would pin
-		// the commit boundary at the top, and the pending hourglass just adds
-		// noise. The liveness cue rides the trailing "(streaming)" line instead.
-		const header = renderStatusLine(
-			{
-				title: "Write",
-				description: `${langIcon} ${pathDisplay}`,
-			},
-			uiTheme,
-		);
+		const linkTarget = args.content !== undefined ? pendingFileLinkPath(rawPath) : undefined;
+		const icon = options.executionStarted ? "running" : "pending";
+		const status = writeStatus(icon, rawPath, linkTarget, uiTheme);
 		// Raw content, not normalizeDisplayText(args.content): the collapsed
 		// streaming path normalizes only its tail window, so a full-payload
 		// normalize on every reveal tick would re-introduce the O(n²) streaming
 		// cost formatStreamingContent avoids. Non-string content still falls
 		// back to the normalizing stringify.
 		const content = typeof args.content === "string" ? args.content : normalizeDisplayText(args.content);
+		// Nothing streamed yet (a bare `\r` run normalizes to nothing): a flush status line.
+		if (!/[^\r]/.test(content)) return plainToolCard(uiTheme, () => ({ status, phase: icon }));
+		const lang = rawPath ? (getLanguageFromPath(rawPath) ?? "text") : "text";
 		const streamingCache = createRenderedStringCache();
 		return framedToolCard(
 			uiTheme,
-			({ contentWidth }) => {
-				const body = content
-					? formatStreamingContent(
-							content,
-							Boolean(options?.expanded),
-							lang,
-							uiTheme,
-							options?.spinnerFrame,
-							streamingCache,
-							// `options` is the ToolExecutionComponent's persistent
-							// render-state object — a stable identity across reveal ticks
-							// that keys the incremental preview state. `argsComplete`
-							// flushes the trailing line through the highlighter once.
-							options,
-							options?.argsComplete,
-						)
-					: "";
-				const bodyLines = body ? body.split("\n") : [];
-				while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
-				return {
-					header,
-					sections: bodyLines.length > 0 ? [{ content: wrapWritePreviewRows(bodyLines, contentWidth) }] : [],
-					phase: "pending",
-					borderColor: "borderMuted",
-				};
-			},
+			({ contentWidth }) => ({
+				status,
+				phase: icon,
+				footerMeta: options.argsComplete ? undefined : uiTheme.fg("dim", "streaming"),
+				sections: [
+					{
+						content: wrapWritePreviewRows(
+							formatStreamingContent(
+								content,
+								Boolean(options?.expanded),
+								lang,
+								uiTheme,
+								streamingCache,
+								// `options` is the ToolExecutionComponent's persistent
+								// render-state object — a stable identity across reveal ticks
+								// that keys the incremental preview state. `argsComplete`
+								// flushes the trailing line through the highlighter once.
+								options,
+								options?.argsComplete,
+							),
+							contentWidth,
+						),
+					},
+				],
+			}),
 			// The highlighted body in `streamingCache` does not depend on width, and re-highlighting every committed
 			// card on each resize replay costs seconds; only the incremental highlighter state goes.
 			{ onReleaseRenderCaches: () => delete options?.[writeStreamingPreviewStateKey] },
@@ -719,82 +703,72 @@ export const writeToolRenderer = {
 		}
 		const rawPath =
 			typeof args?.file_path === "string" ? args.file_path : typeof args?.path === "string" ? args.path : "";
-		const filePath = sanitizeText(shortenPath(rawPath));
 		const fileContent = normalizeDisplayText(args?.content);
 		const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
-		const langIcon = uiTheme.fg("muted", uiTheme.getLangIcon(lang));
 		// The header shows the cwd-relative path but links to the absolute path the
 		// write resolved to (args.path may be relative, which would yield a broken
 		// `file://` URI). Falls back to plain text when the result lacks a path.
 		const linkTarget = writeResolvedPath(options.renderContext?.rawDetails, result.details?.resolvedPath);
-		const styledPath = filePath ? uiTheme.fg("accent", filePath) : uiTheme.fg("toolOutput", "…");
-		const pathDisplay = filePath && linkTarget ? fileHyperlink(linkTarget, styledPath) : styledPath;
 
 		if (result.isError) {
-			const errorText = result.content?.find(c => c.type === "text")?.text ?? "";
-			const header = renderStatusLine(
-				{ icon: "error", title: "Write", description: `${langIcon} ${pathDisplay}` },
-				uiTheme,
-			);
-			return framedToolCard(uiTheme, () => ({
-				header,
-				sections: [{ content: formatErrorDetail(errorText, uiTheme).split("\n") }],
+			const errorText = result.content?.find(c => c.type === "text")?.text;
+			return plainToolCard(uiTheme, () => ({
+				status: writeStatus("error", rawPath, linkTarget, uiTheme),
 				phase: "error",
-				borderColor: "error",
+				body: [formatErrorText(errorText, uiTheme)],
 			}));
 		}
 
 		const isPartial = options.isPartial === true;
 		const progressText = result.content?.find(c => c.type === "text")?.text ?? "";
-		const lineCount = countLines(fileContent);
-		const lineSuffix = formatLineCountSuffix(lineCount, uiTheme);
-		const execSuffix =
-			!isPartial && result.details?.madeExecutable
-				? `${uiTheme.fg("dim", " · ")}${uiTheme.fg("success", "made executable!")}`
-				: "";
-		const header = renderStatusLine(
-			{
-				icon: isPartial ? "running" : undefined,
-				iconOverride: isPartial ? undefined : uiTheme.styledSymbol("tool.write", "accent"),
-				spinnerFrame: options.spinnerFrame,
-				title: "Write",
-				description: `${langIcon} ${pathDisplay}${lineSuffix}${execSuffix}`,
-			},
-			uiTheme,
-		);
-		const diagnostics = result.details?.diagnostics;
+		const status: StatusLineOptions = {
+			...writeStatus(isPartial ? "running" : "success", rawPath, linkTarget, uiTheme),
+			badge: !isPartial && result.details?.madeExecutable ? { label: "executable", color: "success" } : undefined,
+		};
+		const diagnostics = isPartial ? undefined : result.details?.diagnostics;
+		const rawLines = fileContent ? fileContent.split("\n") : [];
+		const lineCount = rawLines.length > 0 ? formatCount("line", rawLines.length) : undefined;
+		const progressRow =
+			isPartial && progressText
+				? uiTheme.fg("muted", truncateToWidth(replaceTabs(progressText), TRUNCATE_LENGTHS.LINE))
+				: undefined;
+
+		// No content block: a flush status line, with any progress or diagnostics beneath it.
+		if (rawLines.length === 0) {
+			return plainToolCard(uiTheme, () => {
+				const diag = diagnosticsCardSection(diagnostics, options.expanded, uiTheme);
+				return {
+					status,
+					phase: isPartial ? "partial" : "success",
+					body: progressRow ? [progressRow] : undefined,
+					sections: diag ? [flushDiagnosticsSection(diag)] : undefined,
+				};
+			});
+		}
 
 		const previewCache = createRenderedStringCache();
 		return framedToolCard(
 			uiTheme,
 			({ contentWidth }) => {
 				const { expanded } = options;
-				let body = renderContentPreview(fileContent, expanded, lang, uiTheme, previewCache);
-				if (isPartial && progressText) {
-					const safeProgressText = truncateToWidth(
-						replaceTabs(progressText),
-						TRUNCATE_LENGTHS.LINE,
-						Ellipsis.Unicode,
-					);
-					body = `${uiTheme.fg("muted", safeProgressText)}${body ? `\n${body}` : ""}`;
-				}
-				if (!isPartial && diagnostics) {
-					const diagText = formatDiagnostics(diagnostics, expanded, uiTheme, fp =>
-						uiTheme.getLangIcon(getLanguageFromPath(fp)),
-					);
-					if (diagText.trim()) {
-						const diagLines = diagText.split("\n");
-						const firstNonEmpty = diagLines.findIndex(line => line.trim());
-						if (firstNonEmpty >= 0) body += `\n${diagLines.slice(firstNonEmpty).join("\n")}`;
-					}
-				}
-				const bodyLines = body.split("\n");
-				while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
+				const preview = renderContentPreview(fileContent, rawLines, expanded, lang, uiTheme, previewCache);
+				const marker =
+					preview.hidden > 0
+						? `${formatMoreItems(preview.hidden, "line", uiTheme)} ${formatExpandHint(uiTheme)}`
+						: undefined;
+				const diag = diagnosticsCardSection(diagnostics, expanded, uiTheme);
+				const lines = wrapWritePreviewRows(preview.lines, contentWidth);
+				if (progressRow) lines.unshift(progressRow);
+				// The last section's marker rides the bottom border; the preview's stays in place above diagnostics.
+				if (diag && marker) lines.push(uiTheme.fg("dim", marker));
 				return {
-					header,
-					sections: bodyLines.length > 0 ? [{ content: wrapWritePreviewRows(bodyLines, contentWidth) }] : [],
+					status,
 					phase: isPartial ? "partial" : "success",
-					borderColor: "borderMuted",
+					footerMeta: uiTheme.fg(
+						"dim",
+						[lineCount, diag ? diag.marker : marker].filter(Boolean).join(uiTheme.sep.dot),
+					),
+					sections: [{ content: lines }, ...(diag ? [diag.section] : [])],
 				};
 			},
 			// No release hook: `previewCache` holds the width-independent highlighted preview, which resize replay
@@ -870,7 +844,7 @@ export const writeToolRenderer = {
 	figure: writeFigure,
 	mergeCallAndResult: true,
 	// The collapsed pending preview follows the streaming edge with a tail
-	// window once the content outgrows it (`… (N earlier lines)` + last rows);
+	// window once the content outgrows it (`… N earlier lines` + last rows);
 	// the first partial result re-anchors the frame to the top of the file, so
 	// tail rows already committed to viewport/native scrollback would survive
 	// as stale content above the new frame without a full replay. Expanded and

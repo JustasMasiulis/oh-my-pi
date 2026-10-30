@@ -57,7 +57,7 @@ describe("ToolExecutionComponent live preview spinners", () => {
 		resetSettingsForTest();
 	});
 
-	it("animates the eval pending cell while the call is live", () => {
+	it("does not tick framed eval pending cells", () => {
 		vi.useFakeTimers();
 		const requestRender = vi.fn();
 		const requestComponentRender = vi.fn();
@@ -72,14 +72,15 @@ describe("ToolExecutionComponent live preview spinners", () => {
 
 		try {
 			const firstFrame = stripVTControlCharacters(component.render(80).join("\n"));
-			vi.advanceTimersByTime(120);
+			requestRender.mockClear();
+			requestComponentRender.mockClear();
+			vi.advanceTimersByTime(500);
 			const secondFrame = stripVTControlCharacters(component.render(80).join("\n"));
 
-			expect(requestComponentRender).toHaveBeenCalledWith(component);
 			expect(requestRender).not.toHaveBeenCalled();
+			expect(requestComponentRender).not.toHaveBeenCalled();
 			expect(firstFrame).toContain("time.sleep(10)");
-			expect(secondFrame).toContain("time.sleep(10)");
-			expect(secondFrame).not.toBe(firstFrame);
+			expect(secondFrame).toBe(firstFrame);
 		} finally {
 			component.stopAnimation();
 		}
@@ -233,7 +234,7 @@ describe("ToolExecutionComponent live preview spinners", () => {
 			requestComponentRender =>
 				new ToolExecutionComponent(
 					"eval",
-					{ language: "py", code: "import time\ntime.sleep(10)" },
+					{ language: "py" },
 					{},
 					undefined,
 					{ requestRender: vi.fn(), requestComponentRender } as unknown as TUI,
@@ -256,7 +257,7 @@ describe("ToolExecutionComponent live preview spinners", () => {
 		}
 	});
 
-	it("renders generic three-, two-, one-, and zero-row presentations", () => {
+	it("degrades an overflowing block to one status row, then to nothing", () => {
 		const component = new ToolExecutionComponent(
 			"bash",
 			{ command: "bun test packages/tui" },
@@ -275,10 +276,9 @@ describe("ToolExecutionComponent live preview spinners", () => {
 			component.setTranscriptAllocation(0, { tick: 4, now: 320 });
 
 			expect(full.length).toBeGreaterThanOrEqual(3);
-			expect(folded).toHaveLength(2);
-			expect(stripVTControlCharacters(folded.join("\n"))).toContain("bun test packages/tui");
+			expect(folded).toHaveLength(1);
 			expect(compact).toHaveLength(1);
-			expect(stripVTControlCharacters(compact[0]!)).toContain("bash · bun test packages/tui");
+			expect(stripVTControlCharacters(compact[0]!)).toContain("bash: bun test packages/tui");
 			expect(component.render(80)).toEqual([]);
 		} finally {
 			component.stopAnimation();
@@ -289,7 +289,7 @@ describe("ToolExecutionComponent live preview spinners", () => {
 		vi.spyOn(performance, "now").mockReturnValue(1_000);
 		const component = new ToolExecutionComponent(
 			"ext_tool",
-			{},
+			{ input: "sync" },
 			{},
 			{ name: "ext_tool", label: "Catalog" } as never,
 			{ requestRender: vi.fn(), requestComponentRender: vi.fn() } as unknown as TUI,
@@ -299,14 +299,14 @@ describe("ToolExecutionComponent live preview spinners", () => {
 			component.setExecutionStarted();
 			component.setTranscriptAllocation(1, { tick: 27, now: 3_200 });
 			const running = stripVTControlCharacters(component.render(24)[0] ?? "");
-			expect(running).toContain("Catalog · running 2s");
+			expect(running).toContain("Catalog: sync 2s");
 			expect(Bun.stringWidth(running)).toBeLessThanOrEqual(24);
 
 			component.updateResult({ content: [{ type: "text", text: "done" }] }, false);
 			const settled = stripVTControlCharacters(component.render(24)[0] ?? "");
 			expect(settled).toContain("Catalog");
 			expect(settled).not.toContain("running");
-			expect(settled).not.toMatch(/\d+s$/);
+			expect(settled.trimEnd()).not.toMatch(/\d+s$/);
 			expect(Bun.stringWidth(settled)).toBeLessThanOrEqual(24);
 		} finally {
 			component.stopAnimation();
@@ -325,7 +325,7 @@ describe("ToolExecutionComponent live preview spinners", () => {
 		try {
 			component.setTranscriptAllocation(1, { tick: 0, now: 0 });
 			const row = stripVTControlCharacters(component.render(30)[0] ?? "");
-			expect(row).toContain("Catalog · processing");
+			expect(row).toContain("Catalog: processing");
 			expect(Bun.stringWidth(row)).toBeLessThanOrEqual(30);
 		} finally {
 			component.stopAnimation();
@@ -399,7 +399,7 @@ describe("ToolExecutionComponent live preview spinners", () => {
 			const chatContainer = new TranscriptContainer();
 			const liveBlock = new ToolExecutionComponent(
 				"eval",
-				{ language: "py", code: "import time\ntime.sleep(10)" },
+				{ language: "py" },
 				{},
 				undefined,
 				{ requestRender: vi.fn(), requestComponentRender: vi.fn() } as unknown as TUI,
@@ -770,7 +770,7 @@ describe("ToolExecutionComponent live preview spinners", () => {
 			const chatContainer = new TranscriptContainer();
 			const pendingBlock = new ToolExecutionComponent(
 				"eval",
-				{ language: "py", code: "import time\ntime.sleep(10)" },
+				{ language: "py" },
 				{},
 				undefined,
 				{ requestRender: vi.fn(), requestComponentRender: vi.fn() } as unknown as TUI,
@@ -779,7 +779,7 @@ describe("ToolExecutionComponent live preview spinners", () => {
 			chatContainer.addChild(pendingBlock);
 			const displaceableBlock = new ToolExecutionComponent(
 				"eval",
-				{ language: "py", code: "import time\ntime.sleep(10)" },
+				{ language: "py" },
 				{},
 				undefined,
 				{ requestRender: vi.fn(), requestComponentRender: vi.fn() } as unknown as TUI,

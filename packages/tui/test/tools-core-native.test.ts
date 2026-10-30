@@ -94,7 +94,10 @@ describe("core tool native views", () => {
 			path: "a.ts",
 			content: long,
 		});
-		const cell = describeCodeCell({ code: long, language: "ts", codeStartLine: 1 }, theme);
+		const cell = describeCodeCell(
+			{ header: { icon: "success", title: "Eval" }, code: long, language: "ts", codeStartLine: 1 },
+			theme,
+		);
 		for (const children of [read.body, write?.body, [cell]]) {
 			const blocks = collect(children, "code");
 			expect(blocks).toHaveLength(1);

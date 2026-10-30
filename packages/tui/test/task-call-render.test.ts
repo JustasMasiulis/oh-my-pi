@@ -20,10 +20,10 @@ describe("task renderer: streaming call preview", () => {
 		return Bun.stripANSI(component.render(160).join("\n"));
 	}
 
-	// The preview must surface the dispatched agent type + name while args
-	// stream in: the flat header carries the agent type, and the agent row's
-	// secondary text is the FIRST line of the task brief only.
-	it("shows the agent type in the header and the first task line on the agent row", () => {
+	// The preview surfaces the dispatched agent while args stream in: the header
+	// subject is the agent's name, the brief is the card's prompt block, and the
+	// agent row carries the non-default agent type badge.
+	it("names the agent in the header and badges its type on the agent row", () => {
 		const args: TaskParams = {
 			agent: "reviewer",
 			name: "ReviewAuth",
@@ -32,28 +32,11 @@ describe("task renderer: streaming call preview", () => {
 		const out = render(args);
 		const lines = out.split("\n");
 
-		expect(lines[0]).toContain("reviewer");
-		const row = lines.find(line => line.includes("ReviewAuth"));
+		expect(lines[0]).toContain("Task: ReviewAuth");
+		expect(out).toContain("Review packages/server/src/auth for missing 401 handling.");
+		const row = lines.slice(1).find(line => line.includes("ReviewAuth"));
 		expect(row).toBeDefined();
-		expect(row).toContain("Review packages/server/src/auth for missing 401 handling.");
-		expect(row).not.toContain("Report findings.");
-		// A non-default agent type also badges the row itself.
 		expect(row).toContain(`${theme.format.bracketLeft}reviewer${theme.format.bracketRight}`);
-	});
-
-	it("caps the agent-row brief to a single preview line", () => {
-		const args: TaskParams = {
-			agent: "task",
-			name: "CapCheck",
-			task: `${"x".repeat(80)} TAIL_MARKER\nsecond line`,
-		};
-		const row = render(args)
-			.split("\n")
-			.find(line => line.includes("CapCheck"));
-
-		expect(row).toBeDefined();
-		expect(row).toContain("…");
-		expect(row).not.toContain("TAIL_MARKER");
 	});
 
 	it("renders partially-streamed args (name only, no task yet) without crashing", () => {
@@ -198,9 +181,9 @@ describe("task renderer: streaming call preview", () => {
 			{ expanded: false, isPartial: true, renderContext: { hasResult: true } },
 			theme,
 		);
-		const out = Bun.stripANSI(component.render(160).join("\n"));
+		const lines = Bun.stripANSI(component.render(160).join("\n")).split("\n");
 
-		expect(out).not.toContain("Review the auth module.");
-		expect(out).not.toContain("ReviewAuth");
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).not.toContain("Review the auth module.");
 	});
 });

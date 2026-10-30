@@ -53,9 +53,8 @@ describe("small JSON containers", () => {
 		const theme = (await getThemeByName("dark"))!;
 		const { lines } = renderJsonTreeLines(counts, theme, { maxDepth: 2, maxLines: 10, maxScalarLen: 60 });
 		const plain = lines.map(line => Bun.stripANSI(line).trimEnd());
-		expect(plain).toHaveLength(2);
-		expect(plain[0]).toEndWith(' 0: [[3, "daemon_wire_decode"], 121]');
-		expect(plain[1]).toEndWith(' 1: [[6, "vt"], 98]');
+		// Roots are flush: the card is their container.
+		expect(plain).toEqual(['0: [[3, "daemon_wire_decode"], 121]', '1: [[6, "vt"], 98]']);
 	});
 });
 

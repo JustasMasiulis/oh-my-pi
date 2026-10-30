@@ -16,6 +16,11 @@ import { getTreeBranch, getTreeContinuePrefix } from "./utils";
 /** Tree items and callbacks controlling their presentation. */
 export interface TreeListOptions<T> {
 	items: T[];
+	/**
+	 * Draw items without branch connectors. Top-level result lists are flush
+	 * (the card is their container); connectors only express nesting.
+	 */
+	flush?: boolean;
 	expanded?: boolean;
 	maxCollapsed?: number;
 	/** Strict total-line budget for collapsed mode. When set (and not expanded),
@@ -55,12 +60,14 @@ export function renderTreeList<T>(options: TreeListOptions<T>, theme: Theme): st
 	const lastPrefix = `${theme.fg("dim", getTreeBranch(true, theme))} `;
 	const branchContinuePrefix = theme.fg("dim", getTreeContinuePrefix(false, theme));
 	const lastContinuePrefix = theme.fg("dim", getTreeContinuePrefix(true, theme));
-	const prefixWidth = Math.max(
-		visibleWidth(branchPrefix),
-		visibleWidth(lastPrefix),
-		visibleWidth(branchContinuePrefix),
-		visibleWidth(lastContinuePrefix),
-	);
+	const prefixWidth = options.flush
+		? 0
+		: Math.max(
+				visibleWidth(branchPrefix),
+				visibleWidth(lastPrefix),
+				visibleWidth(branchContinuePrefix),
+				visibleWidth(lastContinuePrefix),
+			);
 
 	const toItemRow = (itemIndex: number): TreeListRow => {
 		const rendered = renderItem(items[itemIndex], {
@@ -88,7 +95,7 @@ export function renderTreeList<T>(options: TreeListOptions<T>, theme: Theme): st
 		if (summary !== "") {
 			roots.push({ kind: "summary", text: theme.fg("muted", summary) });
 		}
-		return renderTreeListRows(roots, theme);
+		return renderTreeListRows(roots, theme, options.flush);
 	}
 
 	const candidateIndices: number[] = [];
@@ -162,15 +169,15 @@ export function renderTreeList<T>(options: TreeListOptions<T>, theme: Theme): st
 
 	const roots: TreeListRow[] = [];
 	if (truncateFrom === "start" && hasSummary) {
-		roots.push({ kind: "summary", text: theme.fg("muted", formatMoreItems(remaining, itemType)) });
+		roots.push({ kind: "summary", text: theme.fg("dim", formatMoreItems(remaining, itemType, theme)) });
 	}
 	for (let i = displayedSlice.start; i < displayedSlice.end; i++) {
 		roots.push({ kind: "item", index: candidateIndices[i], lines: preRendered[i]! });
 	}
 	if (truncateFrom === "end" && hasSummary) {
-		roots.push({ kind: "summary", text: theme.fg("muted", formatMoreItems(remaining, itemType)) });
+		roots.push({ kind: "summary", text: theme.fg("dim", formatMoreItems(remaining, itemType, theme)) });
 	}
-	return renderTreeListRows(roots, theme);
+	return renderTreeListRows(roots, theme, options.flush);
 }
 
 /**
@@ -202,19 +209,20 @@ export function describeTreeList<T>(options: TreeListOptions<T>, theme: Theme): 
 	const shown = expanded ? items.length : Math.min(items.length, maxCollapsed);
 	const hidden = items.length - shown;
 	const start = truncateFrom === "start" ? items.length - shown : 0;
-	if (hidden > 0 && truncateFrom === "start") nodes.push(summaryNode(formatMoreItems(hidden, itemType)));
+	if (hidden > 0 && truncateFrom === "start") nodes.push(summaryNode(formatMoreItems(hidden, itemType, theme)));
 	for (let index = start; index < start + shown; index++) nodes.push(itemNode(index));
-	if (hidden > 0 && truncateFrom === "end") nodes.push(summaryNode(formatMoreItems(hidden, itemType)));
+	if (hidden > 0 && truncateFrom === "end") nodes.push(summaryNode(formatMoreItems(hidden, itemType, theme)));
 	return node("tree", { nodes });
 }
 
 /**
- * Emit pre-rendered item/summary roots through the shared keyed hierarchy.
- * Roots are siblings in display order, so the first N-1 rows draw `├` and the
- * final row draws `└` — matching the historical branch/continuation geometry.
- * Formatting adapters render unbounded, so truncation stays disabled here.
+ * Emit pre-rendered item/summary roots. Flush lists stack their rows as-is;
+ * otherwise roots are siblings in the shared keyed hierarchy, so the first
+ * N-1 rows draw `├` and the final row draws `└`. Formatting adapters render
+ * unbounded, so truncation stays disabled here.
  */
-function renderTreeListRows(roots: TreeListRow[], theme: Theme): string[] {
+function renderTreeListRows(roots: TreeListRow[], theme: Theme, flush: boolean | undefined): string[] {
+	if (flush) return roots.flatMap(row => (row.kind === "summary" ? [row.text] : row.lines));
 	const tree = new TreeView<TreeListRow, number>({
 		roots,
 		getKey: item => (item.kind === "summary" ? -1 : item.index),

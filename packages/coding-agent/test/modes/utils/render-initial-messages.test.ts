@@ -566,7 +566,7 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 		await new UiHelpers(ctx).renderInitialMessages({ clearTerminalHistory: true });
 
 		expect(countImageComponents(chatContainer)).toBe(2);
-		expect(Bun.stripANSI(chatContainer.render(100).join("\n"))).toContain("Read reopened.png");
+		expect(Bun.stripANSI(chatContainer.render(100).join("\n"))).toContain("Read: reopened.png");
 		expect(ctx.ui.requestRender).toHaveBeenCalledWith(true, { clearScrollback: true });
 	});
 });

@@ -3,8 +3,15 @@ import { Disclosure } from "../components/disclosure";
 import { visibleWidth } from "../utils";
 import type { AdvisorMessageDetails, AdvisorNote, AdvisorSeverity } from "./messages";
 import { chatTranscriptDisplayPreferences } from "./display-preferences";
-import { formatBadge, replaceTabs, type ToolUIColor, wrapTextWithAnsi } from "../render/render-utils";
-import { Ellipsis, truncateToWidth } from "../render";
+import {
+	formatBadge,
+	formatExpandHint,
+	formatMoreItems,
+	replaceTabs,
+	type ToolUIColor,
+	wrapTextWithAnsi,
+} from "../render/render-utils";
+import { truncateToWidth } from "../render";
 import type { Theme } from "../theme";
 import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import { card, node, span, text } from "../native/describe";
@@ -42,7 +49,7 @@ function severityColor(severity: AdvisorSeverity | undefined): ToolUIColor {
 	}
 }
 
-/** Always-visible header tag: `Advisor <n> notes [· <k> blockers]`. */
+/** Always-visible header row: `[i] Advisor <n> notes [· <k> blockers]`. */
 class AdvisorHeader implements Component {
 	readonly #meta: readonly string[];
 	readonly #uiTheme: Theme;
@@ -65,10 +72,9 @@ class AdvisorHeader implements Component {
 		width = Math.max(1, width);
 		if (this.#cache?.width === width) return this.#cache.lines;
 		const uiTheme = this.#uiTheme;
+		// The label keeps the custom-message color so the advisor reads as its own voice.
 		const tag = uiTheme.fg("customMessageLabel", uiTheme.bold(`${uiTheme.status.info} Advisor`));
-		const lines = [
-			truncateToWidth(`${tag} ${uiTheme.fg("dim", this.#meta.join(uiTheme.sep.dot))}`, width, Ellipsis.Unicode),
-		];
+		const lines = [truncateToWidth(`${tag} ${uiTheme.fg("dim", this.#meta.join(uiTheme.sep.dot))}`, width)];
 		this.#cache = { width, lines };
 		return lines;
 	}
@@ -103,10 +109,10 @@ class AdvisorNotes implements Component {
 		if (this.#hidden > 0) {
 			const uiTheme = this.#uiTheme;
 			const rail = uiTheme.fg("dim", uiTheme.symbol("advisor.rail"));
-			const hidden = this.#hidden;
-			lines.push(`  ${rail} ${uiTheme.fg("dim", `… +${hidden} more ${hidden === 1 ? "note" : "notes"}`)}`);
+			const more = uiTheme.fg("dim", formatMoreItems(this.#hidden, "note", uiTheme));
+			lines.push(`  ${rail} ${more} ${formatExpandHint(uiTheme)}`);
 		}
-		const rendered = lines.map(line => truncateToWidth(line, width, Ellipsis.Unicode));
+		const rendered = lines.map(line => truncateToWidth(line, width));
 		this.#cache = { width, lines: rendered };
 		return rendered;
 	}
@@ -274,7 +280,7 @@ export function createAdvisorMessageCard(
 		collapsedBody: () => new AdvisorNotes(shown, notes.length - shown.length, uiTheme),
 		body: () => new AdvisorNotes(notes, 0, uiTheme),
 		expanded: getExpanded(),
-		paddingX: 1,
+		paddingX: 0,
 		maxCollapsedRows: chatTranscriptDisplayPreferences.advisorCollapsedLines || undefined,
 	});
 	// The tool-output toggle owns expansion state; synchronize the controlled

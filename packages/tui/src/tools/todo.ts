@@ -1,17 +1,16 @@
 import type { ToolRenderer } from "./renderer";
 
 import type { Component } from "../index";
-import { Text } from "../index";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import type { RenderResultOptions } from "./renderer";
-import type { Theme } from "../theme/theme";
+import { type Theme, theme } from "../theme/theme";
 
-import { renderStatusLine, renderTreeList } from "../render";
-import { wrapTreeLine } from "../render/hanging-wrap";
-import { framedToolCard } from "../render/tool-card";
+import { renderTreeList } from "../render";
+import type { StatusLineOptions } from "../render/status-line";
+import { plainToolCard } from "../render/tool-card";
 
-import { formatErrorDetail, formatMoreItems, PREVIEW_LIMITS, pluralize, replaceTabs } from "../render/render-utils";
+import { formatErrorText, formatMoreItems, PREVIEW_LIMITS, pluralize, replaceTabs } from "../render/render-utils";
 import type { TspChecklistItem, TspChecklistPhase } from "@oh-my-pi/pi-wire";
 import { node } from "../native/describe";
 import { OwnerMemo } from "../native/memo";
@@ -181,7 +180,7 @@ function selectWithinCap<T extends { status: TodoStatus }>(
 		const hiddenActive = active.length - cap;
 		return {
 			items: active.slice(0, cap),
-			summary: `… ${hiddenActive} more active ${pluralize("todo", hiddenActive)}`,
+			summary: `${theme.format.ellipsis} ${hiddenActive} more active ${pluralize("todo", hiddenActive)}`,
 		};
 	}
 
@@ -196,7 +195,7 @@ function selectWithinCap<T extends { status: TodoStatus }>(
 	}
 	const items = [...active, ...fill];
 	const hidden = base.length - items.length;
-	return { items, summary: hidden > 0 ? formatMoreItems(hidden, "todo") : "" };
+	return { items, summary: hidden > 0 ? formatMoreItems(hidden, "todo", theme) : "" };
 }
 
 /**
@@ -440,13 +439,30 @@ function computeTouchedPhases(
  */
 function formatPhaseProgress(phase: TodoPhase, uiTheme: Theme): string {
 	const done = phase.tasks.filter(isClosedTodo).length;
-	return uiTheme.fg("dim", `  ${done}/${phase.tasks.length}`);
+	return uiTheme.fg("dim", ` ${done}/${phase.tasks.length}`);
 }
 
 /** One-line summary for a collapsed (untouched) phase: dim header + progress. */
 function formatPhaseSummary(phase: TodoPhase, oneBasedIndex: number, uiTheme: Theme): string {
 	const name = uiTheme.fg("dim", chalk.bold(formatPhaseDisplayName(phase.name, oneBasedIndex)));
 	return `${name}${formatPhaseProgress(phase, uiTheme)}`;
+}
+
+/** Header subject: the ops that ran (`done Scaffold crate`), the same in the call and the result. */
+function todoSubject(args: TodoRenderArgs | undefined, fallbackOp: string | undefined): string | undefined {
+	const ops = normalizeTodoArg(args).map(e => {
+		const parts = [forDisplay(e.op ?? "update")];
+		if (e.task) parts.push(forDisplay(e.task));
+		if (e.phase) parts.push(forDisplay(e.phase));
+		return parts.join(" ");
+	});
+	return ops.length > 0 ? ops.join(", ") : fallbackOp;
+}
+
+/** Items an `append` call adds, as header meta. */
+function todoCallMeta(args: TodoRenderArgs | undefined): string[] | undefined {
+	const count = normalizeTodoArg(args).reduce((sum, e) => sum + (Array.isArray(e.items) ? e.items.length : 0), 0);
+	return count > 0 ? [`${count} ${pluralize("item", count)}`] : undefined;
 }
 
 /**
@@ -501,17 +517,19 @@ export function todoChecklistPhases(
 const todoResultMemo = new OwnerMemo<NativeToolView | undefined>();
 
 /**
- * Native todo result: head `Todo closed/total`, body one `checklist` node.
+ * Native todo result: head `Todo: <op> closed/total`, body one `checklist` node.
  * Renderers get no describe context, so the checklist is always emitted;
  * terminals that do not list the kind draw its unknown-kind fallback (§3).
  */
 function describeTodoResult(
 	result: ToolRenderResult<TodoToolDetails>,
 	options: RenderResultOptions,
+	args: TodoRenderArgs | undefined,
 ): NativeToolView | undefined {
+	const target = todoSubject(args, result.details?.op);
 	if (result.isError) {
 		return {
-			tool: { title: "Todo" },
+			tool: { title: "Todo", target, targetKind: "text" },
 			tone: "error",
 			body: [errorText(resultText(result) || "Todo operation failed")],
 		};
@@ -519,14 +537,19 @@ function describeTodoResult(
 	const phases = (result.details?.phases ?? []).filter(phase => phase.tasks.length > 0);
 	const total = phases.reduce((sum, phase) => sum + phase.tasks.length, 0);
 	if (total === 0) {
-		return { tool: { title: "Todo" }, body: [noteText(forDisplay(resultText(result) || "No todos"))] };
+		const text = resultText(result);
+		return {
+			tool: { title: "Todo", target, targetKind: "text", meta: ["0 tasks"] },
+			tone: "warning",
+			body: text ? [noteText(forDisplay(text))] : undefined,
+		};
 	}
 	const closed = phases.reduce((sum, phase) => sum + phase.tasks.filter(isClosedTodo).length, 0);
 	const activeDescs = options.expanded ? [] : activeTodoDescriptionsProvider();
 	const isMatched = (task: TodoItem): boolean =>
 		activeDescs.length > 0 && todoMatchesAnyDescription(task.content, activeDescs);
 	return {
-		tool: { title: "Todo", target: `${closed}/${total}`, targetKind: "text" },
+		tool: { title: "Todo", target, targetKind: "text", meta: [`${closed}/${total}`] },
 		body: [node("checklist", { mode: "full", phases: todoChecklistPhases(phases, isMatched) }, [], "checklist")],
 		preview: "none",
 		open: true,
@@ -542,28 +565,14 @@ export const todoToolRenderer = {
 		// `{ ops: "[" }` shape before fields stream. `normalizeTodoArg` guards
 		// both the new single-op and legacy batch shapes so a malformed delta
 		// never breaks the TUI render loop (#2005).
-		const opsList = normalizeTodoArg(args);
-		// Model-authored, partially-streamed strings going straight into a header:
-		// `renderStatusLine` only flattens CR/LF and leaves the rest to the caller.
-		const ops =
-			opsList.length === 0
-				? ["update"]
-				: opsList.map(e => {
-						const parts = [forDisplay(e.op ?? "update")];
-						if (e.task) parts.push(forDisplay(e.task));
-						if (e.phase) parts.push(forDisplay(e.phase));
-						if (Array.isArray(e.items) && e.items.length) {
-							parts.push(`${e.items.length} item${e.items.length === 1 ? "" : "s"}`);
-						}
-						return parts.join(" ");
-					});
-		// No body worth boxing while the call streams — a lone status line reads
-		// cleaner than an empty frame. The container renders it without chrome.
-		const header = renderStatusLine(
-			{ icon: "pending", spinnerFrame: options?.spinnerFrame, title: "Todo", meta: ops },
-			uiTheme,
-		);
-		return new Text(header, 0, 0);
+		const status: StatusLineOptions = {
+			icon: options.executionStarted ? "running" : "pending",
+			spinnerFrame: options.spinnerFrame,
+			title: "Todo",
+			description: todoSubject(args, "update"),
+			meta: todoCallMeta(args),
+		};
+		return plainToolCard(uiTheme, () => ({ status, phase: "pending" }));
 	},
 
 	renderResult(
@@ -572,14 +581,13 @@ export const todoToolRenderer = {
 		uiTheme: Theme,
 		args?: TodoRenderArgs,
 	): Component {
+		const description = todoSubject(args, result.details?.op);
 		if (result.isError) {
 			const errorText = result.content?.find(content => content.type === "text")?.text ?? "Todo operation failed";
-			const header = renderStatusLine({ icon: "error", title: "Todo" }, uiTheme);
-			return framedToolCard(uiTheme, () => ({
-				header,
-				sections: [{ content: formatErrorDetail(errorText, uiTheme).split("\n") }],
+			return plainToolCard(uiTheme, () => ({
+				status: { icon: "error", title: "Todo", description },
 				phase: "error",
-				borderColor: "error",
+				body: [formatErrorText(errorText, uiTheme)],
 			}));
 		}
 
@@ -595,20 +603,16 @@ export const todoToolRenderer = {
 			keys.add(task.content);
 		}
 		const allTasks = phases.flatMap(phase => phase.tasks);
-		const header = renderStatusLine(
-			{
-				iconOverride: uiTheme.styledSymbol("tool.todo", "accent"),
-				title: "Todo",
-				meta: [`${allTasks.length} tasks`],
-			},
-			uiTheme,
-		);
+		const meta = [`${allTasks.length} ${pluralize("task", allTasks.length)}`];
 		if (allTasks.length === 0) {
 			// Provider text on the Cursor path (the todo summary or a refusal note),
-			// so sanitize like every other label. The error branch above already
-			// goes through `formatErrorDetail`.
-			const fallback = forDisplay(result.content?.find(content => content.type === "text")?.text ?? "No todos");
-			return new Text(`${header}\n  ${uiTheme.fg("dim", fallback)}`, 0, 0);
+			// so sanitize like every other label.
+			const text = result.content?.find(content => content.type === "text")?.text;
+			return plainToolCard(uiTheme, () => ({
+				status: { icon: "warning", title: "Todo", description, meta },
+				phase: "warning",
+				body: text ? [uiTheme.fg("dim", forDisplay(text))] : undefined,
+			}));
 		}
 
 		// Everything below is fixed for this result; only the spinner frame and
@@ -645,10 +649,9 @@ export const todoToolRenderer = {
 			matchByContent.clear();
 		};
 
-		return framedToolCard(uiTheme, ({ contentWidth }) => {
+		return plainToolCard(uiTheme, () => {
 			const { expanded, spinnerFrame } = options;
 			const multiPhase = phases.length > 1;
-			const indent = multiPhase ? "  " : "";
 			// Collapse phases this update didn't touch down to a one-line summary so
 			// a single task flip doesn't redraw every phase's full task list. The
 			// manual expand toggle (and the no-signal fallback) still shows all.
@@ -681,14 +684,12 @@ export const todoToolRenderer = {
 					bodyLines.push(formatPhaseSummary(phase, p + 1, uiTheme));
 					continue;
 				}
-				if (multiPhase) {
-					// Progress belongs on the expanded header too: the collapsed
-					// viewport below hides closed rows, so without it the phase the
-					// agent is actually working in is the one phase with no visible
-					// completion signal at all.
-					const name = uiTheme.fg("accent", chalk.bold(formatPhaseDisplayName(phase.name, p + 1)));
-					bodyLines.push(`${name}${formatPhaseProgress(phase, uiTheme)}`);
-				}
+				// Phases are flush rows; their tasks nest beneath them. Progress
+				// belongs on the expanded row too: the collapsed viewport below hides
+				// closed rows, so without it the phase the agent is actually working
+				// in is the one phase with no visible completion signal at all.
+				const name = uiTheme.fg("accent", chalk.bold(formatPhaseDisplayName(phase.name, p + 1)));
+				bodyLines.push(`${name}${formatPhaseProgress(phase, uiTheme)}`);
 				const completionKeys = completionKeysByPhase.get(phase.name) ?? EMPTY_COMPLETION_KEYS;
 				// Collapsed: walking viewport — the last closed task leads, then
 				// active work (in-progress / subagent-matched), then following
@@ -725,34 +726,27 @@ export const todoToolRenderer = {
 								uiTheme,
 							);
 						})();
-				for (const line of treeLines) {
-					bodyLines.push(...(wrapTreeLine(`${indent}${line}`, contentWidth, uiTheme) ?? [`${indent}${line}`]));
-				}
+				bodyLines.push(...treeLines);
 			}
-			while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
 			return {
-				header,
-				sections: bodyLines.length > 0 ? [{ content: bodyLines }] : [],
-				phase: options.isPartial ? "partial" : "success",
-				borderColor: "borderMuted",
-				applyBg: false,
+				status: { icon: "success", title: "Todo", description, meta },
+				phase: "success",
+				body: bodyLines,
 			};
 		});
 	},
 	describeCall(args: TodoRenderArgs): NativeToolView {
-		const ops = normalizeTodoArg(args).map(e => {
-			const parts = [forDisplay(e.op ?? "update")];
-			if (e.task) parts.push(forDisplay(e.task));
-			if (e.phase) parts.push(forDisplay(e.phase));
-			if (Array.isArray(e.items) && e.items.length)
-				parts.push(`${e.items.length} ${pluralize("item", e.items.length)}`);
-			return parts.join(" ");
-		});
-		return { tool: { title: "Todo", target: ops.length === 0 ? "update" : ops.join(", "), targetKind: "text" } };
+		return { tool: { title: "Todo", target: todoSubject(args, "update"), targetKind: "text" } };
 	},
 
-	describeResult(result: ToolRenderResult<TodoToolDetails>, options: RenderResultOptions): NativeToolView | undefined {
-		return todoResultMemo.get(result, [options.expanded], () => describeTodoResult(result, options));
+	describeResult(
+		result: ToolRenderResult<TodoToolDetails>,
+		options: RenderResultOptions,
+		args?: TodoRenderArgs,
+	): NativeToolView | undefined {
+		return todoResultMemo.get(result, [options.expanded, todoSubject(args, undefined)], () =>
+			describeTodoResult(result, options, args),
+		);
 	},
 
 	mergeCallAndResult: true,

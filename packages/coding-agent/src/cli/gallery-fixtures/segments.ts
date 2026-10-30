@@ -291,7 +291,7 @@ function renderIsolatedSegment(id: StatusLineSegmentId, spec: SegmentVariantSpec
 export function getSegmentGalleryEntries(): readonly GalleryPreviewEntry[] {
 	return ALL_SEGMENT_IDS.map(id => ({
 		id,
-		heading: `segment · ${id}`,
+		heading: `segment${theme.sep.dot}${id}`,
 		variants: variantsFor(id).map(spec => ({
 			label: spec.label,
 			render: width => renderIsolatedSegment(id, spec, width),

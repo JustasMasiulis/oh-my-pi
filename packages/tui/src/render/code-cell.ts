@@ -1,18 +1,20 @@
 /**
- * Render a code or markdown cell with optional output section.
+ * Render a code or markdown cell with optional output section. The header is
+ * the owning tool's status line; facts and the trailing truncation marker
+ * ride the bottom border.
  */
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { Markdown } from "../components/markdown";
-import { styledSpans } from "../native/spans";
 import { code, md, span } from "../native/describe";
 import type { NativeNode } from "../native/node";
 import { getMarkdownTheme, highlightCode, type Theme } from "../theme/theme";
-import { formatDuration, formatExpandHint, formatMoreItems, formatStatusIcon, replaceTabs } from "./render-utils";
+import { formatExpandHint, formatMoreItems, replaceTabs } from "./render-utils";
 import { wrapPrefixedLine } from "./hanging-wrap";
 import {
 	describeOutputBlock,
 	type NativeOutputBlockSection,
 	outputBlockContentWidth,
+	outputBlockHeaderWidth,
 	renderOutputBlock,
 } from "./output-block";
 import {
@@ -21,20 +23,25 @@ import {
 	splitTerminalOutputLines,
 	styleToolOutputLine,
 } from "./output-pane";
+import { renderFittedStatusLine, type StatusLineOptions, statusLineSpans } from "./status-line";
 import type { State } from "./types";
 
-/** Content and display limits for a code preview with optional output. */
-export interface CodeCellOptions {
-	code: string;
-	language?: string;
-	index?: number;
-	total?: number;
-	title?: string;
-	status?: "pending" | "running" | "warning" | "complete" | "error";
-	spinnerFrame?: number;
-	duration?: number;
+/** Header, facts, and display limits shared by code and markdown cells. */
+interface CellOptions {
+	/** The owning tool's header row. Framed headers never animate: a running status draws the static glyph. */
+	header: StatusLineOptions;
+	/** Styled facts for the bottom border (language, duration, counts); the cell adds only its truncation marker. */
+	footerMeta?: string;
 	output?: string;
 	outputMaxLines?: number;
+	expanded?: boolean;
+	width: number;
+}
+
+/** Content and display limits for a code preview with optional output. */
+export interface CodeCellOptions extends CellOptions {
+	code: string;
+	language?: string;
 	codeMaxLines?: number;
 	/**
 	 * Show the LAST `codeMaxLines` rows (the live streaming edge) instead of the
@@ -42,106 +49,113 @@ export interface CodeCellOptions {
 	 * follow code as it is written while staying bounded. Ignored when `expanded`.
 	 */
 	codeTail?: boolean;
-	expanded?: boolean;
-	/**
-	 * Prefix the header with the cell's language icon (resolved through the
-	 * active symbol preset: nerd-font devicon, unicode emoji, or ascii
-	 * shorthand). Opt-in so only the eval kernel renderer labels each cell;
-	 * read/write/browser code cells stay icon-free.
-	 */
-	showLanguage?: boolean;
-	width: number;
 	codeStartLine?: number;
 	codeLineNumbers?: Array<number | null>;
 }
 
-function getState(status?: CodeCellOptions["status"]): State | undefined {
-	if (!status) return undefined;
-	if (status === "complete") return "success";
-	if (status === "error") return "error";
-	if (status === "warning") return "warning";
-	if (status === "running") return "running";
-	return "pending";
+/** Content and display limits for a Markdown preview with optional output. */
+export interface MarkdownCellOptions extends CellOptions {
+	content: string;
+	contentMaxLines?: number;
 }
 
-function formatHeader(options: CodeCellOptions, theme: Theme): { title: string; meta?: string } {
-	const { index, total, title, status, spinnerFrame, duration, language, showLanguage } = options;
-	const parts: string[] = [];
-	if (showLanguage && language) {
-		const langIcon = theme.getLangIconStyled(language);
-		if (langIcon) parts.push(langIcon);
+function getState(header: StatusLineOptions): State | undefined {
+	switch (header.icon) {
+		case "success":
+			return "success";
+		case "error":
+		case "aborted":
+			return "error";
+		case "warning":
+			return "warning";
+		case "running":
+			return "running";
+		case "pending":
+			return "pending";
+		default:
+			return undefined;
 	}
-	if (status) {
-		const icon = formatStatusIcon(
-			status === "complete"
-				? "done"
-				: status === "error"
-					? "error"
-					: status === "warning"
-						? "warning"
-						: status === "running"
-							? "running"
-							: "pending",
-			theme,
-			spinnerFrame,
-		);
-		if (status === "pending" || status === "running") {
-			parts.push(`${icon} ${theme.fg("muted", status)}`);
-		} else {
-			parts.push(icon);
-		}
-	}
-	if (index !== undefined && total !== undefined && total > 1) {
-		parts.push(theme.fg("accent", `[${index + 1}/${total}]`));
-	}
-	if (title) {
-		parts.push(theme.fg("toolTitle", title));
-	}
-	const headerTitle = parts.length > 0 ? parts.join(" ") : theme.fg("toolTitle", "Code");
-
-	const metaParts: string[] = [];
-	if (duration !== undefined) {
-		metaParts.push(theme.fg("dim", `(${formatDuration(duration)})`));
-	}
-	if (metaParts.length === 0) return { title: headerTitle };
-	return { title: headerTitle, meta: metaParts.join(theme.fg("dim", theme.sep.dot)) };
 }
 
+/** The caller's styled facts, then the last section's dim truncation marker, for the bottom border. */
+function joinFooter(theme: Theme, footerMeta: string | undefined, marker: string | undefined): string | undefined {
+	if (!marker) return footerMeta;
+	const dimMarker = theme.fg("dim", marker);
+	return footerMeta ? `${footerMeta}${theme.fg("dim", theme.sep.dot)}${dimMarker}` : dimMarker;
+}
+
+function hiddenMarker(hidden: number, expanded: boolean, theme: Theme): string {
+	const hint = formatExpandHint(theme, expanded, hidden > 0);
+	return `${formatMoreItems(hidden, "line", theme)}${hint ? ` ${hint}` : ""}`;
+}
+
+/** Output rows plus the count hidden below them; the caller places the marker. */
 function renderCellOutput(
 	output: string | undefined,
 	expanded: boolean,
 	outputMaxLines: number,
 	theme: Theme,
-): readonly string[] {
-	if (!output?.trim()) return [];
-	return formatOutputPaneLines(
+): { lines: readonly string[]; hidden: number } {
+	if (!output?.trim()) return { lines: [], hidden: 0 };
+	const result = formatOutputPaneLines(
 		{
 			lines: splitTerminalOutputLines(output),
 			expanded,
 			collapsedMaxLines: outputMaxLines,
 			edge: "head",
 			styleLine: line => styleToolOutputLine(line, theme),
-			formatHidden: hidden => formatMoreItems(hidden, "line"),
+			showHiddenMarker: false,
 		},
 		theme,
-	).lines;
+	);
+	return { lines: result.lines, hidden: result.hiddenCount };
+}
+
+/**
+ * Assemble the frame: the content section, then the output section. The last
+ * section's truncation marker moves into the bottom border; an earlier
+ * section's marker stays in place as a dim row.
+ */
+function renderCellBlock(
+	options: CellOptions,
+	content: { lines: string[]; hidden: number; gutterPad: string },
+	theme: Theme,
+): string[] {
+	const { expanded = false, outputMaxLines = 6, width } = options;
+	const output = renderCellOutput(options.output, expanded, outputMaxLines, theme);
+	const hasOutput = output.lines.length > 0;
+
+	let footerMarker: string | undefined;
+	if (content.hidden > 0) {
+		const marker = hiddenMarker(content.hidden, expanded, theme);
+		if (hasOutput) content.lines.push(theme.fg("dim", content.gutterPad + marker));
+		else footerMarker = marker;
+	}
+	if (output.hidden > 0) footerMarker = hiddenMarker(output.hidden, expanded, theme);
+
+	const sections: Array<{ label?: string; lines: readonly string[] }> = [{ lines: content.lines }];
+	if (hasOutput) sections.push({ label: theme.fg("toolTitle", "Output"), lines: output.lines });
+
+	return renderOutputBlock(
+		{
+			// Framed headers never animate: a spinner would pin the scrollback commit boundary.
+			header: renderFittedStatusLine(
+				{ ...options.header, spinnerFrame: undefined },
+				theme,
+				outputBlockHeaderWidth(width, theme),
+			),
+			footerMeta: joinFooter(theme, options.footerMeta, footerMarker),
+			state: getState(options.header),
+			sections,
+			width,
+		},
+		theme,
+	);
 }
 
 /** Render a syntax-highlighted code preview and its optional output block. */
 export function renderCodeCell(options: CodeCellOptions, theme: Theme): string[] {
-	const {
-		code,
-		language,
-		output,
-		expanded = false,
-		outputMaxLines = 6,
-		codeMaxLines = 12,
-		width,
-		codeStartLine,
-		codeLineNumbers,
-	} = options;
-	const { title, meta } = formatHeader(options, theme);
-	const state = getState(options.status);
+	const { code, language, expanded = false, codeMaxLines = 12, width, codeStartLine, codeLineNumbers } = options;
 
 	const normalizedCode = replaceTabs(code ?? "");
 	const rawCodeLines = splitTerminalOutputLines(normalizedCode);
@@ -183,53 +197,34 @@ export function renderCodeCell(options: CodeCellOptions, theme: Theme): string[]
 		}
 	}
 
-	const displayCodeLines = lineNumberWidth > 0 ? numberedCodeLines : codeLines;
-	if (hiddenCodeLines > 0) {
-		const hint = formatExpandHint(theme, expanded, hiddenCodeLines > 0);
-		const gutterPad = lineNumberWidth > 0 ? " ".repeat(lineNumberWidth + 1) : "";
-		if (tail) {
-			// Earlier rows scrolled above the live tail window — mark them on top so
-			// the newest streamed line stays pinned to the bottom of the box.
-			const earlier = `… ${hiddenCodeLines} earlier line${hiddenCodeLines === 1 ? "" : "s"}${hint ? ` ${hint}` : ""}`;
-			displayCodeLines.unshift(theme.fg("dim", gutterPad + earlier));
-		} else {
-			const moreLine = `${formatMoreItems(hiddenCodeLines, "line")}${hint ? ` ${hint}` : ""}`;
-			displayCodeLines.push(theme.fg("dim", gutterPad + moreLine));
-		}
+	const displayCodeLines = lineNumberWidth > 0 ? numberedCodeLines : [...codeLines];
+	const gutterPad = lineNumberWidth > 0 ? " ".repeat(lineNumberWidth + 1) : "";
+	if (tail) {
+		// Earlier rows scrolled above the live tail window — mark them on top so
+		// the newest streamed line stays pinned to the bottom of the box.
+		const hint = formatExpandHint(theme, expanded, true);
+		const earlier = `${formatMoreItems(hiddenCodeLines, "line", theme, "earlier")}${hint ? ` ${hint}` : ""}`;
+		displayCodeLines.unshift(theme.fg("dim", gutterPad + earlier));
 	}
 
-	const outputLines = renderCellOutput(output, expanded, outputMaxLines, theme);
-
-	const sections: Array<{ label?: string; lines: readonly string[] }> = [{ lines: displayCodeLines }];
-	if (outputLines.length > 0) {
-		sections.push({ label: theme.fg("toolTitle", "Output"), lines: outputLines });
-	}
-
-	return renderOutputBlock({ header: title, headerMeta: meta, state, sections, width }, theme);
+	return renderCellBlock(options, { lines: displayCodeLines, hidden: tail ? 0 : hiddenCodeLines, gutterPad }, theme);
 }
 
-type CellHeaderOptions = Pick<CodeCellOptions, "index" | "total" | "title" | "duration" | "language" | "showLanguage">;
+/** Render a Markdown preview and its optional output block. */
+export function renderMarkdownCell(options: MarkdownCellOptions, theme: Theme): string[] {
+	const { content, expanded = false, contentMaxLines = 12, width } = options;
 
-/** Header spans for a native cell: language icon, `[i/n]`, title. Status is the card's chip. */
-function describeHeader(options: CellHeaderOptions, theme: Theme): { head: TspSpan[]; meta?: TspSpan[] } {
-	const head: TspSpan[] = [];
-	const push = (part: readonly TspSpan[]): void => {
-		if (head.length > 0) head.push(span(" "));
-		head.push(...part);
-	};
-	if (options.showLanguage && options.language) {
-		const icon = theme.getLangIconStyled(options.language);
-		if (icon) push(styledSpans(icon));
-	}
-	if (options.index !== undefined && options.total !== undefined && options.total > 1) {
-		push([span(`[${options.index + 1}/${options.total}]`, "accent")]);
-	}
-	if (options.title) push([span(options.title, "toolTitle")]);
-	if (head.length === 0) head.push(span("Code", "toolTitle"));
-	return {
-		head,
-		meta: options.duration === undefined ? undefined : [span(formatDuration(options.duration), "dim")],
-	};
+	// Markdown component manages its own wrapping at the same inner width as
+	// `renderOutputBlock`, so collapsed row caps are applied after final wrapping.
+	const innerWidth = Math.max(20, outputBlockContentWidth(width));
+	const allLines = content.trim() ? new Markdown(content, 0, 0, getMarkdownTheme()).render(innerWidth) : [];
+	const maxContentLines = expanded ? allLines.length : Math.min(allLines.length, contentMaxLines);
+
+	return renderCellBlock(
+		options,
+		{ lines: allLines.slice(0, maxContentLines), hidden: allLines.length - maxContentLines, gutterPad: "" },
+		theme,
+	);
 }
 
 function describeCellOutput(
@@ -245,6 +240,10 @@ function describeCellOutput(
 	};
 }
 
+function describeFooter(options: Omit<CellOptions, "width">): TspSpan[] | undefined {
+	return options.footerMeta ? [span(Bun.stripANSI(options.footerMeta), "dim")] : undefined;
+}
+
 /**
  * The native form of {@link renderCodeCell}: a collapsible `card` holding a
  * `code` node (numbered from `codeStartLine`, or the first explicit line
@@ -253,7 +252,6 @@ function describeCellOutput(
  */
 export function describeCodeCell(options: Omit<CodeCellOptions, "width">, theme: Theme): NativeNode {
 	const { expanded = false, outputMaxLines = 6, codeMaxLines = 12 } = options;
-	const { head, meta } = describeHeader(options, theme);
 	const start = options.codeStartLine ?? options.codeLineNumbers?.find((line): line is number => line != null);
 	const sections: NativeOutputBlockSection[] = [
 		{
@@ -271,9 +269,9 @@ export function describeCodeCell(options: Omit<CodeCellOptions, "width">, theme:
 	const output = describeCellOutput(options.output, expanded, outputMaxLines);
 	if (output) sections.push(output);
 	return describeOutputBlock({
-		head,
-		meta,
-		state: getState(options.status),
+		head: statusLineSpans(options.header, theme),
+		meta: describeFooter(options),
+		state: getState(options.header),
 		role: "omp.cell.code",
 		sections,
 		collapsible: true,
@@ -285,74 +283,18 @@ export function describeCodeCell(options: Omit<CodeCellOptions, "width">, theme:
 /** The native form of {@link renderMarkdownCell}: a collapsible `card` holding `md` source and optional output. */
 export function describeMarkdownCell(options: Omit<MarkdownCellOptions, "width">, theme: Theme): NativeNode {
 	const { expanded = false, outputMaxLines = 6, contentMaxLines = 12 } = options;
-	const { head, meta } = describeHeader(options, theme);
 	const sections: NativeOutputBlockSection[] = [];
 	if (options.content.trim()) sections.push({ key: "content", body: [md(options.content)] });
 	const output = describeCellOutput(options.output, expanded, outputMaxLines);
 	if (output) sections.push(output);
 	return describeOutputBlock({
-		head,
-		meta,
-		state: getState(options.status),
+		head: statusLineSpans(options.header, theme),
+		meta: describeFooter(options),
+		state: getState(options.header),
 		role: "omp.cell.markdown",
 		sections,
 		collapsible: true,
 		collapsed: !expanded,
 		preview: { lines: contentMaxLines },
 	});
-}
-
-/** Content and display limits for a Markdown preview with optional output. */
-export interface MarkdownCellOptions {
-	content: string;
-	index?: number;
-	total?: number;
-	title?: string;
-	status?: "pending" | "running" | "warning" | "complete" | "error";
-	spinnerFrame?: number;
-	duration?: number;
-	output?: string;
-	outputMaxLines?: number;
-	contentMaxLines?: number;
-	expanded?: boolean;
-	width: number;
-}
-
-/** Render a Markdown preview and its optional output block. */
-export function renderMarkdownCell(options: MarkdownCellOptions, theme: Theme): string[] {
-	const { content, output, expanded = false, outputMaxLines = 6, contentMaxLines = 12, width } = options;
-	const codeOptions: CodeCellOptions = {
-		code: "",
-		index: options.index,
-		total: options.total,
-		title: options.title,
-		status: options.status,
-		spinnerFrame: options.spinnerFrame,
-		duration: options.duration,
-		width,
-	};
-	const { title, meta } = formatHeader(codeOptions, theme);
-	const state = getState(options.status);
-
-	// Markdown component manages its own wrapping at the same inner width as
-	// `renderOutputBlock`, so collapsed row caps are applied after final wrapping.
-	const innerWidth = Math.max(20, outputBlockContentWidth(width));
-	const allLines = content.trim() ? new Markdown(content, 0, 0, getMarkdownTheme()).render(innerWidth) : [];
-	const maxContentLines = expanded ? allLines.length : Math.min(allLines.length, contentMaxLines);
-	const contentLines = allLines.slice(0, maxContentLines);
-	const hiddenContentLines = allLines.length - maxContentLines;
-	if (hiddenContentLines > 0) {
-		const hint = formatExpandHint(theme, expanded, hiddenContentLines > 0);
-		const moreLine = `${formatMoreItems(hiddenContentLines, "line")}${hint ? ` ${hint}` : ""}`;
-		contentLines.push(theme.fg("dim", moreLine));
-	}
-
-	const outputLines = renderCellOutput(output, expanded, outputMaxLines, theme);
-
-	const sections: Array<{ label?: string; lines: readonly string[] }> = [{ lines: contentLines }];
-	if (outputLines.length > 0) {
-		sections.push({ label: theme.fg("toolTitle", "Output"), lines: outputLines });
-	}
-
-	return renderOutputBlock({ header: title, headerMeta: meta, state, sections, width }, theme);
 }

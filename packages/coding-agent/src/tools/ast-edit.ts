@@ -29,6 +29,7 @@ import { formatGroupedFiles } from "@oh-my-pi/pi-tui/tools/grouped-file-output";
 
 import { relativeSearchResultPath, resolveSearchResultPath, resolveToolSearchScope } from "./path-utils";
 import {
+	CODE_FRAME_GUTTER,
 	capParseErrors,
 	formatCodeFrameLine,
 	formatCount,
@@ -381,8 +382,12 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 					const lineSeparator = hashContext ? ":" : " ";
 					modelOut.push(`-${beforeRef}${lineSeparator}${beforeLine}`);
 					modelOut.push(`+${afterRef}${lineSeparator}${afterLine}`);
-					displayOut.push(formatCodeFrameLine("-", change.startLine, beforeLine, lineNumberWidth));
-					displayOut.push(formatCodeFrameLine("+", change.startLine, afterLine, lineNumberWidth));
+					displayOut.push(
+						formatCodeFrameLine("-", change.startLine, beforeLine, lineNumberWidth, CODE_FRAME_GUTTER),
+					);
+					displayOut.push(
+						formatCodeFrameLine("+", change.startLine, afterLine, lineNumberWidth, CODE_FRAME_GUTTER),
+					);
 				}
 				return { model: modelOut, display: displayOut };
 			};

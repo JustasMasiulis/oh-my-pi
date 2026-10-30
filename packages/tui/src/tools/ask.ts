@@ -12,7 +12,6 @@ import {
 	type MarkdownTheme,
 	renderInlineMarkdown,
 	replaceTabs,
-	Text,
 	truncateToWidth,
 	visibleWidth,
 } from "../index";
@@ -21,11 +20,11 @@ import type { RenderResultOptions } from "./renderer";
 
 import { getMarkdownTheme, type Theme } from "../theme/theme";
 
-import { outputBlockContentWidth, renderStatusLine } from "../render";
-import { framedToolCard } from "../render/tool-card";
+import type { StatusLineOptions } from "../render/status-line";
+import { framedToolCard, plainToolCard } from "../render/tool-card";
 import { wrapPrefixedLine } from "../render/hanging-wrap";
 
-import { formatErrorMessage, formatMeta, formatTitle, sanitizeCarriageReturns } from "../render/render-utils";
+import { formatErrorText, pluralize, sanitizeCarriageReturns } from "../render/render-utils";
 
 /** Result for a single question */
 export interface QuestionResult {
@@ -173,28 +172,27 @@ function normalizeRenderQuestions(raw: unknown): NonNullable<AskRenderArgs["ques
 	return out;
 }
 
-/** Render a custom free-text answer as a status line plus indented continuation rows. */
+/** Render a custom free-text answer as a checked row plus hanging continuation rows. */
 function renderCustomInputLines(uiTheme: Theme, customInput: string): string[] {
 	const lines = customInput.split("\n");
 	const out: string[] = [
-		` ${uiTheme.styledSymbol("status.success", "success")} ${uiTheme.fg("toolOutput", lines[0] ?? "")}`,
+		`${uiTheme.styledSymbol("status.success", "muted")} ${uiTheme.fg("toolOutput", lines[0] ?? "")}`,
 	];
-	for (let i = 1; i < lines.length; i++) out.push(`   ${uiTheme.fg("toolOutput", lines[i])}`);
+	const indent = " ".repeat(visibleWidth(uiTheme.symbol("status.success")) + 1);
+	for (let i = 1; i < lines.length; i++) out.push(`${indent}${uiTheme.fg("toolOutput", lines[i])}`);
 	return out;
 }
 
 /** Render an answer note with tab replacement and line-width clamping. */
 function renderNoteLines(uiTheme: Theme, note: string, width: number): string[] {
-	const prefix = " Note: ";
-	const continuationPrefix = "       ";
-	const firstLineWidth = Math.max(1, width - visibleWidth(prefix));
-	const continuationWidth = Math.max(1, width - visibleWidth(continuationPrefix));
+	const prefix = "Note: ";
+	const continuationPrefix = " ".repeat(prefix.length);
+	const lineWidth = Math.max(1, width - prefix.length);
 	return replaceTabs(note)
 		.split("\n")
 		.map((line, index) => {
-			const linePrefix = index === 0 ? `${uiTheme.fg("dim", " Note:")} ` : continuationPrefix;
-			const maxWidth = index === 0 ? firstLineWidth : continuationWidth;
-			return `${linePrefix}${uiTheme.fg("toolOutput", truncateToWidth(line, maxWidth))}`;
+			const linePrefix = index === 0 ? `${uiTheme.fg("dim", "Note:")} ` : continuationPrefix;
+			return `${linePrefix}${uiTheme.fg("toolOutput", truncateToWidth(line, lineWidth))}`;
 		});
 }
 
@@ -208,7 +206,7 @@ export function optionMarker(uiTheme: Theme, multi: boolean | undefined, selecte
 }
 
 function wrapOptionLabel(marker: string, label: string, width: number): string[] {
-	const prefix = ` ${marker} `;
+	const prefix = `${marker} `;
 	return wrapPrefixedLine(prefix, " ".repeat(visibleWidth(prefix)), label, width);
 }
 
@@ -222,15 +220,61 @@ function renderQuestionOptionLines(
 ): string[] {
 	const out: string[] = [];
 	for (const opt of options) {
+		const marker = uiTheme.fg("dim", optionMarker(uiTheme, multi, false));
 		const optLabel = renderInlineMarkdown(opt.label, mdTheme, t => uiTheme.fg("muted", t));
-		out.push(...wrapOptionLabel(uiTheme.fg("dim", optionMarker(uiTheme, multi, false)), optLabel, width));
+		out.push(...wrapOptionLabel(marker, optLabel, width));
 		if (opt.description?.trim()) {
+			// The description hangs under its label, aligned with the label text.
+			const indent = " ".repeat(visibleWidth(marker) + 1);
 			const description = renderInlineMarkdown(opt.description.trim(), mdTheme, t => uiTheme.fg("dim", t));
-			const prefix = `   ${uiTheme.fg("dim", "↳")} `;
-			out.push(...wrapPrefixedLine(prefix, " ".repeat(visibleWidth(prefix)), description, width));
+			out.push(...wrapPrefixedLine(indent, indent, description, width));
 		}
 	}
 	return out;
+}
+
+/** Flags of a question form: `multi` and its option count. */
+function questionFlags(multi: boolean | undefined, optionCount: number): string[] {
+	const flags: string[] = [];
+	if (multi) flags.push("multi");
+	if (optionCount > 0) flags.push(`${optionCount} ${pluralize("option", optionCount)}`);
+	return flags;
+}
+
+/** Dim `multi · 3 options` flags, or undefined when there are none. */
+function formatFlags(uiTheme: Theme, flags: readonly string[]): string | undefined {
+	return flags.length > 0 ? uiTheme.fg("dim", flags.join(uiTheme.sep.dot)) : undefined;
+}
+
+/** Dim `(id · multi · 3 options)`: trails the question of each section in a multi-question card. */
+function questionTag(uiTheme: Theme, id: string, flags: readonly string[]): string {
+	return uiTheme.fg("dim", `(${[id, ...flags].join(uiTheme.sep.dot)})`);
+}
+
+/**
+ * A question's prompt as markdown, flush with the frame padding. A `tag` trails
+ * the last line, or takes a line of its own when it does not fit there.
+ */
+function renderQuestionMarkdown(uiTheme: Theme, question: string, width: number, tag?: string): readonly string[] {
+	const accentStyle = { color: (t: string) => uiTheme.fg("accent", t) };
+	const lines = new Markdown(question, 0, 0, getMarkdownTheme(), accentStyle).render(Math.max(1, width));
+	if (!tag) return lines;
+
+	// Markdown pads each row to the full width; the tag follows the text, not the padding.
+	const last = lines.at(-1)?.trimEnd();
+	if (last === undefined || visibleWidth(last) + 1 + visibleWidth(tag) > width) return [...lines, tag];
+	return [...lines.slice(0, -1), last ? `${last} ${tag}` : tag];
+}
+
+/** Distinguishes an auto-selected answer from a real user choice in the transcript. */
+function timedOutNotice(uiTheme: Theme): string {
+	return uiTheme.fg("dim", `auto-selected after timeout ${uiTheme.format.dash} not a user choice`);
+}
+
+/** Header subject: the lone question's id, or the question count. */
+function askSubject(ids: readonly string[]): string | undefined {
+	if (ids.length === 0) return undefined;
+	return ids.length === 1 ? ids[0] : `${ids.length} questions`;
 }
 
 /**
@@ -271,7 +315,6 @@ function renderAnswerOptionLines(
 	multi: boolean | undefined,
 	customInput: string | undefined,
 	note: string | undefined,
-	width: number,
 	contentWidth: number,
 	selectedIndices?: ReadonlySet<number>,
 ): string[] {
@@ -282,7 +325,7 @@ function renderAnswerOptionLines(
 
 	// Nothing was chosen (and no custom answer) → a lone cancelled marker.
 	if (selected.size === 0 && customInput === undefined && note === undefined) {
-		return [` ${uiTheme.styledSymbol("status.warning", "warning")} ${uiTheme.fg("warning", "Cancelled")}`];
+		return [`${uiTheme.styledSymbol("status.warning", "warning")} ${uiTheme.fg("warning", "Cancelled")}`];
 	}
 
 	const out: string[] = [];
@@ -296,12 +339,13 @@ function renderAnswerOptionLines(
 		out.push(...wrapOptionLabel(markerStyled, labelStyled, contentWidth));
 	}
 	if (customInput !== undefined) out.push(...renderCustomInputLines(uiTheme, customInput));
-	if (note !== undefined) out.push(...renderNoteLines(uiTheme, note, width));
+	if (note !== undefined) out.push(...renderNoteLines(uiTheme, note, contentWidth));
 	return out;
 }
 
-function askHead(question: string | undefined, meta?: string): NativeToolHead {
-	const first = question ? plainText(sanitizeCarriageReturns(question)).trim().split("\n")[0] : "";
+/** Native head: the same `Ask: <subject>` as the terminal header; a legacy id-less question names itself. */
+function askHead(target: string | undefined, meta?: string): NativeToolHead {
+	const first = target ? plainText(sanitizeCarriageReturns(target)).trim().split("\n")[0] : "";
 	return { title: "Ask", target: first || undefined, targetKind: "text", meta: meta ? [meta] : undefined };
 }
 
@@ -352,10 +396,9 @@ function describeAnswers(
 /** Pending ask: an inline head naming the question; the ask dialog owns the form. */
 function describeAskCall(args: AskRenderArgs): NativeToolView {
 	const questions = normalizeRenderQuestions(args.questions);
-	const first = questions?.[0]?.question ?? (typeof args.question === "string" ? args.question : undefined);
-	const more = questions && questions.length > 1 ? `${questions.length} questions` : undefined;
+	const legacyQuestion = typeof args.question === "string" ? args.question : undefined;
 	return {
-		tool: askHead(first, more),
+		tool: askHead(askSubject(questions?.map(q => q.id) ?? []) ?? legacyQuestion),
 		inline: true,
 		body: [text([span("Waiting for your answer…", "muted")])],
 	};
@@ -364,17 +407,24 @@ function describeAskCall(args: AskRenderArgs): NativeToolView {
 function describeAskResult(result: ToolRenderResult<AskToolDetails>, args: AskRenderArgs | undefined): NativeToolView {
 	const rawDetails = result.details;
 	const fallback = plainText(sanitizeCarriageReturns(resultText(result)));
-	const argQuestion =
-		normalizeRenderQuestions(args?.questions)?.[0]?.question ??
+	const argSubject =
+		askSubject(normalizeRenderQuestions(args?.questions)?.map(q => q.id) ?? []) ??
 		(typeof args?.question === "string" ? args.question : undefined);
+	if (result.isError) {
+		return {
+			tool: askHead(argSubject),
+			tone: /\bcancel/i.test(fallback) ? "warning" : "error",
+			body: fallback ? [noteText(fallback)] : undefined,
+		};
+	}
 	if (!rawDetails) {
-		return { tool: askHead(argQuestion), tone: "warning", body: fallback ? [noteText(fallback)] : undefined };
+		return { tool: askHead(argSubject), tone: "warning", body: fallback ? [noteText(fallback)] : undefined };
 	}
 	const details = sanitizeAskResultDetails(rawDetails);
 
 	if (details.chatRedirect) {
 		return {
-			tool: askHead(details.questions?.[0] ?? argQuestion, "chat redirect"),
+			tool: askHead(argSubject ?? details.questions?.[0], "chat redirect"),
 			tone: "info",
 			body: (details.questions ?? []).map(q => md(plainText(q))),
 		};
@@ -388,7 +438,7 @@ function describeAskResult(result: ToolRenderResult<AskToolDetails>, args: AskRe
 				r.customInput !== undefined || r.note !== undefined || (r.selectedOptions && r.selectedOptions.length > 0),
 		);
 		return {
-			tool: askHead(results[0]?.question, results.length > 1 ? `${results.length} questions` : undefined),
+			tool: askHead(askSubject(results.map(r => r.id))),
 			tone: answered ? undefined : "warning",
 			// Sanitizing preserves order and length, so raw indices align with `r`.
 			body: results.map((r, index) =>
@@ -408,7 +458,7 @@ function describeAskResult(result: ToolRenderResult<AskToolDetails>, args: AskRe
 	}
 
 	if (!details.question) {
-		return { tool: askHead(argQuestion), body: fallback ? [text(fallback, { wrap: "word" })] : undefined };
+		return { tool: askHead(argSubject), body: fallback ? [text(fallback, { wrap: "word" })] : undefined };
 	}
 
 	const answered =
@@ -453,126 +503,140 @@ export const askToolRenderer = {
 		return askResultMemo.get(result, [], () => describeAskResult(result, args));
 	},
 	mergeCallAndResult: true,
-	renderCall(args: AskRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
-		const label = formatTitle("Ask", uiTheme);
+	renderCall(args: AskRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 		const mdTheme = getMarkdownTheme();
-		const accentStyle = { color: (t: string) => uiTheme.fg("accent", t) };
-		const md = (text: string, width: number) =>
-			new Markdown(text, 1, 0, mdTheme, accentStyle).render(Math.max(1, outputBlockContentWidth(width) + 1));
+		const icon = options.executionStarted ? "running" : "pending";
 
-		// Multi-part questions: one divider-labelled section per question.
 		// Call args are untrusted (partially streamed or model-mangled) and a
 		// throw here takes down the whole TUI render loop — normalize first.
 		const questions = normalizeRenderQuestions(args.questions);
 		if (questions && questions.length > 0) {
-			const header = `${label} ${uiTheme.fg("muted", `${questions.length} questions`)}`;
-			return framedToolCard(uiTheme, ({ width, contentWidth }) => {
-				const sections = questions.map(q => {
-					const meta: string[] = [];
-					if (q.multi) meta.push("multi");
-					if (q.options?.length) meta.push(`options:${q.options.length}`);
-					const metaStr = meta.length > 0 ? uiTheme.fg("dim", ` · ${meta.join(" · ")}`) : "";
-					// md() returns a shared cached array (module-level Markdown LRU) — copy before appending.
-					const mdLines = md(q.question, width);
-					const lines = q.options?.length
-						? [...mdLines, ...renderQuestionOptionLines(uiTheme, mdTheme, q.options, q.multi, contentWidth)]
-						: mdLines;
-					return { label: `${uiTheme.fg("dim", `[${q.id}]`)}${metaStr}`, content: lines };
-				});
-				return { header, sections, phase: "pending", borderColor: "borderMuted" };
-			});
+			const status: StatusLineOptions = {
+				icon,
+				title: "Ask",
+				description: askSubject(questions.map(q => q.id)),
+			};
+			// One question: its id is the header subject and its flags the footer.
+			// Several: each question is tagged with its id and flags, divided by separators.
+			const lone = questions.length === 1 ? questions[0] : undefined;
+			const footerMeta = lone ? formatFlags(uiTheme, questionFlags(lone.multi, lone.options.length)) : undefined;
+			return framedToolCard(uiTheme, ({ contentWidth }) => ({
+				status,
+				phase: "pending",
+				footerMeta,
+				sections: questions.map((q, index) => {
+					const tag = lone ? undefined : questionTag(uiTheme, q.id, questionFlags(q.multi, q.options.length));
+					const content = [
+						...renderQuestionMarkdown(uiTheme, q.question, contentWidth, tag),
+						...renderQuestionOptionLines(uiTheme, mdTheme, q.options, q.multi, contentWidth),
+					];
+					return { content, separator: index > 0 };
+				}),
+			}));
 		}
 
-		// Single question
+		// Legacy single question: no id, so the header carries no subject.
 		if (typeof args.question !== "string" || !args.question) {
-			const errorLine = formatErrorMessage("No question provided", uiTheme);
-			return framedToolCard(uiTheme, () => ({
-				header: errorLine,
-				sections: [],
-				phase: "error",
-				borderColor: "error",
+			const streaming = options.argsComplete === false;
+			return plainToolCard(uiTheme, () => ({
+				status: { icon: streaming ? icon : "error", title: "Ask" },
+				phase: streaming ? "pending" : "error",
+				body: streaming ? undefined : [formatErrorText("No question provided", uiTheme)],
 			}));
 		}
 
 		const question = sanitizeCarriageReturns(args.question);
-		const meta: string[] = [];
-		if (args.multi) meta.push("multi");
-		const questionOptions = normalizeRenderOptions(args.options);
-		if (questionOptions?.length) meta.push(`options:${questionOptions.length}`);
-		const header = `${label}${formatMeta(meta, uiTheme)}`;
+		const questionOptions = normalizeRenderOptions(args.options) ?? [];
 		const multi = args.multi;
-		return framedToolCard(uiTheme, ({ width, contentWidth }) => {
-			// md() returns a shared cached array (module-level Markdown LRU) — copy before appending.
-			const mdLines = md(question, width);
-			const bodyLines = questionOptions?.length
-				? [...mdLines, ...renderQuestionOptionLines(uiTheme, mdTheme, questionOptions, multi, contentWidth)]
-				: mdLines;
-			return {
-				header,
-				sections: bodyLines.length > 0 ? [{ content: bodyLines }] : [],
-				phase: "pending",
-				borderColor: "borderMuted",
-			};
-		});
+		const footerMeta = formatFlags(uiTheme, questionFlags(multi, questionOptions.length));
+		return framedToolCard(uiTheme, ({ contentWidth }) => ({
+			status: { icon, title: "Ask" },
+			phase: "pending",
+			footerMeta,
+			body: [
+				...renderQuestionMarkdown(uiTheme, question, contentWidth),
+				...renderQuestionOptionLines(uiTheme, mdTheme, questionOptions, multi, contentWidth),
+			],
+		}));
 	},
 
 	renderResult(
-		result: { content: Array<{ type: string; text?: string }>; details?: AskToolDetails },
+		result: { content: Array<{ type: string; text?: string }>; details?: AskToolDetails; isError?: boolean },
 		_options: RenderResultOptions,
 		uiTheme: Theme,
+		args?: AskRenderArgs,
 	): Component {
 		const rawDetails = result.details;
 		const mdTheme = getMarkdownTheme();
-		const accentStyle = { color: (t: string) => uiTheme.fg("accent", t) };
-		const md = (text: string, width: number) =>
-			new Markdown(text, 1, 0, mdTheme, accentStyle).render(Math.max(1, outputBlockContentWidth(width) + 1));
+		const text = result.content.find(content => content.type === "text")?.text;
+		const fallback = text ? sanitizeCarriageReturns(text) : "";
+		const argSubject = askSubject(normalizeRenderQuestions(args?.questions)?.map(q => q.id) ?? []);
+
+		if (result.isError) {
+			// The user dismissing the prompt is a cancel, not a failure.
+			const message = fallback || "Ask failed";
+			const cancelled = /\bcancel/i.test(message);
+			return plainToolCard(uiTheme, () => ({
+				status: { icon: cancelled ? "aborted" : "error", title: "Ask", description: argSubject },
+				phase: cancelled ? "warning" : "error",
+				body: [cancelled ? uiTheme.fg("muted", message) : formatErrorText(message, uiTheme)],
+			}));
+		}
 
 		if (!rawDetails) {
-			const txt = result.content[0];
-			const fallback = txt?.type === "text" && txt.text ? sanitizeCarriageReturns(txt.text) : "";
-			const header = renderStatusLine({ icon: "warning", title: "Ask" }, uiTheme);
-			const body = fallback ? `\n${uiTheme.fg("dim", fallback)}` : "";
-			return new Text(`${header}${body}`, 0, 0);
+			return plainToolCard(uiTheme, () => ({
+				status: { icon: "warning", title: "Ask", description: argSubject },
+				phase: "warning",
+				body: fallback ? [uiTheme.fg("dim", fallback)] : undefined,
+			}));
 		}
 		const details = sanitizeAskResultDetails(rawDetails);
 
 		// Chat redirect: user chose "Chat about this" instead of answering.
 		if (details.chatRedirect) {
-			const header = renderStatusLine({ icon: "info", title: "Ask", meta: ["chat redirect"] }, uiTheme);
+			const status: StatusLineOptions = {
+				icon: "warning",
+				title: "Ask",
+				description: argSubject,
+				badge: { label: "chat redirect", color: "warning" },
+			};
 			const questions = details.questions ?? [];
-			return framedToolCard(uiTheme, ({ width }) => ({
-				header,
-				sections: questions.length > 0 ? [{ content: questions.flatMap(q => md(q, width)) }] : [],
+			if (questions.length === 0) return plainToolCard(uiTheme, () => ({ status, phase: "warning" }));
+			return framedToolCard(uiTheme, ({ contentWidth }) => ({
+				status,
 				phase: "warning",
-				borderColor: "borderMuted",
+				sections: questions.map((q, index) => ({
+					content: renderQuestionMarkdown(uiTheme, q, contentWidth),
+					separator: index > 0,
+				})),
 			}));
 		}
 
-		// Multi-part results: one divider-labelled section per question.
+		// Multi-part results: one separator-divided section per question.
 		if (details.results && details.results.length > 0) {
 			const results = details.results;
+			const rawResults = rawDetails.results ?? [];
 			const hasAnySelection = results.some(
 				r =>
 					r.customInput !== undefined ||
 					r.note !== undefined ||
 					(r.selectedOptions && r.selectedOptions.length > 0),
 			);
-			const header = renderStatusLine(
-				{
-					icon: hasAnySelection ? "success" : "warning",
+			const attention = !hasAnySelection || results.some(r => r.timedOut);
+			const lone = results.length === 1;
+			return framedToolCard(uiTheme, ({ contentWidth }) => ({
+				status: {
+					icon: attention ? "warning" : "success",
 					title: "Ask",
-					meta: [`${results.length} questions`],
+					description: askSubject(results.map(r => r.id)),
 				},
-				uiTheme,
-			);
-			return framedToolCard(uiTheme, ({ width, contentWidth }) => {
-				const rawResults = rawDetails.results ?? [];
-				const sections = results.map((r, index) => {
+				phase: attention ? "warning" : "success",
+				sections: results.map((r, index) => {
 					// Sanitizing preserves order and length, so raw indices align with `r`.
 					const raw = rawResults[index];
-					// md() returns a shared cached array (module-level Markdown LRU) — copy before appending.
+					const tag = lone ? undefined : questionTag(uiTheme, r.id, r.multi ? ["multi"] : []);
 					const lines = [
-						...md(r.question, width),
+						...renderQuestionMarkdown(uiTheme, r.question, contentWidth, tag),
 						...renderAnswerOptionLines(
 							uiTheme,
 							mdTheme,
@@ -581,72 +645,52 @@ export const askToolRenderer = {
 							r.multi,
 							r.customInput,
 							r.note,
-							width,
 							contentWidth,
 							selectedIndicesFor(raw?.options, raw?.selectedOptions),
 						),
 					];
-					return { label: uiTheme.fg("dim", `[${r.id}]`), content: lines };
-				});
-				return {
-					header,
-					sections,
-					phase: hasAnySelection ? "success" : "warning",
-					borderColor: "borderMuted",
-				};
-			});
+					if (r.timedOut) lines.push(timedOutNotice(uiTheme));
+					return { content: lines, separator: index > 0 };
+				}),
+			}));
 		}
 
-		// Single question result
 		if (!details.question) {
-			const txt = result.content[0];
-			const fallback = txt?.type === "text" && txt.text ? sanitizeCarriageReturns(txt.text) : "";
-			return new Text(fallback, 0, 0);
+			return plainToolCard(uiTheme, () => ({
+				status: { icon: "success", title: "Ask", description: argSubject },
+				phase: "success",
+				body: fallback ? [uiTheme.fg("toolOutput", fallback)] : undefined,
+			}));
 		}
 
+		// Legacy single question result.
 		const question = details.question;
 		const hasSelection =
 			details.customInput !== undefined ||
 			details.note !== undefined ||
 			(details.selectedOptions && details.selectedOptions.length > 0);
-		const header = renderStatusLine(
-			hasSelection
-				? { iconOverride: uiTheme.styledSymbol("tool.ask", "accent"), title: "Ask" }
-				: { icon: "warning", title: "Ask" },
-			uiTheme,
-		);
-		const dOptions = details.options;
-		const dSelected = details.selectedOptions;
-		const dMulti = details.multi;
-		const dCustom = details.customInput;
-		const dNote = details.note;
-		const dTimedOut = details.timedOut;
-		return framedToolCard(uiTheme, ({ width, contentWidth }) => {
-			// md() returns a shared cached array (module-level Markdown LRU) — copy before appending.
+		const attention = !hasSelection || details.timedOut === true;
+		const selectedIndices = selectedIndicesFor(rawDetails.options, rawDetails.selectedOptions);
+		return framedToolCard(uiTheme, ({ contentWidth }) => {
 			const bodyLines = [
-				...md(question, width),
+				...renderQuestionMarkdown(uiTheme, question, contentWidth),
 				...renderAnswerOptionLines(
 					uiTheme,
 					mdTheme,
-					dOptions,
-					dSelected,
-					dMulti,
-					dCustom,
-					dNote,
-					width,
+					details.options,
+					details.selectedOptions,
+					details.multi,
+					details.customInput,
+					details.note,
 					contentWidth,
-					selectedIndicesFor(rawDetails.options, rawDetails.selectedOptions),
+					selectedIndices,
 				),
 			];
-			if (dTimedOut) {
-				// Distinguish auto-selection from a real user choice in the transcript.
-				bodyLines.push(uiTheme.fg("dim", "auto-selected after timeout — not a user choice"));
-			}
+			if (details.timedOut) bodyLines.push(timedOutNotice(uiTheme));
 			return {
-				header,
-				sections: bodyLines.length > 0 ? [{ content: bodyLines }] : [],
-				phase: hasSelection ? "success" : "warning",
-				borderColor: "borderMuted",
+				status: { icon: attention ? "warning" : "success", title: "Ask" },
+				phase: attention ? "warning" : "success",
+				body: bodyLines,
 			};
 		});
 	},

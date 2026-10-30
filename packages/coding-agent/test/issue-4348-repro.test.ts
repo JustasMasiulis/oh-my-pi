@@ -175,6 +175,6 @@ describe("issue #4348: cursor exec-channel tool results pair with synthesized to
 		// preview is gated by the `read.toolResultPreview` setting (off in
 		// this harness), so we assert on the pairing signal: the read call
 		// appears with its path, only reachable when the toolResult attaches.
-		expect(rendered).toContain("Read src/foo.ts");
+		expect(rendered).toContain("Read: src/foo.ts");
 	});
 });

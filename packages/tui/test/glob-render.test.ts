@@ -58,9 +58,7 @@ describe("globToolRenderer", () => {
 			.render(240);
 		const plain = sanitizeText(renderedLines.join("\n"));
 
-		expect(plain).toContain("No matches before timeout (scan incomplete)");
-		expect(plain).toContain("timed out");
-		expect(plain).not.toContain("No files found");
+		expect(plain).toContain("0 files · timed out");
 	});
 
 	it("distinguishes a timed-out partial listing from a result-limit truncation", async () => {
@@ -120,8 +118,46 @@ describe("globToolRenderer", () => {
 			.render(240);
 		const plain = sanitizeText(renderedLines.join("\n"));
 
-		expect(plain).toContain("No files found");
-		expect(plain).not.toContain("incomplete");
+		expect(plain).toContain("0 files");
+		expect(plain).not.toContain("timed out");
+	});
+
+	it("keeps a long multi-path header on one row and lists each missing path on its own row", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+		const found = "C:/Program Files (x86)/Windows Kits/10/Include/10.0.28000.0/um/winternl.h";
+		const missing = [
+			"C:/Program Files/Microsoft Visual Studio/*/*/VC/Auxiliary/Build/vcvars*.bat",
+			"C:/Program Files/Microsoft Visual Studio/*/VC/Auxiliary/Build/vcvars*.bat",
+		];
+		const result = {
+			content: [{ type: "text", text: found }],
+			details: { fileCount: 1, files: [found], missingPaths: missing },
+		};
+
+		const render = (width: number) =>
+			sanitizeText(
+				globToolRenderer
+					.renderResult(result as never, { expanded: false, isPartial: false }, uiTheme, {
+						path: ["C:/Program Files (x86)/Windows Kits/10/Include/*/um/winternl.h", ...missing].join(";"),
+					})
+					.render(width)
+					.join("\n"),
+			)
+				.split("\n")
+				.map(line => line.trimEnd());
+
+		// The `;`-separated scope reads as a list.
+		expect(render(400)[0]).toBe(
+			`${uiTheme.status.success} Glob: C:/Program Files (x86)/Windows Kits/10/Include/*/um/winternl.h, ${missing.join(", ")} 1 file`,
+		);
+		// Too wide for the row: the scope is cut in its middle so the facts stay on the header row.
+		const narrow = render(120);
+		expect(narrow[0]).toStartWith(`${uiTheme.status.success} Glob: C:/Program Files (x86)/`);
+		expect(narrow[0]).toContain(uiTheme.format.ellipsis);
+		expect(narrow[0]).toEndWith("vcvars*.bat 1 file");
+		expect(narrow.slice(2)).toEqual(missing.map(item => `  skipped missing: ${item}`));
 	});
 
 	it("keeps raw control-byte file targets while displaying sanitized labels in terminal and native results", async () => {

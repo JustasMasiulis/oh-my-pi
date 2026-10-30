@@ -1,5 +1,4 @@
 import type { Component } from "../tui";
-import { Text } from "../components/text";
 import type {
 	NativeToolHead,
 	NativeToolView,
@@ -13,16 +12,19 @@ import { fileHref, fileRow, footnoteText, inlineErrorView, resultText } from "./
 import { type Theme } from "../theme/theme";
 import type { OutputMeta } from "./output-meta";
 import type { TruncationResult } from "./streaming-output";
-import { toPathList } from "../render/render-utils";
 import * as path from "node:path";
-import { fileHyperlink, renderFileList, renderStatusLine, renderTreeList } from "../render";
+import { fileHyperlink, renderFileList } from "../render";
+import type { FileEntry } from "../render/file-list";
+import type { StatusLineOptions } from "../render/status-line";
+import { plainToolCard } from "../render/tool-card";
 import {
-	createCachedComponent,
-	fitHeaderedRows,
 	formatCount,
-	formatEmptyMessage,
-	formatErrorMessage,
+	formatErrorText,
+	formatExpandHint,
+	formatMissingPathRows,
 	PREVIEW_LIMITS,
+	toDisplayPathList,
+	type ToolUIStatus,
 } from "../render/render-utils";
 import { formatFullOutputReference } from "./output-meta";
 
@@ -62,12 +64,23 @@ interface GlobRenderArgs {
 }
 
 function formatGlobRenderPaths(args: GlobRenderArgs | undefined): string | undefined {
-	const list = toPathList(args?.path ?? args?.paths);
+	const list = toDisplayPathList(args?.path ?? args?.paths);
 	return list.length > 0 ? list.join(", ") : undefined;
 }
 
-function globStatusIcon(uiTheme: Theme): string {
-	return uiTheme.fg("toolTitle", uiTheme.symbol("icon.search"));
+/**
+ * Flush file rows (type icon, path) capped while collapsed; when cut, the
+ * last row is `… N more files` with the expand hint.
+ */
+function renderGlobFileRows(files: FileEntry[], expanded: boolean, theme: Theme): string[] {
+	const rows = renderFileList(
+		{ files, expanded, maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS, hyperlinkFn: fileHyperlink },
+		theme,
+	);
+	// renderFileList appends its `… N more files` row exactly when collapsed past the cap.
+	if (!expanded && files.length > PREVIEW_LIMITS.COLLAPSED_ITEMS)
+		rows[rows.length - 1] += ` ${formatExpandHint(theme)}`;
+	return rows;
 }
 
 /** Most files a native glob lists as rows; more wrap as chips (§7.3 glob). */
@@ -138,21 +151,19 @@ function globNativeHead(args: GlobRenderArgs | undefined, meta: readonly string[
 /** Render glob calls and results in the transcript. */
 export const globToolRenderer = {
 	inline: true,
-	renderCall(args: GlobRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
+	renderCall(args: GlobRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 		const meta: string[] = [];
 		if (args.limit !== undefined) meta.push(`limit:${args.limit}`);
 
-		const text = renderStatusLine(
-			{
-				icon: "pending",
+		return plainToolCard(uiTheme, () => ({
+			status: {
+				icon: options.executionStarted ? "running" : "pending",
+				spinnerFrame: options.spinnerFrame,
 				title: "Glob",
-				titleColor: "toolTitle",
-				description: formatGlobRenderPaths(args) || "*",
+				description: formatGlobRenderPaths(args),
 				meta,
 			},
-			uiTheme,
-		);
-		return new Text(text, 0, 0);
+		}));
 	},
 
 	renderResult(
@@ -163,105 +174,84 @@ export const globToolRenderer = {
 	): Component {
 		const details = result.details;
 		const linkPaths = globLinkPaths(details, options.renderContext?.rawDetails);
+		const status = (icon: ToolUIStatus, meta?: string[]): StatusLineOptions => ({
+			icon,
+			title: "Glob",
+			description: formatGlobRenderPaths(args),
+			meta,
+		});
 
 		if (result.isError || details?.error) {
 			const errorText = details?.error || result.content?.find(c => c.type === "text")?.text || "Unknown error";
-			return new Text(formatErrorMessage(errorText, uiTheme), 0, 0);
+			return plainToolCard(uiTheme, () => ({
+				status: status("error"),
+				phase: "error",
+				body: [formatErrorText(errorText, uiTheme)],
+			}));
 		}
 
-		const hasDetailedData = details?.fileCount !== undefined;
-		const textContent = result.content?.find(c => c.type === "text")?.text;
+		const missingRows = formatMissingPathRows(details?.missingPaths ?? [], uiTheme);
 
-		if (!hasDetailedData) {
+		// File rows wrap in the flush card; recomputed only when expansion changes.
+		let memo: { expanded: boolean; rows: readonly string[] } | undefined;
+		const cachedRows = (build: (expanded: boolean) => string[]): readonly string[] => {
+			const expanded = options.expanded;
+			if (memo?.expanded !== expanded) memo = { expanded, rows: build(expanded) };
+			return memo.rows;
+		};
+		const cardOptions = { onInvalidate: () => (memo = undefined), onReleaseRenderCaches: () => (memo = undefined) };
+
+		if (details?.fileCount === undefined) {
+			const textContent = result.content?.find(c => c.type === "text")?.text;
 			if (
 				!textContent ||
 				textContent.includes("No files matching") ||
 				textContent.includes("No files found") ||
 				textContent.trim() === ""
 			) {
-				return new Text(formatEmptyMessage("No files found", uiTheme), 0, 0);
+				return plainToolCard(uiTheme, () => ({ status: status("warning", ["0 files"]), phase: "warning" }));
 			}
 
-			const lines = textContent.split("\n").filter(l => l.trim());
-			const header = renderStatusLine(
-				{
-					iconOverride: globStatusIcon(uiTheme),
-					title: "Glob",
-					titleColor: "toolTitle",
-					description: formatGlobRenderPaths(args),
-					meta: [formatCount("file", lines.length)],
-				},
+			const files = textContent
+				.split("\n")
+				.filter(line => line.trim())
+				.map(entry => ({ path: entry, isDirectory: entry.endsWith("/") }));
+			return plainToolCard(
 				uiTheme,
-			);
-			return createCachedComponent(
-				() => options.expanded,
-				width => {
-					const listLines = renderTreeList(
-						{
-							items: lines,
-							expanded: options.expanded,
-							maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
-							itemType: "file",
-							renderItem: line => uiTheme.fg("accent", line),
-						},
-						uiTheme,
-					);
-					return fitHeaderedRows(header, listLines, width);
-				},
+				() => ({
+					status: status("success", [formatCount("file", files.length)]),
+					phase: "success",
+					body: () => cachedRows(expanded => renderGlobFileRows(files, expanded, uiTheme)),
+				}),
+				cardOptions,
 			);
 		}
 
-		const fileCount = details?.fileCount ?? 0;
-		const truncation = details?.truncation ?? details?.meta?.truncation;
-		const limits = details?.meta?.limits;
-		const truncated = Boolean(details?.truncated || truncation || details?.resultLimitReached || limits?.resultLimit);
+		const fileCount = details.fileCount;
+		const truncation = details.truncation ?? details.meta?.truncation;
+		const limits = details.meta?.limits;
+		const truncated = Boolean(details.truncated || truncation || details.resultLimitReached || limits?.resultLimit);
 		// A non-empty timed-out result is the case `truncated` alone cannot
 		// explain: the listing is short because the scan died, not because it
 		// finished. Say which one it was.
-		const timedOut = Boolean(details?.timedOut);
-		const files = details?.files ?? [];
-
-		const missingPaths = details?.missingPaths ?? [];
-		const missingNote =
-			missingPaths.length > 0 ? uiTheme.fg("warning", `skipped missing: ${missingPaths.join(", ")}`) : undefined;
+		const timedOut = Boolean(details.timedOut);
 
 		if (fileCount === 0) {
 			// `truncated` on an empty result means the scan timed out mid-walk —
-			// render "incomplete", not a definitive "No files found". `timedOut`
-			// states it outright; the inference stays for old transcripts that
-			// predate the field.
-			const emptyTimedOut = timedOut || truncated;
-			const emptyLabel = emptyTimedOut ? "No matches before timeout (scan incomplete)" : "No files found";
-			const header = renderStatusLine(
-				{
-					icon: "warning",
-					title: "Glob",
-					titleColor: "toolTitle",
-					description: formatGlobRenderPaths(args),
-					meta: emptyTimedOut ? ["0 files", uiTheme.fg("warning", "timed out")] : ["0 files"],
-				},
-				uiTheme,
-			);
-			const lines = [header, formatEmptyMessage(emptyLabel, uiTheme)];
-			if (missingNote) lines.push(missingNote);
-			return new Text(lines.join("\n"), 0, 0);
+			// an incomplete scan, not a definitive absence. `timedOut` states it
+			// outright; the inference stays for old transcripts that predate the field.
+			const meta = timedOut || truncated ? ["0 files", uiTheme.fg("warning", "timed out")] : ["0 files"];
+			return plainToolCard(uiTheme, () => ({
+				status: status("warning", meta),
+				phase: "warning",
+				body: missingRows.length > 0 ? missingRows : undefined,
+			}));
 		}
 		const meta: string[] = [formatCount("file", fileCount)];
-		if (details?.scopePath) meta.push(`in ${details.scopePath}`);
 		if (truncated) meta.push(uiTheme.fg("warning", timedOut ? "timed out" : "truncated"));
-		const header = renderStatusLine(
-			{
-				...(truncated ? { icon: "warning" as const } : { iconOverride: globStatusIcon(uiTheme) }),
-				title: "Glob",
-				titleColor: "toolTitle",
-				description: formatGlobRenderPaths(args),
-				meta,
-			},
-			uiTheme,
-		);
 
 		const truncationReasons: string[] = [];
-		if (details?.resultLimitReached) truncationReasons.push(`limit ${details.resultLimitReached} results`);
+		if (details.resultLimitReached) truncationReasons.push(`limit ${details.resultLimitReached} results`);
 		if (limits?.resultLimit) truncationReasons.push(`limit ${limits.resultLimit.reached} results`);
 		if (truncation) truncationReasons.push(truncation.truncatedBy === "lines" ? "line limit" : "size limit");
 		const artifactId = truncation && "artifactId" in truncation ? truncation.artifactId : undefined;
@@ -271,33 +261,28 @@ export const globToolRenderer = {
 		if (truncationReasons.length > 0) {
 			extraLines.push(uiTheme.fg("warning", `truncated: ${truncationReasons.join(", ")}`));
 		}
-		if (missingNote) extraLines.push(missingNote);
+		extraLines.push(...missingRows);
 
-		return createCachedComponent(
-			() => options.expanded,
-			width => {
-				const cwd = linkPaths.cwd;
-				const fileLines = renderFileList(
-					{
-						files: files.map((entry, index) => {
-							const rawFile = linkPaths.files[index];
-							return {
-								path: entry,
-								isDirectory: entry.endsWith("/"),
-								absPath:
-									cwd && !entry.endsWith("/")
-										? path.resolve(cwd, typeof rawFile === "string" ? rawFile : entry)
-										: undefined,
-							};
-						}),
-						expanded: options.expanded,
-						maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
-						hyperlinkFn: fileHyperlink,
-					},
-					uiTheme,
-				);
-				return fitHeaderedRows(header, [...fileLines, ...extraLines], width);
-			},
+		const cwd = linkPaths.cwd;
+		const files: FileEntry[] = (details.files ?? []).map((entry, index) => {
+			const rawFile = linkPaths.files[index];
+			return {
+				path: entry,
+				isDirectory: entry.endsWith("/"),
+				absPath:
+					cwd && !entry.endsWith("/")
+						? path.resolve(cwd, typeof rawFile === "string" ? rawFile : entry)
+						: undefined,
+			};
+		});
+		return plainToolCard(
+			uiTheme,
+			() => ({
+				status: status(truncated ? "warning" : "success", meta),
+				phase: truncated ? "warning" : "success",
+				body: () => cachedRows(expanded => [...renderGlobFileRows(files, expanded, uiTheme), ...extraLines]),
+			}),
+			cardOptions,
 		);
 	},
 	describeCall(args: GlobRenderArgs): NativeToolView {

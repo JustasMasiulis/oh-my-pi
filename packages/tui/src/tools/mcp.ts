@@ -44,38 +44,37 @@ function buildMcpArgsSection(args: Record<string, unknown>, theme: Theme): reado
 		JSON_TREE_SCALAR_LEN_EXPANDED,
 	);
 	lines.push(...tree.lines);
-	if (tree.truncated) lines.push(theme.fg("dim", "…"));
-	lines.push("");
+	if (tree.truncated) lines.push(theme.fg("dim", theme.format.ellipsis));
 	return lines;
 }
 
 /**
  * Render MCP tool call.
  */
-export function renderMCPCall(args: Record<string, unknown>, theme: Theme, label: string): Component {
-	return plainToolCard(
-		theme,
-		({ contentWidth }) => {
-			const body: string[] = [];
-			if (args && typeof args === "object" && Object.keys(args).length > 0) {
-				// Inline preview budgeted against the render width, leaving room for
-				// the ` └─ ` connector prefix instead of a fixed cap.
-				const inlineBudget = Math.max(20, contentWidth - Bun.stringWidth(theme.tree.last) - 2);
-				const preview = formatArgsInline(args, inlineBudget);
-				if (preview) {
-					body.push(` ${theme.fg("dim", theme.tree.last)} ${theme.fg("dim", preview)}`);
-				}
-			}
+export function renderMCPCall(
+	args: Record<string, unknown>,
+	options: RenderResultOptions,
+	theme: Theme,
+	label: string,
+): Component {
+	return plainToolCard(theme, ({ contentWidth }) => {
+		const body: string[] = [];
+		if (args && typeof args === "object" && Object.keys(args).length > 0) {
+			const preview = formatArgsInline(args, Math.max(20, contentWidth));
+			if (preview) body.push(theme.fg("dim", preview));
+		}
 
-			return {
-				status: { icon: "pending", title: label },
-				phase: "pending",
-				body,
-				applyBg: false,
-			};
-		},
-		{ paddingX: 0, paddingY: 0 },
-	);
+		const icon = options.executionStarted ? "running" : "pending";
+		return {
+			status: {
+				icon,
+				spinnerFrame: options.spinnerFrame,
+				title: label,
+			},
+			phase: icon,
+			body,
+		};
+	});
 }
 
 /** Render an MCP status/args prefix followed by Markdown-aware text output. */
@@ -106,26 +105,21 @@ function renderMarkdownMCPResult(
 				};
 			}
 			const body = bodyMemo.lines;
-			const status: StatusLineOptions = options.isPartial
-				? {
-						icon: options.spinnerFrame !== undefined ? "running" : "pending",
-						spinnerFrame: options.spinnerFrame,
-						title,
-					}
-				: isError
-					? { icon: "error", title }
-					: { iconOverride: theme.styledSymbol("tool.mcp", "accent"), title };
-			const phase: ToolCardPhase = options.isPartial ? "partial" : isError ? "error" : "success";
-			return {
-				status,
-				phase,
-				body,
-				applyBg: false,
+			const status: StatusLineOptions = {
+				icon: options.isPartial
+					? options.spinnerFrame !== undefined
+						? "running"
+						: "pending"
+					: isError
+						? "error"
+						: "success",
+				spinnerFrame: options.spinnerFrame,
+				title,
 			};
+			const phase: ToolCardPhase = options.isPartial ? "partial" : isError ? "error" : "success";
+			return { status, phase, body };
 		},
 		{
-			paddingX: 0,
-			paddingY: 0,
 			onInvalidate: () => (bodyMemo = undefined),
 			onReleaseRenderCaches: () => {
 				bodyMemo = undefined;
@@ -203,24 +197,24 @@ export function renderMCPResult(
 		({ contentWidth }) => {
 			const isError = result.isError ?? result.details?.isError ?? false;
 			const title = result.details ? `${result.details.serverName}/${result.details.mcpToolName}` : "MCP";
-			const status: StatusLineOptions = options.isPartial
-				? {
-						icon: options.spinnerFrame !== undefined ? "running" : "pending",
-						spinnerFrame: options.spinnerFrame,
-						title,
-					}
-				: isError
-					? { icon: "error", title }
-					: { iconOverride: theme.styledSymbol("tool.mcp", "accent"), title };
+			const status: StatusLineOptions = {
+				icon: options.isPartial
+					? options.spinnerFrame !== undefined
+						? "running"
+						: "pending"
+					: isError
+						? "error"
+						: "success",
+				spinnerFrame: options.spinnerFrame,
+				title,
+			};
 			const phase: ToolCardPhase = options.isPartial ? "partial" : isError ? "error" : "success";
 			if (bodyMemo === undefined || bodyMemo.width !== contentWidth) {
 				bodyMemo = { width: contentWidth, lines: buildMcpResultBody(contentWidth) };
 			}
-			return { status, phase, body: bodyMemo.lines, applyBg: false };
+			return { status, phase, body: bodyMemo.lines };
 		},
 		{
-			paddingX: 0,
-			paddingY: 0,
 			onInvalidate: () => (bodyMemo = undefined),
 			onReleaseRenderCaches: () => (bodyMemo = undefined),
 		},
@@ -254,7 +248,7 @@ export function renderMCPResult(
 				if (!expanded) {
 					body.push(formatExpandHint(theme, expanded, true));
 				} else if (tree.truncated) {
-					body.push(theme.fg("dim", "…"));
+					body.push(theme.fg("dim", theme.format.ellipsis));
 				}
 				if (truncationWarning) body.push(truncationWarning);
 				return body;

@@ -672,7 +672,7 @@ describe("todoToolRenderer.renderResult phase collapsing", () => {
 		// completion signal.
 		expect(rendered).toContain("a1");
 		expect(rendered).toContain("a2");
-		expect(rendered).toContain("I. Alpha  1/2");
+		expect(rendered).toContain("I. Alpha 1/2");
 		// Untouched phases collapse: headers + progress counts, no task contents.
 		expect(rendered).toContain("II. Beta");
 		expect(rendered).toContain("III. Gamma");
@@ -905,11 +905,10 @@ describe("todoToolRenderer.renderCall malformed-args regression (#2005)", () => 
 		const component = todoToolRenderer.renderCall(args, renderOptions, theme);
 		const rendered = Bun.stripANSI(component.render(120).join("\n"));
 		expect(rendered).toContain("init");
-		expect(rendered).toContain("3 items");
+		expect(rendered).toContain("4 items");
 		expect(rendered).toContain("done");
 		expect(rendered).toContain("append");
 		expect(rendered).toContain("Cleanup");
-		expect(rendered).toContain("1 item");
 	});
 });
 

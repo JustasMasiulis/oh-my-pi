@@ -1,23 +1,26 @@
 import type { Component } from "../tui";
 import { Text } from "../components/text";
 import { visibleWidth } from "../utils";
-import { formatAge } from "@oh-my-pi/pi-utils";
+import { formatAge, formatCount } from "@oh-my-pi/pi-utils";
 import { shimmerEnabled, shimmerText } from "../theme/shimmer";
 import type { Theme } from "../theme/theme";
-import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, truncateToWidth } from "../render/index";
+import { Hasher, type RenderCache, renderStatusLine, renderTreeList, truncateToWidth } from "../render/index";
+import { wrapPrefixedLine } from "../render/hanging-wrap";
 import { formatArtifactErrorNotice, stripOutputNotice, type OutputMeta } from "./output-meta";
 import {
 	FEED_MODEL_BADGE_WIDTH,
 	formatBadge,
 	formatDuration,
-	formatEmptyMessage,
+	formatErrorText,
+	formatExpandHint,
+	formatMoreItems,
+	sanitizeDisplayLines,
 	formatFeedModelBadge,
 	formatStatusIcon,
 	getPreviewLines,
 	isFeedModelBadgeEnabled,
 	PREVIEW_LIMITS,
 	replaceTabs,
-	type ToolUIColor,
 	type ToolUIStatus,
 	cappedHeadLines,
 	createCachedComponent,
@@ -159,14 +162,26 @@ export interface CoordinationDetails {
 const LABEL_MAX_WIDTH = 60;
 const PREVIEW_LINES_COLLAPSED = 1;
 const PREVIEW_LINES_EXPANDED = 4;
-const LABEL_LINES_COLLAPSED = 1;
 const LABEL_LINES_EXPANDED = 3;
 const PREVIEW_LINE_WIDTH = 80;
+/** Body rows of a flush card sit under the header at this indent. */
+const INDENT = "  ";
 
-function statusToIcon(status: JobSnapshot["status"]): ToolUIStatus {
+/**
+ * Fit a self-built flush card to `width`: the header (first row) hang-wraps
+ * under the body column so its trailing facts stay visible; body rows, which
+ * reserve their own facts, truncate.
+ */
+export function fitFlushRows(rows: readonly string[], width: number): string[] {
+	const [header = "", ...body] = rows;
+	return [...wrapPrefixedLine("", INDENT, header, width), ...body.map(row => truncateToWidth(row, width))];
+}
+
+/** A job's lifecycle as a row status glyph. */
+export function jobStatusIcon(status: JobSnapshot["status"]): ToolUIStatus {
 	switch (status) {
 		case "completed":
-			return "done";
+			return "success";
 		case "failed":
 			return "error";
 		case "cancelled":
@@ -176,17 +191,19 @@ function statusToIcon(status: JobSnapshot["status"]): ToolUIStatus {
 	}
 }
 
-function statusToColor(status: JobSnapshot["status"]): ToolUIColor {
-	switch (status) {
-		case "completed":
-			return "success";
-		case "failed":
-			return "error";
-		case "cancelled":
-			return "warning";
-		case "running":
-			return "accent";
-	}
+/**
+ * Facts that follow a job's id on its row, in the shared order: type, a
+ * non-zero exit, live progress, duration. The status glyph carries the state.
+ */
+export function jobRowFacts(job: JobSnapshot, theme: Theme): string[] {
+	return compact([
+		theme.fg("dim", job.type),
+		job.exitCode !== undefined && job.exitCode !== 0 ? theme.fg("error", `exit ${job.exitCode}`) : undefined,
+		job.status === "running" && job.completionPercent !== undefined
+			? theme.fg("accent", `${job.completionPercent}%`)
+			: undefined,
+		theme.fg("dim", formatDuration(job.durationMs)),
+	]);
 }
 
 /**
@@ -247,9 +264,64 @@ function widgetStamp(jobs: readonly JobSnapshot[] | undefined): string {
 /** Tiles a native wait card shows before it counts the rest. */
 const TILES_SHOWN = 9;
 
+/** Sort order: running first (what is still pending), then failed, cancelled, completed. */
+const JOB_STATUS_ORDER: Record<JobSnapshot["status"], number> = { running: 0, failed: 1, cancelled: 2, completed: 3 };
+
+/** Card subject: the job count, or the agent count for an agents-only roster. */
+function waitSubject(jobs: number, agents: number): string {
+	return jobs > 0 || agents === 0 ? formatCount("job", jobs) : formatCount("agent", agents);
+}
+
+/** Header meta: per-outcome job counts and the agent count. */
+function waitMeta(jobs: readonly JobSnapshot[], agents: number): string[] {
+	const counts = { completed: 0, failed: 0, cancelled: 0, running: 0 };
+	for (const job of jobs) counts[job.status]++;
+	const meta: string[] = [];
+	if (counts.completed > 0) meta.push(`${counts.completed} done`);
+	if (counts.failed > 0) meta.push(`${counts.failed} failed`);
+	if (counts.cancelled > 0) meta.push(`${counts.cancelled} cancelled`);
+	if (counts.running > 0) meta.push(`${counts.running} running`);
+	if (agents > 0 && jobs.length > 0) meta.push(formatCount("agent", agents));
+	return meta;
+}
+
+/**
+ * Outcome of a settled wait: a failed job is a partial failure (warning); jobs
+ * or agents still running make it a poll snapshot (neutral info); otherwise done.
+ */
+function waitOutcome(jobs: readonly JobSnapshot[], agents: number): "warning" | "info" | "success" {
+	if (jobs.some(job => job.status === "failed")) return "warning";
+	if (agents > 0 || jobs.some(job => job.status === "running")) return "info";
+	return "success";
+}
+
+/** Columns {@link nestRows} spends on its connector and the space after it. */
+function nestedRowIndent(theme: Theme): number {
+	return Math.max(visibleWidth(theme.tree.branch), visibleWidth(theme.tree.last)) + 1;
+}
+
+/** Nest detail rows under an item row with tree connectors. */
+function nestRows(details: readonly string[], theme: Theme): string[] {
+	return details.map((line, index) => {
+		const last = index === details.length - 1;
+		return `${theme.fg("dim", last ? theme.tree.last : theme.tree.branch)} ${line}`;
+	});
+}
+
 /** Pending wait frame. */
-function waitRenderCall(_args: object, _options: RenderResultOptions, uiTheme: Theme): Component {
-	return new Text(renderStatusLine({ icon: "pending", title: "Wait" }, uiTheme), 0, 0);
+function waitRenderCall(_args: object, options: RenderResultOptions, uiTheme: Theme): Component {
+	return new Text(
+		renderStatusLine(
+			{
+				icon: options.executionStarted ? "running" : "pending",
+				spinnerFrame: options.spinnerFrame,
+				title: "Wait",
+			},
+			uiTheme,
+		),
+		0,
+		0,
+	);
 }
 
 /** Result frame for wait snapshots and the agents roster. */
@@ -266,44 +338,20 @@ function jobsRenderResult(
 	const agents = result.details?.agents ?? [];
 
 	if (jobs.length === 0 && agents.length === 0) {
-		const fallback = result.content?.find(c => c.type === "text")?.text || "No jobs to process";
-		const header = renderStatusLine({ icon: "warning", title: "Wait" }, uiTheme);
-		return new Text([header, formatEmptyMessage(fallback, uiTheme)].join("\n"), 0, 0);
+		const fallback = result.content?.find(c => c.type === "text")?.text?.trim() || "No jobs to process";
+		const header = renderStatusLine({ icon: "warning", title: "Wait", meta: ["0 jobs"] }, uiTheme);
+		return new Text([header, `${INDENT}${uiTheme.fg("muted", fallback)}`].join("\n"), 0, 0);
 	}
 
-	// Sealing freezes the snapshot; still-running rows remain meaningful history.
-
-	const counts = { completed: 0, failed: 0, cancelled: 0, running: 0 };
-	for (const job of jobs) counts[job.status]++;
-
-	// The title already carries the running count, so meta lists only the
-	// settled categories — "waiting on 19 of 19 · 19 running" read awkward.
-	const meta: string[] = [];
-	if (counts.completed > 0) meta.push(uiTheme.fg("success", `${counts.completed} done`));
-	if (counts.failed > 0) meta.push(uiTheme.fg("error", `${counts.failed} failed`));
-	if (counts.cancelled > 0) meta.push(uiTheme.fg("warning", `${counts.cancelled} cancelled`));
-	if (agents.length > 0 && jobs.length > 0) {
-		meta.push(uiTheme.fg("accent", `${agents.length} agent${agents.length === 1 ? "" : "s"}`));
-	}
-
-	const headerIcon: ToolUIStatus =
-		counts.failed > 0 ? "warning" : counts.running > 0 || agents.length > 0 ? "info" : "success";
-	const jobsNoun = jobs.length === 1 ? "job" : "jobs";
-	const description =
-		jobs.length === 0
-			? `${agents.length} running agent${agents.length === 1 ? "" : "s"} — no jobs`
-			: counts.running > 0
-				? counts.running === jobs.length
-					? `waiting on ${jobs.length} ${jobsNoun}`
-					: `waiting on ${counts.running} of ${jobs.length} ${jobsNoun}`
-				: `${jobs.length} ${jobsNoun} settled`;
-
+	const runningCount = jobs.filter(job => job.status === "running").length;
+	const headerIcon: ToolUIStatus = options.isPartial ? "running" : waitOutcome(jobs, agents.length);
 	const header = renderStatusLine(
 		{
 			icon: headerIcon,
-			spinnerFrame: counts.running > 0 || agents.length > 0 ? options.spinnerFrame : undefined,
-			title: description,
-			meta,
+			spinnerFrame: options.spinnerFrame,
+			title: "Wait",
+			description: waitSubject(jobs.length, agents.length),
+			meta: waitMeta(jobs, agents.length),
 		},
 		uiTheme,
 	);
@@ -318,319 +366,202 @@ function jobsRenderResult(
 			? outputMeta.artifactError
 			: undefined;
 
-	// Sort: running first (so user sees what's still pending), then failed, then completed/cancelled.
-	const statusOrder: Record<JobSnapshot["status"], number> = {
-		running: 0,
-		failed: 1,
-		cancelled: 2,
-		completed: 3,
-	};
-	const sortedJobs = [...jobs].sort((a, b) => {
-		const diff = statusOrder[a.status] - statusOrder[b.status];
-		if (diff !== 0) return diff;
-		return b.durationMs - a.durationMs;
-	});
+	const sortedJobs = [...jobs].sort(
+		(a, b) => JOB_STATUS_ORDER[a.status] - JOB_STATUS_ORDER[b.status] || b.durationMs - a.durationMs,
+	);
 
-	let cached: RenderCache | undefined;
-	// Per-job preview rows are invariant across spinner/shimmer frames (the job
-	// snapshots are frozen for this result), so the envelope strip, flatten and
-	// wrap run once per (job, expanded, width) instead of every animated frame.
-	const previewRows = new Map<JobSnapshot, { expanded: boolean; width: number; lines: readonly string[] }>();
-	const jobPreviewRows = (job: JobSnapshot, expanded: boolean, continuationWidth: number): readonly string[] => {
-		const hit = previewRows.get(job);
-		if (hit !== undefined && hit.expanded === expanded && hit.width === continuationWidth) return hit.lines;
+	/** Detail rows nested under a job: label overflow, failure reason, capture warning, output preview. */
+	const jobDetails = (job: JobSnapshot, expanded: boolean, width: number, labelLines: readonly string[]): string[] => {
+		const details = labelLines.map(line => uiTheme.fg("toolOutput", truncateToWidth(line, width)));
 		const artifactError = job.meta?.artifactError ?? job.artifactError;
+		if (artifactError) {
+			details.push(uiTheme.fg("warning", truncateToWidth(formatArtifactErrorNotice(artifactError), width)));
+		}
 		// Legacy rows did not retain full metadata. Strip the known warning
 		// footer so the dedicated row/root warning remains the only copy.
 		const previewError =
 			artifactError ?? (outputMeta?.source?.type !== "report" ? outputMeta?.artifactError : undefined);
 		const previewMeta = job.meta ?? (previewError ? { artifactError: previewError } : undefined);
-		const preview = flattenStructuredPreview(
-			stripTaskResultEnvelope(
-				stripOutputNotice(job.errorText?.trim() || job.resultText?.trim() || "", previewMeta).trim(),
-			),
-		);
-		const lines: string[] = [];
+		// Collapsed, only a failure says why; the rest of the output stays behind Ctrl+O.
+		const source = expanded
+			? job.errorText?.trim() || job.resultText?.trim() || ""
+			: job.status === "failed"
+				? (job.errorText ?? "")
+				: "";
+		const preview = flattenStructuredPreview(stripTaskResultEnvelope(stripOutputNotice(source, previewMeta).trim()));
 		if (preview) {
-			const maxLines = expanded ? PREVIEW_LINES_EXPANDED : PREVIEW_LINES_COLLAPSED;
-			const previewLines = getPreviewLines(
-				preview,
-				maxLines,
-				Math.min(PREVIEW_LINE_WIDTH, continuationWidth),
-				Ellipsis.Unicode,
-			);
 			const tone = job.errorText ? "error" : "dim";
-			for (const pl of previewLines) lines.push(`  ${uiTheme.fg(tone, pl)}`);
+			const maxLines = expanded ? PREVIEW_LINES_EXPANDED : PREVIEW_LINES_COLLAPSED;
+			for (const line of getPreviewLines(preview, maxLines, Math.min(PREVIEW_LINE_WIDTH, width))) {
+				details.push(uiTheme.fg(tone, replaceTabs(line)));
+			}
 		}
-		previewRows.set(job, { expanded, width: continuationWidth, lines });
-		return lines;
+		return details;
 	};
-	// Collapsed card: one line per settled job, or the bare "waiting on N jobs"
-	// header while nothing has settled. Repeated polls then read as a short
-	// completion log instead of a re-printed (and shrinking) job tree; Ctrl+O
-	// restores the full tree with output previews. A running job's live widget
-	// still draws its tile: that chart is the job's progress, not a copy of it.
-	const settledJobs = sortedJobs.filter(job => job.status !== "running");
-	const widgetJobs = sortedJobs.filter(job => job.status === "running" && job.widget?.state === "live");
-	const compactJobLines = (width: number, live: boolean): string[] => {
-		const lines: string[] = [];
-		const indent = " ".repeat(visibleWidth(formatStatusIcon("done", uiTheme)) + 1);
-		// Failures sort first, so the cap never hides one behind successes;
-		// Ctrl+O lists the rest.
-		for (const job of settledJobs.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS)) {
-			const icon = formatStatusIcon(statusToIcon(job.status), uiTheme);
-			const word = job.status === "completed" ? "done" : job.status;
-			const exit =
-				job.exitCode !== undefined && job.exitCode !== 0
-					? `${uiTheme.sep.dot}${uiTheme.fg("error", `exit ${job.exitCode}`)}`
-					: "";
-			// The outcome (status, exit, duration) is reserved first; a long id
-			// gives way so a failure is never cut off the row.
-			const outcome = ` ${uiTheme.fg(statusToColor(job.status), word)}${exit}${uiTheme.sep.dot}${uiTheme.fg("dim", formatDuration(job.durationMs))}`;
-			const id = truncateToWidth(
-				replaceTabs(job.id).replace(/\s+/g, " "),
-				Math.max(1, width - visibleWidth(`${icon} `) - visibleWidth(outcome)),
-				Ellipsis.Unicode,
-			);
-			let line = `${icon} ${uiTheme.fg("accent", id)}${outcome}`;
-			const label = replaceTabs(jobRowLabel(job).split(/\r?\n/)[0] ?? "").trim();
-			const labelBudget = width - visibleWidth(line) - 2;
-			if (label && label !== job.id && labelBudget >= 8) {
-				line += `  ${uiTheme.fg("muted", truncateToWidth(label, labelBudget, Ellipsis.Unicode))}`;
-			}
-			lines.push(line);
-			// A failure says why on the collapsed row; the rest of its output
-			// stays behind Ctrl+O.
-			const reason =
-				job.status === "failed"
-					? stripOutputNotice(job.errorText ?? "", job.meta)
-							.split(/\r?\n/)
-							.find(part => part.trim())
-							?.trim()
-					: undefined;
-			if (reason) {
-				lines.push(
-					`${indent}${uiTheme.fg("error", truncateToWidth(replaceTabs(reason), Math.max(1, width - indent.length), Ellipsis.Unicode))}`,
-				);
-			}
-			// The root warning is suppressed when a row owns the failure, so the
-			// compact row carries it too — otherwise it only shows after Ctrl+O.
-			const artifactError = job.meta?.artifactError ?? job.artifactError;
-			if (artifactError) {
-				lines.push(uiTheme.fg("warning", truncateToWidth(formatArtifactErrorNotice(artifactError), width)));
-			}
-		}
-		const hiddenSettled = settledJobs.length - PREVIEW_LIMITS.COLLAPSED_ITEMS;
-		if (hiddenSettled > 0) lines.push(`${indent}${uiTheme.fg("dim", `… ${hiddenSettled} more settled`)}`);
-		const shownWidgetJobs = widgetJobs.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS);
-		for (const job of shownWidgetJobs) {
-			const typeBadge = formatBadge(job.type, statusToColor(job.status), uiTheme);
-			const icon = formatStatusIcon("running", uiTheme, live ? options.spinnerFrame : undefined);
-			const meta = compact([
-				job.completionPercent !== undefined ? uiTheme.fg("accent", `${job.completionPercent}%`) : undefined,
+
+	/** Whether Ctrl+O shows more of `job`: further label lines, its output, or a longer failure. */
+	const jobHidesDetail = (job: JobSnapshot, width: number): boolean => {
+		if (
+			jobRowLabel(job)
+				.split(/\r?\n/)
+				.filter(line => line.trim()).length > 1
+		)
+			return true;
+		const collapsed = jobDetails(job, false, width, []);
+		const expanded = jobDetails(job, true, width, []);
+		return expanded.length !== collapsed.length || expanded.some((line, index) => line !== collapsed[index]);
+	};
+
+	/** One job: `<icon> id - type - exit N - 40% - 4.1s - model - label`, details nested below. */
+	const jobLines = (job: JobSnapshot, expanded: boolean, width: number, live: boolean): string[] => {
+		const sep = uiTheme.sep.dot;
+		const running = job.status === "running";
+		const icon = formatStatusIcon(
+			jobStatusIcon(job.status),
+			uiTheme,
+			running && live ? options.spinnerFrame : undefined,
+		);
+		const facts = jobRowFacts(job, uiTheme).join(sep);
+		const rawLabel = jobRowLabel(job);
+		const labelLines =
+			rawLabel.trim() && rawLabel.trim() !== job.id ? rawLabel.split(/\r?\n/).filter(l => l.trim()) : [];
+		const detailWidth = Math.max(1, width - nestedRowIndent(uiTheme));
+
+		if (job.widget?.state === "live") {
+			// The tile's own chart carries the state; its meta is just progress and age.
+			const tileMeta = compact([
+				running && job.completionPercent !== undefined
+					? uiTheme.fg("accent", `${job.completionPercent}%`)
+					: undefined,
 				uiTheme.fg("dim", formatDuration(job.durationMs)),
 			]).join(" ");
-			lines.push(
+			return [
 				...renderJobTileLines(jobTile(job, live), width, uiTheme, {
-					lead: `${icon} ${typeBadge} `,
-					meta,
-					full: false,
+					lead: `${icon} `,
+					meta: tileMeta,
+					full: expanded,
 				}),
-			);
+				...nestRows(jobDetails(job, expanded, detailWidth, []), uiTheme),
+			];
 		}
-		// Running jobs without a drawn tile (no widget, or past the cap) collapse
-		// into one count; the header already carries it while nothing settled.
-		const quietRunning = counts.running - shownWidgetJobs.length;
-		if (quietRunning > 0 && (settledJobs.length > 0 || shownWidgetJobs.length < widgetJobs.length)) {
-			lines.push(`${indent}${uiTheme.fg("dim", `${quietRunning} still running`)}`);
+
+		// The outcome is reserved first; a long id gives way so a failure is never cut off the row.
+		const idBudget = Math.max(1, width - visibleWidth(`${icon} `) - visibleWidth(`${sep}${facts}`));
+		const id = truncateToWidth(replaceTabs(job.id).replace(/\s+/g, " "), idBudget);
+		const idText =
+			live && running
+				? shimmerEnabled()
+					? shimmerText(id, uiTheme)
+					: uiTheme.fg("accent", id)
+				: uiTheme.fg("accent", id);
+		const modelIdentity = job.resolvedModelIdentity ?? job.resolvedModel;
+		let row = `${icon} ${idText}${sep}${facts}`;
+		if (job.type === "task" && isFeedModelBadgeEnabled() && typeof modelIdentity === "string") {
+			const badgeWidth = Math.min(FEED_MODEL_BADGE_WIDTH, width - visibleWidth(row) - visibleWidth(sep));
+			const badge =
+				badgeWidth > 0
+					? formatFeedModelBadge(
+							modelIdentity,
+							job.resolvedThinkingLevel,
+							job.advisor === true,
+							uiTheme,
+							badgeWidth,
+						)
+					: "";
+			if (badge) row += `${sep}${badge}`;
 		}
-		return lines;
+		const firstLabel = replaceTabs(labelLines[0] ?? "").trim();
+		const labelBudget = Math.min(LABEL_MAX_WIDTH, width - visibleWidth(row) - visibleWidth(sep));
+		if (firstLabel && labelBudget >= 8)
+			row += `${sep}${uiTheme.fg("muted", truncateToWidth(firstLabel, labelBudget))}`;
+		const extraLabels = expanded
+			? labelLines.slice(firstLabel && labelBudget >= 8 ? 1 : 0, LABEL_LINES_EXPANDED).map(replaceTabs)
+			: [];
+		return [
+			truncateToWidth(row, width, ""),
+			...nestRows(jobDetails(job, expanded, detailWidth, extraLabels), uiTheme),
+		];
 	};
+
+	const agentLine = (agent: AgentActivitySnapshot, width: number): string => {
+		const sep = uiTheme.sep.dot;
+		const icon = agent.live
+			? formatStatusIcon("running", uiTheme, options.spinnerFrame)
+			: formatStatusIcon("warning", uiTheme);
+		const badge = agent.live ? formatBadge("agent", "accent", uiTheme) : formatBadge("no turn", "warning", uiTheme);
+		const facts = compact([
+			uiTheme.fg("dim", formatDuration(agent.ageMs)),
+			agent.parentId ? uiTheme.fg("dim", `${uiTheme.format.arrowLeft} ${replaceTabs(agent.parentId)}`) : undefined,
+			agent.activity
+				? uiTheme.fg("toolOutput", truncateToWidth(replaceTabs(agent.activity), LABEL_MAX_WIDTH))
+				: undefined,
+		]).join(sep);
+		const id = uiTheme.fg("accent", replaceTabs(agent.id).replace(/\s+/g, " "));
+		return truncateToWidth(`${icon} ${id} ${badge}${sep}${facts}`, width);
+	};
+
+	let cached: RenderCache | undefined;
 	return {
 		render(width: number): readonly string[] {
 			const expanded = options.expanded;
 			const spinnerFrame = options.spinnerFrame ?? 0;
 			// Running-job labels shimmer while the wait block is live; the band
 			// phase is Date.now()-sampled at render time, so serving cached bytes
-			// would pin it to the ~12.5fps spinner-glyph cadence instead of the
-			// 30fps redraw. Bypass the cache while any row animates, and key on
-			// the animation state so a sealed block never hits stale shimmered
-			// bytes (spinnerFrame falls back to 0 on both sides of the seal).
-			const shimmerActive = counts.running > 0 && options.spinnerFrame !== undefined && shimmerEnabled();
-			const showModelBadge = isFeedModelBadgeEnabled();
+			// would pin it to the spinner cadence. Bypass the cache while any row
+			// animates, and key on the animation state so a sealed block never
+			// hits stale shimmered bytes.
+			const shimmerActive = runningCount > 0 && options.spinnerFrame !== undefined && shimmerEnabled();
 			const key = new Hasher()
 				.bool(expanded)
 				.u32(width)
 				.u32(spinnerFrame)
 				.bool(shimmerActive)
-				.bool(showModelBadge)
+				.bool(isFeedModelBadgeEnabled())
 				.str(widgetStamp(jobs))
 				.digest();
 			if (!shimmerActive && cached?.key === key) return cached.lines;
 
-			const compactView = !expanded && jobs.length > 0;
-			const itemLines = compactView
-				? compactJobLines(width, counts.running > 0 && options.spinnerFrame !== undefined)
-				: renderTreeList<JobSnapshot>(
+			const rowWidth = Math.max(1, width - INDENT.length);
+			const live = options.spinnerFrame !== undefined;
+			const body: string[] = [];
+			if (aggregateArtifactError) {
+				body.push(uiTheme.fg("warning", formatArtifactErrorNotice(aggregateArtifactError)));
+			}
+			body.push(
+				...renderTreeList<JobSnapshot>(
+					{
+						items: sortedJobs,
+						flush: true,
+						expanded,
+						maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
+						itemType: "job",
+						renderItem: job => jobLines(job, expanded, rowWidth, live),
+					},
+					uiTheme,
+				),
+			);
+			if (agents.length > 0) {
+				body.push(
+					...renderTreeList<AgentActivitySnapshot>(
 						{
-							items: sortedJobs,
+							items: agents,
+							flush: true,
 							expanded,
 							maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
-							itemType: "job",
-							renderItem: (job, context) => {
-								const rowWidth = Math.max(0, width - (context.prefixWidth ?? 0));
-								const lines: string[] = [];
-								const icon = `${formatStatusIcon(
-									statusToIcon(job.status),
-									uiTheme,
-									job.status === "running" ? options.spinnerFrame : undefined,
-								)}${job.exitCode === undefined ? "" : `${uiTheme.sep.dot}${uiTheme.fg(job.exitCode === 0 ? "muted" : "error", `exit ${job.exitCode}`)}`}`;
-								const typeBadge = formatBadge(job.type, statusToColor(job.status), uiTheme);
-								const completion =
-									job.status === "running" && job.completionPercent !== undefined
-										? `${uiTheme.sep.dot}${uiTheme.fg("accent", `${job.completionPercent}%`)}`
-										: "";
-								const durationSuffix = `${completion}${uiTheme.sep.dot}${uiTheme.fg("dim", formatDuration(job.durationMs))}`;
-								const displayId = truncateToWidth(
-									replaceTabs(job.id).replace(/\s+/g, " "),
-									Math.max(0, rowWidth - visibleWidth(`${icon} ${typeBadge} ${durationSuffix}`)),
-									Ellipsis.Unicode,
-								);
-								const rowLabel = jobRowLabel(job);
-								const rawLabelLines = (rowLabel || "(no label)").split(/\r?\n/);
-								const maxLabelLines = expanded ? LABEL_LINES_EXPANDED : LABEL_LINES_COLLAPSED;
-								const visibleLabelLines = rawLabelLines
-									.slice(0, maxLabelLines)
-									.map(l => truncateToWidth(replaceTabs(l), LABEL_MAX_WIDTH, Ellipsis.Unicode));
-								if (rawLabelLines.length > maxLabelLines && visibleLabelLines.length > 0) {
-									const last = visibleLabelLines[visibleLabelLines.length - 1]!;
-									visibleLabelLines[visibleLabelLines.length - 1] = `${last} …`;
-								}
-								const rowPrefix = `${icon} ${typeBadge} `;
-								const live = job.status === "running" && options.spinnerFrame !== undefined;
-								const continuationWidth = Math.max(0, rowWidth - visibleWidth("  "));
-								if (job.widget?.state === "live") {
-									const meta = compact([
-										job.status === "running" && job.completionPercent !== undefined
-											? uiTheme.fg("accent", `${job.completionPercent}%`)
-											: undefined,
-										uiTheme.fg("dim", formatDuration(job.durationMs)),
-									]).join(" ");
-									lines.push(
-										...renderJobTileLines(jobTile(job, live), rowWidth, uiTheme, {
-											lead: rowPrefix,
-											meta,
-											full: expanded,
-										}),
-									);
-								} else {
-									const modelIdentity = job.resolvedModelIdentity ?? job.resolvedModel;
-									const modelBadge =
-										job.type === "task" && showModelBadge && typeof modelIdentity === "string"
-											? formatFeedModelBadge(
-													modelIdentity,
-													job.resolvedThinkingLevel,
-													job.advisor === true,
-													uiTheme,
-													Math.min(
-														FEED_MODEL_BADGE_WIDTH,
-														Math.max(
-															0,
-															rowWidth - visibleWidth(`${rowPrefix}${displayId}${durationSuffix}`) - 1,
-														),
-													),
-												)
-											: "";
-									const modelLead = modelBadge ? `${modelBadge} ` : "";
-									const headRaw = displayId;
-									// Running rows in a live block shimmer their label; once the block
-									// stops animating (sealed, or a settled snapshot — spinnerFrame
-									// cleared) they render static so scrollback never keeps a mid-sweep
-									// shimmer band.
-									const headLabel = live
-										? shimmerEnabled()
-											? shimmerText(headRaw, uiTheme)
-											: uiTheme.fg("accent", headRaw)
-										: uiTheme.fg("toolOutput", headRaw);
-									let row = `${rowPrefix}${modelLead}${headLabel}`;
-									const distinctLabel = rowLabel.trim() !== job.id;
-									const label = visibleLabelLines[0] ?? "";
-									const inlineLabel =
-										distinctLabel && visibleWidth(`${row} ${label}${durationSuffix}`) <= rowWidth;
-									if (inlineLabel) row += ` ${uiTheme.fg("toolOutput", label)}`;
-									row += durationSuffix;
-									lines.push(truncateToWidth(row, rowWidth, ""));
-									for (let i = distinctLabel && !inlineLabel ? 0 : 1; i < visibleLabelLines.length; i++) {
-										lines.push(
-											`  ${uiTheme.fg("toolOutput", truncateToWidth(visibleLabelLines[i]!, continuationWidth))}`,
-										);
-									}
-								}
-								const artifactError = job.meta?.artifactError ?? job.artifactError;
-								if (artifactError) {
-									lines.push(
-										uiTheme.fg(
-											"warning",
-											truncateToWidth(formatArtifactErrorNotice(artifactError), rowWidth),
-										),
-									);
-								}
-
-								for (const previewLine of jobPreviewRows(job, expanded, continuationWidth))
-									lines.push(previewLine);
-								return lines;
-							},
+							itemType: "agent",
+							renderItem: agent => agentLine(agent, rowWidth),
 						},
 						uiTheme,
-					);
-
-			// Agents run outside job control; render them as their own tree so
-			// they never skew the job counts or the "waiting on N jobs" title.
-			const agentLines =
-				agents.length === 0
-					? []
-					: renderTreeList<AgentActivitySnapshot>(
-							{
-								items: agents,
-								expanded,
-								maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
-								itemType: "agent",
-								renderItem: (agent, context) => {
-									const rowWidth = Math.max(0, width - (context.prefixWidth ?? 0));
-									const icon = agent.live
-										? formatStatusIcon("running", uiTheme, options.spinnerFrame)
-										: formatStatusIcon("warning", uiTheme);
-									const badge = agent.live
-										? formatBadge("agent", "accent", uiTheme)
-										: formatBadge("agent · no turn", "warning", uiTheme);
-									const id = truncateToWidth(
-										replaceTabs(agent.id).replace(/\s+/g, " "),
-										Math.max(0, rowWidth - visibleWidth(`${icon}  ${badge}`)),
-										Ellipsis.Unicode,
-									);
-									const gist = agent.activity
-										? ` ${uiTheme.fg("toolOutput", truncateToWidth(replaceTabs(agent.activity), LABEL_MAX_WIDTH, Ellipsis.Unicode))}`
-										: "";
-									const parent = agent.parentId ? uiTheme.fg("dim", ` ← ${agent.parentId}`) : "";
-									const age = uiTheme.fg("dim", formatDuration(agent.ageMs));
-									return [
-										truncateToWidth(
-											`${icon} ${uiTheme.fg("muted", id)} ${badge}${gist} ${age}${parent}`,
-											rowWidth,
-											"",
-										),
-									];
-								},
-							},
-							uiTheme,
-						);
-
-			const all = compactView && settledJobs.length > 0 ? [] : [header];
-			if (aggregateArtifactError) {
-				all.push(uiTheme.fg("warning", formatArtifactErrorNotice(aggregateArtifactError)));
+					),
+				);
 			}
-			all.push(...itemLines, ...agentLines);
-			for (let i = 0; i < all.length; i++) all[i] = truncateToWidth(all[i]!, width, Ellipsis.Unicode);
+			// A capped list carries the hint on its `… N more` row; otherwise say so when a row holds back detail.
+			const capped =
+				sortedJobs.length > PREVIEW_LIMITS.COLLAPSED_ITEMS || agents.length > PREVIEW_LIMITS.COLLAPSED_ITEMS;
+			if (!expanded && !capped && sortedJobs.some(job => jobHidesDetail(job, rowWidth))) {
+				body.push(formatExpandHint(uiTheme));
+			}
+			const all = fitFlushRows([header, ...body.map(line => `${INDENT}${line}`)], width);
 			cached = { key, lines: all };
 			return all;
 		},
@@ -648,44 +579,35 @@ const BODY_LINES_COLLAPSED = 2;
 const BODY_LINES_EXPANDED = 12;
 const BODY_LINE_WIDTH = 100;
 
-function ircGlyph(theme: Theme): string {
-	return theme.styledSymbol("tool.irc", "accent");
-}
-
 function messageAge(ts: number | undefined): string {
 	if (!ts) return "";
 	return formatAge(Math.max(1, Math.round((Date.now() - ts) / 1000)));
 }
 
 /**
- * Quote-bordered message body preview. `tone` separates outbound text (dim)
- * from received text (toolOutput); a trailing dim counter marks elided lines.
+ * Message body preview rows, indented under the header. `tone` separates
+ * outbound text (dim) from received text (toolOutput); a trailing dim row
+ * counts elided lines.
  */
 function bodyLines(
 	body: string,
 	expanded: boolean,
 	theme: Theme,
-	options: {
-		indent?: string;
-		tone?: "dim" | "toolOutput";
-		collapsedLines?: number;
-	} = {},
+	options: { tone?: "dim" | "toolOutput"; collapsedLines?: number } = {},
 ): string[] {
-	const indent = options.indent ?? "";
 	const tone = options.tone ?? "toolOutput";
 	const max = expanded ? BODY_LINES_EXPANDED : (options.collapsedLines ?? BODY_LINES_COLLAPSED);
 	const preview = cappedHeadLines(
 		body.split("\n").filter(line => line.trim()),
 		max,
 	);
-	const quote = theme.fg("dim", theme.md.quoteBorder);
 	const lines = preview.lines.map(
-		line =>
-			`${indent}${quote} ${theme.fg(tone, replaceTabs(truncateToWidth(line.trim(), BODY_LINE_WIDTH, Ellipsis.Unicode)))}`,
+		line => `${INDENT}${theme.fg(tone, replaceTabs(truncateToWidth(line.trim(), BODY_LINE_WIDTH)))}`,
 	);
-	const hidden = preview.hidden;
-	if (hidden > 0) {
-		lines.push(`${indent}${quote} ${theme.fg("dim", `… +${hidden} more ${hidden === 1 ? "line" : "lines"}`)}`);
+	if (preview.hidden > 0) {
+		lines.push(
+			`${INDENT}${theme.fg("dim", formatMoreItems(preview.hidden, "line", theme))} ${formatExpandHint(theme, expanded, true)}`,
+		);
 	}
 	return lines;
 }
@@ -694,8 +616,7 @@ function bodyLines(
  * Display-only transcript card for live IRC traffic: `irc:incoming` DMs
  * delivered to this session, `irc:autoreply` side-channel replies sent on
  * this session's behalf, and `irc:relay` observations of agent↔agent
- * traffic. Shares the tool renderer's glyph + quote-border conventions so
- * cards and peer-message output look identical in the transcript.
+ * traffic. Shares the IRC tool card's header and body conventions.
  */
 export function createIrcMessageCard(
 	card: {
@@ -712,14 +633,17 @@ export function createIrcMessageCard(
 	uiTheme: Theme,
 ): Component {
 	const from = card.from?.trim() || "?";
-	const title =
+	const to = card.to?.trim() || "?";
+	const { arrowLeft, arrowRight } = uiTheme.format;
+	const title = card.kind === "workpool" ? "Pool" : "IRC";
+	const subject =
 		card.kind === "incoming"
-			? `IRC ${uiTheme.nav.back} ${from}`
+			? `${arrowLeft} ${from}`
 			: card.kind === "autoreply"
-				? `IRC ${uiTheme.nav.selected} ${card.to?.trim() || "?"}`
+				? `${arrowRight} ${to}`
 				: card.kind === "workpool"
-					? `Pool ${card.pool?.trim() || "?"} ${uiTheme.nav.selected} ${card.to?.trim() || "?"}`
-					: `IRC ${from} ${uiTheme.nav.selected} ${card.to?.trim() || "?"}`;
+					? `${card.pool?.trim() || "?"} ${arrowRight} ${to}`
+					: `${from} ${arrowRight} ${to}`;
 	const body = card.body ?? "";
 	const meta: string[] = [];
 	if (card.kind === "autoreply") meta.push("auto");
@@ -728,16 +652,9 @@ export function createIrcMessageCard(
 	const age = messageAge(card.timestamp);
 	if (age) meta.push(age);
 	const component = createCachedComponent(getExpanded, (width, expanded) => {
-		const lines = [renderStatusLine({ iconOverride: ircGlyph(uiTheme), title, meta }, uiTheme)];
-		if (body.trim()) {
-			lines.push(
-				...bodyLines(body, expanded, uiTheme, {
-					indent: "  ",
-					collapsedLines: 3,
-				}),
-			);
-		}
-		return lines.map(line => truncateToWidth(line, width, Ellipsis.Unicode));
+		const lines = [renderStatusLine({ icon: "info", title, description: subject, meta }, uiTheme)];
+		if (body.trim()) lines.push(...bodyLines(body, expanded, uiTheme, { collapsedLines: 3 }));
+		return fitFlushRows(lines, width);
 	});
 	// Terminal-local collapse replaces `getExpanded`; the node never changes after creation.
 	const described = cardNode(
@@ -745,8 +662,10 @@ export function createIrcMessageCard(
 			role: `omp.irc.${card.kind}`,
 			tone: "info",
 			head: [
-				span(plainText(title), "toolTitle strong"),
-				...meta.filter(part => part !== age).map(part => span(` ${part}`, "muted")),
+				span(title, "accent"),
+				span(": "),
+				span(plainText(subject), "muted"),
+				...meta.filter(part => part !== age).map(part => span(` ${part}`, "dim")),
 			],
 			collapsible: body.trim().length > 0,
 			preview: { lines: 3 },
@@ -769,33 +688,18 @@ function describeJobsResult(
 	const agents = result.details?.agents ?? [];
 	if (jobs.length === 0 && agents.length === 0) {
 		return {
-			head: toolHead("Wait"),
+			head: toolHead("Wait", "0 jobs"),
 			tone: "warning",
-			body: [text([span(plainText(resultText(result) || "No jobs to process"), "dim")])],
+			body: [text([span(plainText(resultText(result) || "No jobs to process"), "muted")])],
 		};
 	}
-	const counts = { completed: 0, failed: 0, cancelled: 0, running: 0 };
-	for (const job of jobs) counts[job.status]++;
-	const noun = jobs.length === 1 ? "job" : "jobs";
-	const title =
-		jobs.length === 0
-			? `${agents.length} running agent${agents.length === 1 ? "" : "s"} — no jobs`
-			: counts.running > 0
-				? counts.running === jobs.length
-					? `waiting on ${jobs.length} ${noun}`
-					: `waiting on ${counts.running} of ${jobs.length} ${noun}`
-				: `${jobs.length} ${noun} settled`;
-	const head: TspSpan[] = [span(title, "toolTitle strong")];
-	if (counts.completed > 0) head.push(span(` ${counts.completed} done`, "success"));
-	if (counts.failed > 0) head.push(span(` ${counts.failed} failed`, "error"));
-	if (counts.cancelled > 0) head.push(span(` ${counts.cancelled} cancelled`, "warning"));
-	const order: Record<JobSnapshot["status"], number> = {
-		running: 0,
-		failed: 1,
-		cancelled: 2,
-		completed: 3,
-	};
-	const sorted = [...jobs].sort((a, b) => order[a.status] - order[b.status] || b.durationMs - a.durationMs);
+	const outcome = waitOutcome(jobs, agents.length);
+	const head: TspSpan[] = [span("Wait", "accent"), span(": "), span(waitSubject(jobs.length, agents.length), "muted")];
+	const meta = waitMeta(jobs, agents.length);
+	if (meta.length > 0) head.push(span(` ${meta.join(" · ")}`, "dim"));
+	const sorted = [...jobs].sort(
+		(a, b) => JOB_STATUS_ORDER[a.status] - JOB_STATUS_ORDER[b.status] || b.durationMs - a.durationMs,
+	);
 	// One frame of tiles: each job's status, title, figure and widget together. The job's output
 	// and errors fill the card of the call that started it (`parksAsBackground`), so no previews.
 	const body: NativeNode[] = [];
@@ -807,16 +711,16 @@ function describeJobsResult(
 		body.push(text([span(`+${rest} more ${rest === 1 ? "job" : "jobs"} · /jobs`, "dim")], { role: "omp.wait.more" }));
 	}
 	for (const agent of agents) {
-		const spans: TspSpan[] = [span(plainText(agent.id), "muted")];
-		if (agent.activity) spans.push(span(` ${plainText(agent.activity)}`, "toolOutput"));
+		const spans: TspSpan[] = [span(plainText(agent.id), "accent")];
 		if (agent.parentId) spans.push(span(` ← ${plainText(agent.parentId)}`, "dim"));
+		if (agent.activity) spans.push(span(` ${plainText(agent.activity)}`, "toolOutput"));
 		body.push(
 			node(
 				"row",
 				{ gap: "sm", role: "omp.wait.agent" },
 				[
 					node("badge", {
-						text: agent.live ? "agent" : "agent · no turn",
+						text: agent.live ? "agent" : "no turn",
 						tone: agent.live ? "accent" : "warning",
 					}),
 					text(spans, { truncate: "end", grow: 1 }),
@@ -828,25 +732,25 @@ function describeJobsResult(
 	}
 	return {
 		head,
-		tone: counts.failed > 0 ? "warning" : counts.running > 0 || agents.length > 0 ? "info" : "success",
+		tone: outcome,
 		// The tiles are what a wait shows: clamping the body by lines would cut them.
 		preview: "children",
 		body,
 	};
 }
 
-/** Received-message view: sender head, terminal-clocked age, markdown body. */
+/** Received-message view: `Wait` head with the sender and age, markdown body. */
 function describeMessage(
 	from: string,
 	ts: number | undefined,
 	bodyText: string,
 	meta: readonly string[],
 ): NativeToolView {
-	const head: TspSpan[] = [span(`IRC ← ${plainText(from)}`, "toolTitle strong")];
-	for (const part of meta) head.push(span(` ${part}`, "muted"));
+	const head: TspSpan[] = [span("Wait", "accent"), span(": "), span(`← ${plainText(from)}`, "muted")];
+	for (const part of meta) head.push(span(` ${part}`, "dim"));
 	return {
 		head,
-		tone: "info",
+		tone: "success",
 		preview: { lines: BODY_LINES_COLLAPSED + 1 },
 		body: compact([
 			ts
@@ -882,7 +786,7 @@ export const waitToolRenderer = {
 			if (details?.interrupted) {
 				return {
 					head: toolHead("Wait", "interrupted by message"),
-					tone: "info",
+					tone: "warning",
 					inline: true,
 				};
 			}
@@ -900,9 +804,22 @@ export const waitToolRenderer = {
 		options: RenderResultOptions,
 		uiTheme: Theme,
 	): Component {
-		if (result.details?.interrupted && !result.isError) {
+		if (result.isError) {
+			const message = result.content?.find(c => c.type === "text")?.text;
 			return new Text(
-				renderStatusLine({ icon: "info", title: "Wait", meta: ["interrupted by message"] }, uiTheme),
+				[
+					renderStatusLine({ icon: "error", title: "Wait" }, uiTheme),
+					...sanitizeDisplayLines(message?.trim() || "Wait failed").map(
+						line => `${INDENT}${formatErrorText(line, uiTheme)}`,
+					),
+				].join("\n"),
+				0,
+				0,
+			);
+		}
+		if (result.details?.interrupted) {
+			return new Text(
+				renderStatusLine({ icon: "warning", title: "Wait", meta: ["interrupted by message"] }, uiTheme),
 				0,
 				0,
 			);
@@ -912,17 +829,21 @@ export const waitToolRenderer = {
 		return createCachedComponent(
 			() => options.expanded,
 			(width, expanded) =>
-				[
-					renderStatusLine(
-						{
-							iconOverride: ircGlyph(uiTheme),
-							title: `IRC ${uiTheme.nav.back} ${replaceTabs(waited.from)}`,
-							meta: [messageAge(waited.ts), ...(waited.replyTo ? ["reply"] : [])],
-						},
-						uiTheme,
-					),
-					...bodyLines(waited.body, expanded, uiTheme, { indent: "  " }),
-				].map(line => truncateToWidth(line, width, Ellipsis.Unicode)),
+				fitFlushRows(
+					[
+						renderStatusLine(
+							{
+								icon: "success",
+								title: "Wait",
+								description: `${uiTheme.format.arrowLeft} ${replaceTabs(waited.from)}`,
+								meta: [messageAge(waited.ts), ...(waited.replyTo ? ["reply"] : [])],
+							},
+							uiTheme,
+						),
+						...bodyLines(waited.body, expanded, uiTheme),
+					],
+					width,
+				),
 		);
 	},
 } satisfies ToolRenderer<object, CoordinationDetails>;

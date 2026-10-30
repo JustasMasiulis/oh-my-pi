@@ -13,10 +13,10 @@ import { expandWindowsLongPath, getWindowsShortPath } from "@oh-my-pi/pi-natives
 import { pluralize, sanitizeText } from "@oh-my-pi/pi-utils";
 import { formatKeyHint, type KeyId } from "../app-keybindings";
 import { getKeybindings } from "../keybindings";
-import type { Theme } from "../theme/theme";
+import type { Theme, ThemeColor } from "../theme/theme";
 import type { Component } from "../tui";
 import { replaceTabs, sliceByColumn, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
-import { Hasher } from "./utils";
+import { getTreeBranch, Hasher } from "./utils";
 
 export { Ellipsis } from "@oh-my-pi/pi-natives";
 export { replaceTabs, truncateToWidth, wrapTextWithAnsi } from "../utils";
@@ -212,13 +212,14 @@ export function expandKeyHint(): string {
 // Text Truncation Utilities
 // =============================================================================
 /** Keep both ends of a single-line label without splitting wide characters. */
-export function truncateMiddleToWidth(text: string, maxWidth: number): string {
+export function truncateMiddleToWidth(text: string, maxWidth: number, ellipsis = "…"): string {
 	const width = visibleWidth(text);
 	if (width <= maxWidth) return text;
-	if (maxWidth <= 1) return maxWidth === 1 ? "…" : "";
-	const tailWidth = Math.ceil((maxWidth - 1) / 2);
-	const headWidth = maxWidth - 1 - tailWidth;
-	return `${sliceByColumn(text, 0, headWidth, true)}…${sliceByColumn(text, width - tailWidth, tailWidth, true)}`;
+	const ellipsisWidth = visibleWidth(ellipsis);
+	if (maxWidth <= ellipsisWidth) return sliceByColumn(ellipsis, 0, Math.max(0, maxWidth), true);
+	const tailWidth = Math.ceil((maxWidth - ellipsisWidth) / 2);
+	const headWidth = maxWidth - ellipsisWidth - tailWidth;
+	return `${sliceByColumn(text, 0, headWidth, true)}${ellipsis}${sliceByColumn(text, width - tailWidth, tailWidth, true)}`;
 }
 
 /** Select a leading line window and count the lines hidden after it. */
@@ -290,18 +291,19 @@ export { formatAge, formatBytes, formatCount, formatDuration, formatNumber, plur
  */
 export function formatStatusIcon(status: ToolUIStatus, theme: Theme, spinnerFrame?: number): string {
 	switch (status) {
+		// Success is the common case: neutral gray keeps a transcript of settled
+		// calls from turning green; failures and warnings keep their colors.
 		case "success":
-			return theme.styledSymbol("status.success", "success");
-		case "done":
-			return theme.styledSymbol("status.done", "success");
+			return theme.styledSymbol("status.success", "muted");
 		case "error":
 			return theme.styledSymbol("status.error", "error");
 		case "warning":
 			return theme.styledSymbol("status.warning", "warning");
 		case "info":
 			return theme.styledSymbol("status.info", "accent");
+		// The theme's link color: blue in most bundled themes.
 		case "pending":
-			return theme.styledSymbol("status.pending", "muted");
+			return theme.styledSymbol("status.pending", "mdLink");
 		case "running":
 			if (spinnerFrame !== undefined) {
 				const frames = theme.spinnerFrames;
@@ -314,13 +316,21 @@ export function formatStatusIcon(status: ToolUIStatus, theme: Theme, spinnerFram
 }
 
 /**
+ * The expand hint's unstyled text (`[Ctrl+O: Expand]`), for surfaces whose own
+ * styling a foreground color would break, such as an inverse banner.
+ */
+export function expandHintLabel(theme: Theme): string {
+	return wrapBrackets(`${expandKeyHint()}: Expand`, theme);
+}
+
+/**
  * Format the expand hint with proper theming.
  * Returns empty string if already expanded or there is nothing more to show.
  */
 export function formatExpandHint(theme: Theme, expanded?: boolean, hasMore?: boolean): string {
 	if (expanded) return "";
 	if (hasMore === false) return "";
-	return theme.fg("dim", wrapBrackets(`${expandKeyHint()}: Expand`, theme));
+	return theme.fg("dim", expandHintLabel(theme));
 }
 
 /**
@@ -333,12 +343,17 @@ export function formatBadge(label: string, color: ToolUIColor, theme: Theme): st
 }
 
 /**
- * Build a "more items" suffix line for truncated lists.
- * Uses consistent wording pattern.
+ * Build a "more items" row for truncated lists: `… N more items`, or
+ * `… N earlier items` when the hidden rows precede the visible window.
  */
-export function formatMoreItems(remaining: number, itemType: string): string {
+export function formatMoreItems(
+	remaining: number,
+	itemType: string,
+	theme: Theme,
+	position: "more" | "earlier" = "more",
+): string {
 	const safeRemaining = Number.isFinite(remaining) ? remaining : 0;
-	return `… ${safeRemaining} more ${pluralize(itemType, safeRemaining)}`;
+	return `${theme.format.ellipsis} ${safeRemaining} ${position} ${pluralize(itemType, safeRemaining)}`;
 }
 
 /**
@@ -383,18 +398,13 @@ export function capPreviewLines(
 	const visible = max <= 1 ? [] : lines.slice(lines.length - (max - 1));
 	const hidden = lines.length - visible.length;
 	const hint = options.expandHint === false ? "" : formatExpandHint(theme, false, true);
-	const marker = `… ${hidden} earlier ${pluralize("line", hidden)}${hint ? ` ${hint}` : ""}`;
+	const marker = `${formatMoreItems(hidden, "line", theme, "earlier")}${hint ? ` ${hint}` : ""}`;
 	return [`${options.prefix ?? ""}${theme.fg("dim", marker)}`, ...visible];
 }
 
 /** Join metadata with the theme separator and muted styling. */
 export function formatMeta(meta: string[], theme: Theme): string {
 	return meta.length > 0 ? ` ${theme.fg("muted", meta.join(theme.sep.dot))}` : "";
-}
-
-function sanitizeErrorText(message: string | undefined): string {
-	const clean = (message ?? "").replace(/^Error:\s*/, "").trim();
-	return clean ? replaceTabs(truncateToWidth(clean, TRUNCATE_LENGTHS.LINE)) : "Unknown error";
 }
 
 /**
@@ -412,25 +422,54 @@ export function sanitizeDisplayLines(text: string): string[] {
 	});
 }
 
-/** Render a sanitized error message with its status icon. */
-export function formatErrorMessage(message: string | undefined, theme: Theme): string {
-	return `${theme.styledSymbol("status.error", "error")} ${theme.fg("error", `Error: ${sanitizeErrorText(message)}`)}`;
+/**
+ * Error text for the body of a card whose header already carries the error
+ * status: no icon, no `Error:` prefix, every line kept and sanitized. Cards
+ * wrap long rows, so the message is never clipped.
+ */
+export function formatErrorText(message: string | undefined, theme: Theme): string {
+	const clean = (message ?? "").replace(/^Error:\s*/, "").trim();
+	if (!clean) return theme.fg("error", "Unknown error");
+	return sanitizeDisplayLines(clean)
+		.map(line => theme.fg("error", line))
+		.join("\n");
+}
+
+/** One warning row per search path a tool skipped because it does not exist. */
+export function formatMissingPathRows(paths: readonly string[], theme: Theme): string[] {
+	return paths.map(missing => theme.fg("warning", `skipped missing: ${replaceTabs(missing)}`));
 }
 
 /**
- * Error message rendered as a subordinate detail line beneath a status header
- * that already carries the error icon (e.g. `✘ Write: <path>`). The header's
- * icon already signals failure, so this omits the redundant error symbol and
- * "Error:" prefix that `formatErrorMessage` adds for standalone single-line
- * errors, indenting two columns to sit under the header title instead.
+ * Color of a file's name, or a whole URL, in tool bodies: bronze keeps paths
+ * apart from the blue tool titles above them.
  */
-export function formatErrorDetail(message: string | undefined, theme: Theme): string {
-	return `  ${theme.fg("error", sanitizeErrorText(message))}`;
+export const FILE_NAME_COLOR = "customMessageLabel" satisfies ThemeColor;
+
+/**
+ * A file path in a tool body: the directory dim, the final segment (file or
+ * folder name) in {@link FILE_NAME_COLOR}. Headers keep paths in their plain
+ * subject color instead.
+ */
+export function formatStyledPath(filePath: string, theme: Theme): string {
+	const end = filePath.replace(/[/\\]+$/, "").length;
+	const slash = Math.max(filePath.lastIndexOf("/", end - 1), filePath.lastIndexOf("\\", end - 1));
+	if (end === 0 || slash < 0) return theme.fg(FILE_NAME_COLOR, filePath);
+	return `${theme.fg("dim", filePath.slice(0, slash + 1))}${theme.fg(FILE_NAME_COLOR, filePath.slice(slash + 1))}`;
 }
 
-/** Render a muted empty-state message with a warning icon. */
-export function formatEmptyMessage(message: string, theme: Theme): string {
-	return `${theme.styledSymbol("status.warning", "warning")} ${theme.fg("muted", message)}`;
+/**
+ * A search header subject, `subject in scope`, with `in` dim so the pattern
+ * and the scope read as two parts of the muted subject.
+ */
+export function formatScopedSubject(
+	subject: string | undefined,
+	scope: string | undefined,
+	theme: Theme,
+): string | undefined {
+	if (!scope) return subject;
+	const keyword = theme.fg("dim", "in");
+	return subject ? `${subject} ${keyword} ${scope}` : `${keyword} ${scope}`;
 }
 
 // =============================================================================
@@ -440,17 +479,29 @@ export function formatEmptyMessage(message: string, theme: Theme): string {
 /** Marker displayed in the gutter of a code frame. */
 export type CodeFrameMarker = "" | " " | "*" | "+" | "-" | ">";
 
-/** Format a code-frame row with a padded line-number gutter. */
+/**
+ * Canonical code-frame gutter separator. Tools bake it into persisted display
+ * text (`details.displayContent`), which renderers parse and redraw with the
+ * theme's `boxSharp.vertical`.
+ */
+export const CODE_FRAME_GUTTER = "│";
+
+/**
+ * Format a code-frame row with a padded line-number gutter. `gutter` is the
+ * separator: {@link CODE_FRAME_GUTTER} for persisted text, the theme's
+ * `boxSharp.vertical` when drawing directly.
+ */
 export function formatCodeFrameLine(
 	marker: CodeFrameMarker,
 	lineNumber: string | number,
 	content: string,
 	lineNumberWidth: number,
+	gutter: string,
 ): string {
 	const markerText = marker.trim();
 	const lineNumberText = String(lineNumber).trim();
 	const gutterText = markerText && lineNumberText ? `${markerText}${lineNumberText}` : lineNumberText || markerText;
-	return `${gutterText.padStart(lineNumberWidth + 1, " ")}│${content}`;
+	return `${gutterText.padStart(lineNumberWidth + 1, " ")}${gutter}${content}`;
 }
 
 // =============================================================================
@@ -458,20 +509,9 @@ export function formatCodeFrameLine(
 // =============================================================================
 
 /** Status states supported by shared tool renderer icons. */
-export type ToolUIStatus = "success" | "done" | "error" | "warning" | "info" | "pending" | "running" | "aborted";
+export type ToolUIStatus = "success" | "error" | "warning" | "info" | "pending" | "running" | "aborted";
 /** Semantic foreground colors used by tool renderer labels. */
 export type ToolUIColor = "success" | "error" | "warning" | "accent" | "muted";
-
-/** Presentation options for a tool title. */
-export interface ToolUITitleOptions {
-	bold?: boolean;
-}
-
-/** Render a themed tool title with optional bold emphasis. */
-export function formatTitle(label: string, theme: Theme, options?: ToolUITitleOptions): string {
-	const content = options?.bold === false ? label : theme.bold(label);
-	return theme.fg("toolTitle", content);
-}
 
 // =============================================================================
 // Diagnostic Formatting
@@ -521,7 +561,29 @@ export function parseDiagnosticMessage(msg: string): ParsedDiagnostic | null {
 	};
 }
 
-/** Render diagnostic summaries and optionally expanded messages. */
+/** A diagnostic message led by its severity's status icon and tinted to match. */
+function formatSeverityMessage(severity: ParsedDiagnostic["severity"], message: string, theme: Theme): string {
+	switch (severity) {
+		case "error":
+			return `${formatStatusIcon("error", theme)} ${theme.fg("error", message)}`;
+		case "warning":
+			return `${formatStatusIcon("warning", theme)} ${theme.fg("warning", message)}`;
+		default:
+			return `${formatStatusIcon("info", theme)} ${theme.fg("toolOutput", message)}`;
+	}
+}
+
+/** Collapsed diagnostic budget; the rest fold into a `… N more diagnostics` row. */
+const COLLAPSED_DIAGNOSTICS = 5;
+
+/**
+ * Render diagnostics as a labelled section: the first row is the section label
+ * (`Diagnostics (summary)`), then one flush row per file with its diagnostics
+ * nested under it by tree connectors, each led by its severity's status icon.
+ * Unparseable messages follow as flush rows; a collapsed overflow ends with a
+ * `… N more diagnostics` row. Card renderers lift the label row into their
+ * section label; standalone callers print it as is.
+ */
 export function formatDiagnostics(
 	diag: { errored: boolean; summary: string; messages: string[] },
 	expanded: boolean,
@@ -533,7 +595,6 @@ export function formatDiagnostics(
 
 	const byFile = new Map<string, ParsedDiagnostic[]>();
 	const unparsed: string[] = [];
-
 	for (const msg of diag.messages) {
 		const parsed = parseDiagnosticMessage(msg);
 		if (parsed) {
@@ -544,7 +605,6 @@ export function formatDiagnostics(
 			unparsed.push(sanitizeDiagnosticDisplayText(msg));
 		}
 	}
-
 	for (const diagnostics of byFile.values()) {
 		diagnostics.sort((a, b) => {
 			const severityCompare = getSeverityRank(a.severity) - getSeverityRank(b.severity);
@@ -555,100 +615,37 @@ export function formatDiagnostics(
 		});
 	}
 
-	const headerIcon = diag.errored
-		? theme.styledSymbol("status.error", "error")
-		: theme.styledSymbol("status.warning", "warning");
 	const summary = sanitizeDiagnosticDisplayText(diag.summary);
-	const summaryTag = summary ? ` ${theme.fg("dim", `(${summary})`)}` : "";
-	let output = `\n\n${headerIcon} ${theme.fg("toolTitle", options?.title ?? "Diagnostics")}${summaryTag}`;
+	const label = `${theme.fg("toolTitle", options?.title ?? "Diagnostics")}${summary ? ` ${theme.fg("dim", `(${summary})`)}` : ""}`;
+	const rows = [label];
 
-	const maxDiags = expanded ? diag.messages.length : 5;
-	let diagsShown = 0;
-
-	const files = Array.from(byFile.entries());
-
-	// Count total diagnostics for "... X more" calculation
-	const totalParsedDiags = files.reduce((sum, [, diags]) => sum + diags.length, 0);
-	const totalDiags = totalParsedDiags + unparsed.length;
-
-	// Helper to check if this is the very last item in the tree
-	const isTreeEnd = (fileIdx: number, diagIdx: number | null, unparsedIdx: number | null): boolean => {
-		const willShowMore = totalDiags > diagsShown + 1;
-		if (willShowMore) return false;
-
-		if (unparsedIdx !== null) {
-			return unparsedIdx === unparsed.length - 1;
-		}
-		if (diagIdx !== null) {
-			const isLastDiagInFile = diagIdx === files[fileIdx][1].length - 1;
-			const isLastFile = fileIdx === files.length - 1;
-			return isLastDiagInFile && isLastFile && unparsed.length === 0;
-		}
-		// File node - never the tree end if it has diagnostics
-		return false;
-	};
-
-	for (let fi = 0; fi < files.length && diagsShown < maxDiags; fi++) {
-		const [filePath, diagnostics] = files[fi];
-		// File is "last" only if no more files AND no unparsed AND we'll show all diags AND no "... X more"
-		const remainingDiagsInFile = diagnostics.length;
-		const remainingDiagsAfter = files.slice(fi + 1).reduce((sum, [, d]) => sum + d.length, 0) + unparsed.length;
-		const willShowAllRemaining = diagsShown + remainingDiagsInFile + remainingDiagsAfter <= maxDiags;
-		const isLastFileNode = fi === files.length - 1 && unparsed.length === 0 && willShowAllRemaining;
-		const fileBranch = isLastFileNode ? theme.tree.last : theme.tree.branch;
-
-		const fileIcon = theme.fg("muted", getLangIcon(filePath));
-		output += `\n ${theme.fg("dim", fileBranch)} ${fileIcon} ${theme.fg("accent", filePath)}`;
-
-		for (let di = 0; di < diagnostics.length && diagsShown < maxDiags; di++) {
-			const d = diagnostics[di];
-			const isLastDiagInFile = di === diagnostics.length - 1;
-			// This is the last visible diag in file if it's actually last OR we're about to hit the limit
-			const atDisplayLimit = diagsShown + 1 >= maxDiags;
-			const isLastVisibleInFile = isLastDiagInFile || atDisplayLimit;
-			// Check if this is the last visible item in the entire tree
-			const isVeryLast = isTreeEnd(fi, di, null);
-			const diagBranch = isLastFileNode
-				? isLastVisibleInFile || isVeryLast
-					? `  ${theme.tree.last}`
-					: `  ${theme.tree.branch}`
-				: isLastVisibleInFile || isVeryLast
-					? `${theme.tree.vertical} ${theme.tree.last}`
-					: `${theme.tree.vertical} ${theme.tree.branch}`;
-
-			const sevIcon =
-				d.severity === "error"
-					? theme.styledSymbol("status.error", "error")
-					: d.severity === "warning"
-						? theme.styledSymbol("status.warning", "warning")
-						: theme.styledSymbol("status.info", "muted");
-			const location = theme.fg("dim", `:${d.line}:${d.col}`);
+	const maxDiags = expanded ? diag.messages.length : COLLAPSED_DIAGNOSTICS;
+	let shown = 0;
+	for (const [filePath, diagnostics] of byFile) {
+		if (shown >= maxDiags) break;
+		rows.push(`${theme.fg("muted", getLangIcon(filePath))} ${formatStyledPath(filePath, theme)}`);
+		const visible = diagnostics.slice(0, maxDiags - shown);
+		for (let index = 0; index < visible.length; index++) {
+			const d = visible[index]!;
+			const branch = theme.fg("dim", getTreeBranch(index === visible.length - 1, theme));
+			const location = theme.fg("muted", ` :${d.line}:${d.col}`);
 			const codeTag = d.code ? theme.fg("dim", ` (${d.code})`) : "";
-			const msgColor = d.severity === "error" ? "error" : d.severity === "warning" ? "warning" : "toolOutput";
-
-			output += `\n ${theme.fg("dim", diagBranch)} ${sevIcon}${location} ${theme.fg(msgColor, d.message)}${codeTag}`;
-			diagsShown++;
+			rows.push(`${branch} ${formatSeverityMessage(d.severity, d.message, theme)}${location}${codeTag}`);
 		}
+		shown += visible.length;
+	}
+	for (const msg of unparsed) {
+		if (shown >= maxDiags) break;
+		const severity = msg.includes("[error]") ? "error" : msg.includes("[warning]") ? "warning" : "info";
+		rows.push(formatSeverityMessage(severity, msg, theme));
+		shown++;
 	}
 
-	for (let ui = 0; ui < unparsed.length && diagsShown < maxDiags; ui++) {
-		const msg = unparsed[ui];
-		const isVeryLast = isTreeEnd(-1, null, ui);
-		const branch = isVeryLast ? theme.tree.last : theme.tree.branch;
-		const color = msg.includes("[error]") ? "error" : msg.includes("[warning]") ? "warning" : "dim";
-		output += `\n ${theme.fg("dim", branch)} ${theme.fg(color, msg)}`;
-		diagsShown++;
+	const remaining = diag.messages.length - shown;
+	if (remaining > 0) {
+		rows.push(theme.fg("dim", `${formatMoreItems(remaining, "diagnostic", theme)} ${formatExpandHint(theme)}`));
 	}
-
-	if (totalDiags > diagsShown) {
-		const remaining = totalDiags - diagsShown;
-		output += `\n ${theme.fg("dim", theme.tree.last)} ${theme.fg(
-			"muted",
-			`… ${remaining} more`,
-		)} ${formatExpandHint(theme)}`;
-	}
-
-	return output;
+	return rows.join("\n");
 }
 
 // =============================================================================
@@ -1286,4 +1283,29 @@ function parseStringEncodedPathArray(input: string): string[] | null {
 export function toPathList(input: string | string[] | undefined): string[] {
 	if (typeof input === "string") return parseStringEncodedPathArray(input) ?? [input];
 	return input ?? [];
+}
+
+/**
+ * {@link toPathList} for display: also splits the semicolons the search tools
+ * treat as separators (`a/*.ts;b/*.ts`), outside glob braces. The tools decide
+ * whether a semicolon separates only after checking the literal path exists,
+ * so never feed this list back into path resolution.
+ */
+export function toDisplayPathList(input: string | string[] | undefined): string[] {
+	return toPathList(input).flatMap(entry => {
+		const parts: string[] = [];
+		let braceDepth = 0;
+		let start = 0;
+		for (let i = 0; i < entry.length; i++) {
+			const ch = entry[i];
+			if (ch === "{") braceDepth++;
+			else if (ch === "}" && braceDepth > 0) braceDepth--;
+			else if (ch === ";" && braceDepth === 0) {
+				parts.push(entry.slice(start, i));
+				start = i + 1;
+			}
+		}
+		parts.push(entry.slice(start));
+		return parts.map(part => part.trim()).filter(part => part.length > 0);
+	});
 }

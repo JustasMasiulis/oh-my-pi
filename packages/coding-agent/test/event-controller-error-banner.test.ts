@@ -549,7 +549,7 @@ describe("ErrorBannerComponent", () => {
 		const rendered = Bun.stripANSI(banner.render(120).join("\n"));
 		const detailLines = rendered.split("\n").filter(line => line.includes("error detail line"));
 		expect(detailLines.length).toBe(4);
-		expect(rendered).toMatch(/\+46 more lines \(.+ to expand\)/);
+		expect(rendered).toMatch(/ 46 more lines \S+: Expand/);
 	});
 
 	it("wraps a long single-line error across rows instead of cutting it", () => {

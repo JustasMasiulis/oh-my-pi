@@ -114,7 +114,7 @@ export const agenticFixtures: Record<string, GalleryFixture> = {
 			content: [
 				{
 					type: "text",
-					text: "Agent RateLimiter failed.",
+					text: "Agent AuthLoader failed.",
 				},
 			],
 			details: {
@@ -124,16 +124,16 @@ export const agenticFixtures: Record<string, GalleryFixture> = {
 				results: [
 					{
 						index: 0,
-						id: "RateLimiter",
+						id: "AuthLoader",
 						agent: "task",
 						agentSource: "bundled",
-						description: "Audit rate limiter",
-						task: "Inspect packages/server/src/auth/rate-limit.ts",
+						description: "Load auth middleware",
+						task: "Read packages/server/src/auth/session.ts and middleware.ts",
 						assignment:
-							"Inspect packages/server/src/auth/rate-limit.ts. Confirm the 429 path sets Retry-After and report gaps.",
+							"Read packages/server/src/auth/session.ts and middleware.ts, then document the session-cookie validation flow and any TODOs.",
 						exitCode: 1,
 						output: "",
-						stderr: "ENOENT: packages/server/src/auth/rate-limit.ts",
+						stderr: "ENOENT: packages/server/src/auth/middleware.ts",
 						truncated: false,
 						durationMs: 9_800,
 						tokens: 12_300,
@@ -142,7 +142,7 @@ export const agenticFixtures: Record<string, GalleryFixture> = {
 						contextWindow: 200_000,
 						resolvedModel: "anthropic/claude-sonnet",
 						usage: fixtureUsage({ input: 10_900, output: 1_400 }, 0.1),
-						error: "Subagent exited 1: target file packages/server/src/auth/rate-limit.ts does not exist.",
+						error: "Subagent exited 1: packages/server/src/auth/middleware.ts does not exist.",
 						outputMeta: { lineCount: 0, charCount: 0 },
 					},
 				],
@@ -174,6 +174,13 @@ export const agenticFixtures: Record<string, GalleryFixture> = {
 					ts: FIXTURE_NOW - 30_000,
 				},
 			} satisfies CoordinationDetails,
+		},
+		errorResult: {
+			isError: true,
+			content: [
+				{ type: "text", text: "No agent named AuthLoadr is registered; known peers: AuthLoader, Reviewer." },
+			],
+			details: { op: "wait" },
 		},
 	},
 
@@ -211,7 +218,7 @@ export const agenticFixtures: Record<string, GalleryFixture> = {
 		},
 		errorResult: {
 			isError: true,
-			content: [{ type: "text", text: "Goal tool failed: objective is required when op=create." }],
+			content: [{ type: "text", text: "A goal is already active; complete or drop it before setting a new one." }],
 			details: { op: "create" },
 		},
 	},
@@ -270,20 +277,8 @@ export const agenticFixtures: Record<string, GalleryFixture> = {
 		},
 		errorResult: {
 			isError: true,
-			content: [{ type: "text", text: "1 job failed." }],
-			details: {
-				op: "wait",
-				jobs: [
-					{
-						id: "job_d4",
-						type: "task",
-						status: "failed",
-						label: "Refactor the session store to Redis",
-						durationMs: 52_300,
-						errorText: "Subagent exited 1: Redis connection string is missing.",
-					},
-				],
-			},
+			content: [{ type: "text", text: "Unknown job id: job_x9. Running jobs: job_a1, job_b2." }],
+			details: { op: "wait" },
 		},
 	},
 

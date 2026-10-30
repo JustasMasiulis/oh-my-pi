@@ -9,8 +9,8 @@ import { card, md, span } from "../native/describe";
 import type { NativeNode } from "../native/node";
 
 /**
- * Renders a collab guest prompt on every participant's transcript: a
- * user-message-styled bubble prefixed with the author's name.
+ * Renders a collab guest prompt on every participant's transcript: the
+ * author's name on its own row above a user-message-styled bubble.
  */
 export class CollabPromptMessageComponent extends Container {
 	readonly #native: NativeNode;
@@ -18,7 +18,7 @@ export class CollabPromptMessageComponent extends Container {
 	constructor(message: CustomMessage<CollabPromptDetails>) {
 		super();
 		const from = message.details?.from?.trim() || "guest";
-		const authorText = new Text(theme.fg("accent", `\x1b[1m«${from}»\x1b[22m ›`), 1, 0);
+		const authorText = new Text(theme.bold(theme.fg("accent", from)), 1, 0);
 		authorText.setIgnoreTight(true);
 		this.addChild(authorText);
 		const text =

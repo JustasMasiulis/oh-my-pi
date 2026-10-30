@@ -6,6 +6,7 @@ import { node, span } from "../native/describe";
 import type { NativeNode } from "../native/node";
 import type { Theme } from "../theme/theme";
 import { fileLinkSpan } from "./hyperlink";
+import { formatStyledPath } from "./render-utils";
 import { renderTreeList } from "./tree-list";
 
 /** A file-list item with optional display metadata. */
@@ -55,13 +56,14 @@ export function describeFileList(options: Omit<FileListOptions, "hyperlinkFn">):
 	return node("list", { max: expanded ? undefined : { lines: maxCollapsed } }, items);
 }
 
-/** Render file entries as a themed tree listing. */
+/** Render file entries as a flush listing (a card's top-level result rows). */
 export function renderFileList(options: FileListOptions, theme: Theme): string[] {
 	const { files, expanded = false, maxCollapsed = 8, showIcons = true, hyperlinkFn } = options;
 
 	return renderTreeList(
 		{
 			items: files,
+			flush: true,
 			expanded,
 			maxCollapsed,
 			itemType: "file",
@@ -69,15 +71,12 @@ export function renderFileList(options: FileListOptions, theme: Theme): string[]
 				const isDirectory = entry.isDirectory ?? entry.path.endsWith("/");
 				const displayPath = entry.path;
 				const lang = isDirectory ? undefined : getLanguageFromPath(displayPath);
-				const icon = !showIcons
-					? ""
-					: isDirectory
-						? theme.fg("accent", theme.icon.folder)
-						: theme.fg("muted", theme.getLangIcon(lang));
-				const labelColor = isDirectory ? "accent" : "toolOutput";
+				// Type icons stay muted: the dim directory and bronze name beside them
+				// keep ASCII's word labels (`ts`, `c`) apart from the path.
+				const icon = !showIcons ? "" : theme.fg("muted", isDirectory ? theme.icon.folder : theme.getLangIcon(lang));
 				const meta = entry.meta ? ` ${theme.fg("dim", entry.meta)}` : "";
 				const iconPrefix = icon ? `${icon} ` : "";
-				const pathStr = theme.fg(labelColor, displayPath);
+				const pathStr = formatStyledPath(displayPath, theme);
 				const linkedPath = entry.absPath && hyperlinkFn ? hyperlinkFn(entry.absPath, pathStr) : pathStr;
 				return `${iconPrefix}${linkedPath}${meta}`;
 			},
