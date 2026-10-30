@@ -81,6 +81,66 @@ export const codeintelFixtures: Record<string, GalleryFixture> = {
 		},
 	},
 
+	lsp_definition: {
+		label: "LSP (definition)",
+		renderer: "lsp",
+		streamingArgs: {
+			action: "definition",
+			file: "src/server/router.ts",
+		},
+		args: {
+			action: "definition",
+			file: "src/server/router.ts",
+			line: 153,
+			symbol: "validateToken",
+		},
+		result: {
+			content: [
+				{
+					type: "text",
+					text: [
+						"Found 1 definition(s):",
+						"  src/server/auth.ts:42:17",
+						"    41: ",
+						"    42: export function validateToken(token: string): Claims {",
+						"    43:   const claims = verifyJwt(token);",
+					].join("\n"),
+				},
+			],
+			details: {
+				serverName: "typescript-language-server",
+				action: "definition",
+				success: true,
+				request: {
+					action: "definition",
+					file: "src/server/router.ts",
+					line: 153,
+					symbol: "validateToken",
+				},
+			},
+		},
+		errorResult: {
+			content: [
+				{
+					type: "text",
+					text: "No language server found for this file",
+				},
+			],
+			isError: true,
+			details: {
+				serverName: "typescript-language-server",
+				action: "definition",
+				success: false,
+				request: {
+					action: "definition",
+					file: "src/server/router.ts",
+					line: 153,
+					symbol: "validateToken",
+				},
+			},
+		},
+	},
+
 	debug: {
 		label: "Debug",
 		streamingArgs: {

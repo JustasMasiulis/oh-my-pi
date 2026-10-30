@@ -53,6 +53,7 @@
 - Fixed multi-line Resolve reasons, Goal reports, todo fallback text and process errors running together in one row, and tabs breaking the alignment of IRC cards and Goal objectives.
 - Fixed the collapsed todo list's overflow row counting only the hidden active todos when it also hides pending ones; it now counts every hidden todo (`… 3 more todos · 1 active`).
 - Fixed settled `!`/`$` runs counting the empty line after a trailing newline as hidden output.
+- Fixed LSP definition, type definition and implementation results showing the raw `Found 1 definition(s):` text; the count now sits in the header (`1 definition`) and each location shows over its source lines, its own line marked like a grep match.
 
 ## [18.14.0] - 2026-10-29
 

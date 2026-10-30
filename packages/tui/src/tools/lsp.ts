@@ -15,6 +15,7 @@ import {
 	cappedRowCount,
 	expansionFits,
 	fitsOneRow,
+	formatCodeFrameLine,
 	formatCount,
 	formatErrorText,
 	formatExpandHint,
@@ -38,7 +39,7 @@ import { ansi, code, col, compact, keyed, md, node, row, span, text } from "../n
 import type { NativeNode } from "../native/node";
 import { OwnerMemo } from "../native/memo";
 import { plainText } from "../native/spans";
-import { walkGroupedOutput } from "./grouped-file-output";
+import { numberedCode, walkGroupedOutput } from "./grouped-file-output";
 import { diagnosticGlyph, fileHref, fileRow, inlineErrorView } from "./native-view";
 import { activeThemeSymbol } from "../theme/active-symbols";
 
@@ -181,6 +182,8 @@ const COLLAPSED_REFERENCE_LOCATIONS = 2;
 const COLLAPSED_DIAGNOSTICS = 3;
 /** Output lines shown while a generic response is collapsed. */
 const COLLAPSED_GENERIC_LINES = 4;
+/** Locations shown while a definition, type definition or implementation result is collapsed. */
+const COLLAPSED_LOCATIONS = 2;
 
 /**
  * Body rows for one expansion state. Rows are unclipped; collapsed rows are
@@ -271,6 +274,10 @@ export function renderResult(
 /** Detect the response kind and build its view. */
 function parseLspResult(text: string, action: string, theme: Theme): LspResultView {
 	const lines = text.split("\n");
+	// Anchored at the response's first line, so it runs before the checks a source snippet could trip.
+	const locations = parseLspLocations(lines);
+	if (locations) return locationsView(locations, theme);
+
 	const codeBlockMatch = text.match(/```(\w*)\n([\s\S]*?)```/);
 	if (codeBlockMatch) return hoverView(codeBlockMatch, text, theme);
 
@@ -474,6 +481,97 @@ function referencesView(refCount: number, lines: string[], theme: Theme): LspRes
 				rows,
 				more: hiddenFiles > 0 ? formatMoreRow(hiddenFiles, "file", theme) : undefined,
 				markerLast,
+			};
+		},
+	};
+}
+
+// =============================================================================
+// Locations Rendering
+// =============================================================================
+
+/** One location of a definition-style response, with its numbered source context. */
+interface LspLocation {
+	file: string;
+	line: number;
+	col: number;
+	/** Source lines around the location; the location's own line is `mark`ed. */
+	context: { n: number; text: string; mark: boolean }[];
+}
+
+/** A definition, type definition or implementation response. */
+interface LspLocations {
+	/** `definition`, `type definition` or `implementation`. */
+	noun: string;
+	count: number;
+	locations: LspLocation[];
+}
+
+const LOCATIONS_HEADER_RE = /^Found (\d+) (definition|type definition|implementation)\(s\):$/;
+/** `  file:line:col`; context rows indent further, so the path starts at column 2. */
+const LOCATION_RE = /^ {2}(\S.*):(\d+):(\d+)$/;
+const LOCATION_CONTEXT_RE = /^ {4}(\d+): ?(.*)$/;
+
+/**
+ * Parse a `Found N definition(s):` response (also type definitions and
+ * implementations): `  file:line:col` rows, each followed by its
+ * `    N: source` context lines.
+ */
+function parseLspLocations(lines: readonly string[]): LspLocations | undefined {
+	const header = LOCATIONS_HEADER_RE.exec(lines[0] ?? "");
+	if (!header) return undefined;
+	const locations: LspLocation[] = [];
+	for (const line of lines.slice(1)) {
+		const location = LOCATION_RE.exec(line);
+		if (location) {
+			const [, file, lineNumber, col] = location;
+			locations.push({ file, line: Number(lineNumber), col: Number(col), context: [] });
+			continue;
+		}
+		const context = LOCATION_CONTEXT_RE.exec(line);
+		const current = locations.at(-1);
+		if (!context || !current) continue;
+		const n = Number(context[1]);
+		current.context.push({ n, text: context[2].trimEnd(), mark: n === current.line });
+	}
+	return { noun: header[2], count: Number(header[1]), locations };
+}
+
+/** A location's `file:line:col` row over its source context, framed like a grep match. */
+function locationRows(location: LspLocation, theme: Theme): string[] {
+	const head = `${formatStyledPath(replaceTabs(location.file), theme)}${theme.fg("muted", `:${location.line}:${location.col}`)}`;
+	const numberWidth = location.context.reduce((width, line) => Math.max(width, String(line.n).length), 0);
+	const frame = location.context.map(line =>
+		theme.fg(
+			"toolOutput",
+			formatCodeFrameLine(
+				line.mark ? "*" : "",
+				line.n,
+				replaceTabs(line.text),
+				numberWidth,
+				theme.boxSharp.vertical,
+			),
+		),
+	);
+	return [head, ...frame];
+}
+
+/** Definitions, type definitions and implementations: each location with its source context. */
+function locationsView(parsed: LspLocations, theme: Theme): LspResultView {
+	const { noun, count, locations } = parsed;
+	return {
+		icon: count > 0 ? "success" : "warning",
+		meta: [formatCount(noun, count)],
+		rows(expanded, width) {
+			const shown = expanded
+				? locations.length
+				: cappedRowCount(locations.length, COLLAPSED_LOCATIONS, width, () =>
+						locationRows(locations[COLLAPSED_LOCATIONS], theme).join("\n"),
+					);
+			const hidden = locations.length - shown;
+			return {
+				rows: locations.slice(0, shown).flatMap(location => locationRows(location, theme)),
+				more: hidden > 0 ? formatMoreRow(hidden, noun, theme) : undefined,
 			};
 		},
 	};
@@ -806,6 +904,34 @@ function describeLspReferences(lines: string[]): NativeNode[] {
 	return nodes;
 }
 
+/** Definition-style locations (§7.3): a file row with `:line:col`, then the numbered source context. */
+function describeLspLocations(
+	request: Partial<LspParams> | undefined,
+	fallbackAction: string,
+	parsed: LspLocations,
+): NativeToolView {
+	const body = parsed.locations.map(location => {
+		const file = plainText(location.file);
+		const context = location.context.map(line => ({ ...line, text: plainText(line.text) }));
+		return keyed(
+			col(
+				[fileRow(file, { range: `:${location.line}:${location.col}` }), ...numberedCode(context, { path: file })],
+				{
+					gap: "xs",
+				},
+			),
+			`${file}:${location.line}:${location.col}`,
+		);
+	});
+	return {
+		tool: lspNativeHead(request, fallbackAction, [formatCount(parsed.noun, parsed.count)]),
+		tone: parsed.count > 0 ? undefined : "warning",
+		inline: true,
+		body: body.length > 0 ? body : undefined,
+		preview: { lines: 8 },
+	};
+}
+
 function describeLspSymbols(lines: string[]): NativeNode | undefined {
 	const roots: TspTreeNode[] = [];
 	const stack: { indent: number; children: TspTreeNode[] }[] = [];
@@ -838,6 +964,9 @@ function describeLspResult(result: ToolRenderResult<LspToolDetails>, args: LspPa
 	if (!text) return { tool: lspNativeHead(request, fallbackAction, ["No result"]), tone: "warning", inline: true };
 
 	const lines = text.split("\n");
+	const locations = parseLspLocations(lines);
+	if (locations) return describeLspLocations(request, fallbackAction, locations);
+
 	const statusError = activeThemeSymbol("status.error");
 	const refMatch = text.match(/(\d+)\s+reference\(s\)/);
 	const symbolsMatch = text.match(/Symbols in (.+):/);
