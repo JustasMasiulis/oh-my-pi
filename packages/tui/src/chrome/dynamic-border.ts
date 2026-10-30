@@ -1,5 +1,5 @@
 import type { Component } from "../tui";
-import { visibleWidth } from "../utils";
+import { truncateToWidth, visibleWidth } from "../utils";
 import { fgOrPlain, theme } from "../theme/index";
 import type { NativeNode } from "../native/node";
 import { EMPTY_NODE } from "../native/describe";
@@ -14,8 +14,9 @@ import { EMPTY_NODE } from "../native/describe";
  */
 export class DynamicBorder implements Component {
 	#color: (str: string) => string;
-	#label: string | undefined;
+	#label: string | (() => string) | undefined;
 	#cachedWidth = -1;
+	#cachedLabel: string | undefined;
 	#cachedLines: string[] | undefined;
 
 	constructor(color: (str: string) => string = str => fgOrPlain("border", str)) {
@@ -27,8 +28,12 @@ export class DynamicBorder implements Component {
 		this.#cachedLines = undefined;
 	}
 
-	/** Pre-styled text set into the rule after a short lead (`─── label ────`); undefined draws a plain rule. */
-	setLabel(label: string | undefined): void {
+	/**
+	 * Pre-styled text set into the rule after a short lead (`─── label ────`);
+	 * undefined draws a plain rule. A function label is re-read every render,
+	 * for live text such as a spinner.
+	 */
+	setLabel(label: string | (() => string) | undefined): void {
 		if (label === this.#label) return;
 		this.#label = label;
 		this.invalidate();
@@ -40,21 +45,25 @@ export class DynamicBorder implements Component {
 	}
 
 	render(width: number): readonly string[] {
-		if (this.#cachedLines && this.#cachedWidth === width) {
+		const label = typeof this.#label === "function" ? this.#label() : this.#label;
+		if (this.#cachedLines && this.#cachedWidth === width && this.#cachedLabel === label) {
 			return this.#cachedLines;
 		}
 		const horizontal = typeof theme === "undefined" ? "─" : theme.boxRound.horizontal;
-		const lines = [this.#rule(horizontal, Math.max(1, width))];
+		const lines = [this.#rule(horizontal, Math.max(1, width), label)];
 		this.#cachedWidth = width;
+		this.#cachedLabel = label;
 		this.#cachedLines = lines;
 		return lines;
 	}
 
-	#rule(horizontal: string, width: number): string {
+	#rule(horizontal: string, width: number, label: string | undefined): string {
 		const lead = horizontal.repeat(3);
-		const label = this.#label ? ` ${this.#label} ` : "";
-		const rest = width - visibleWidth(lead) - visibleWidth(label);
-		if (!label || rest < 1) return this.#color(horizontal.repeat(width));
-		return `${this.#color(lead)}${label}${this.#color(horizontal.repeat(rest))}`;
+		// The label sits between single spaces and leaves at least one rule cell after it.
+		const labelRoom = width - visibleWidth(lead) - 3;
+		if (!label || labelRoom < 1) return this.#color(horizontal.repeat(width));
+		const fitted = ` ${truncateToWidth(label, labelRoom)} `;
+		const rest = width - visibleWidth(lead) - visibleWidth(fitted);
+		return `${this.#color(lead)}${fitted}${this.#color(horizontal.repeat(rest))}`;
 	}
 }

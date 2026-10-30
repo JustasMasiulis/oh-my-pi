@@ -20,6 +20,7 @@ import type { NativeNode } from "../native/node";
 import { plainLine } from "../native/spans";
 import { toneColor } from "../native/tone";
 import type { Theme } from "../theme/theme";
+import { cappedRowCount } from "../render/render-utils";
 import { Ellipsis, truncateToWidth, visibleWidth } from "../utils";
 
 /** Where a widget's view stands. */
@@ -503,7 +504,7 @@ function tileVisual(block: JobWidgetBlock | undefined): NativeNode | undefined {
 		case "meter":
 			return tileMeter(block.value, block.tone);
 		case "bars": {
-			const rows = block.items.slice(0, TILE_BARS).map((item, index) =>
+			const rows = block.items.slice(0, cappedRowCount(block.items.length, TILE_BARS)).map((item, index) =>
 				keyed(
 					row(
 						[

@@ -21,6 +21,7 @@ import { getMarkdownTheme, type Theme } from "../theme/theme";
 import { stripGeneratedOutputNotice, stripRawOutputArtifactNotice, stripTrailingNotice } from "./output-meta";
 import {
 	capPreviewLines,
+	cappedRowCount,
 	formatBadge,
 	formatDuration,
 	formatErrorText,
@@ -35,6 +36,7 @@ import {
 	flattenLine,
 	previewWindowRows,
 	replaceTabs,
+	revealLoneHidden,
 	shortenEmbeddedPaths,
 	shortenPath,
 	shortenToolArgumentPaths,
@@ -239,7 +241,7 @@ function renderTypedYieldSections(value: unknown, continuePrefix: string, expand
 		if (labels.length === 0) continue;
 		typedItems.push({ item, labels });
 	}
-	const displayCount = expanded ? typedItems.length : 3;
+	const displayCount = expanded ? typedItems.length : cappedRowCount(typedItems.length, 3);
 	const lines: string[] = [];
 	for (const { item, labels } of typedItems.slice(-displayCount)) {
 		const terminal = !Array.isArray(item.type);
@@ -408,7 +410,7 @@ function renderOutputSection(
 
 	if (!warning) lines.push(label);
 	const outputLines = trimmedOutput.split("\n");
-	const previewCount = expanded ? maxExpanded : maxCollapsed;
+	const previewCount = cappedRowCount(outputLines.length, expanded ? maxExpanded : maxCollapsed);
 	for (const line of outputLines.slice(0, previewCount)) {
 		lines.push(...hangingRows(indent, theme.fg("dim", clipCollapsed(replaceTabs(line), 70, expanded)), maxWidth));
 	}
@@ -435,9 +437,10 @@ function renderTaskSection(
 	const taskLines = trimmed
 		.split("\n")
 		.flatMap(line => hangingRows(indent, theme.fg("dim", replaceTabs(line)), maxWidth));
-	lines.push(...taskLines.slice(0, maxExpanded));
-	if (taskLines.length > maxExpanded) {
-		lines.push(`${indent}${theme.fg("dim", formatMoreItems(taskLines.length - maxExpanded, "line", theme))}`);
+	const shownTaskLines = cappedRowCount(taskLines.length, maxExpanded);
+	lines.push(...taskLines.slice(0, shownTaskLines));
+	if (taskLines.length > shownTaskLines) {
+		lines.push(`${indent}${theme.fg("dim", formatMoreItems(taskLines.length - shownTaskLines, "line", theme))}`);
 	}
 
 	return lines;
@@ -550,7 +553,7 @@ function renderTaskItemLines(tasks: TaskItem[] | undefined, theme: Theme): strin
 	if (!Array.isArray(tasks) || tasks.length === 0) return [];
 
 	const bullet = formatStatusIcon("pending", theme);
-	const cap = Math.min(tasks.length, COLLAPSED_AGENT_LIMIT);
+	const cap = cappedRowCount(tasks.length, COLLAPSED_AGENT_LIMIT);
 	const lines: string[] = [];
 	for (let i = 0; i < cap; i++) {
 		const item = tasks[i] as Partial<TaskItem> | undefined;
@@ -893,20 +896,18 @@ function renderAgentProgress(progress: AgentProgress, options: AgentRowOptions):
 
 			const handler = getSubprocessToolRenderer(toolName);
 			if (handler?.renderInline) {
-				const displayCount = expanded ? (dataArray as unknown[]).length : 3;
-				const recentData = (dataArray as unknown[]).slice(-displayCount);
+				const items = dataArray as unknown[];
+				const displayCount = expanded ? items.length : cappedRowCount(items.length, 3);
+				const recentData = items.slice(-displayCount);
 				for (const data of recentData) {
 					const component = handler.renderInline(data, theme);
 					if (component instanceof Text) {
 						lines.push(`${continuePrefix}${component.getText()}`);
 					}
 				}
-				if ((dataArray as unknown[]).length > displayCount) {
+				if (items.length > displayCount) {
 					lines.push(
-						`${continuePrefix}${theme.fg(
-							"dim",
-							formatMoreItems((dataArray as unknown[]).length - displayCount, "item", theme),
-						)}`,
+						`${continuePrefix}${theme.fg("dim", formatMoreItems(items.length - displayCount, "item", theme))}`,
 					);
 				}
 			}
@@ -1025,11 +1026,11 @@ function renderFindings(findings: FindingDetails[], continuePrefix: string, expa
 	const sortedFindings = expanded
 		? findings
 		: [...findings].sort((a, b) => getPriorityInfo(a.priority).ord - getPriorityInfo(b.priority).ord);
-	const displayCount = expanded ? sortedFindings.length : Math.min(3, sortedFindings.length);
+	const displayCount = expanded ? sortedFindings.length : cappedRowCount(sortedFindings.length, 3);
 
 	for (let i = 0; i < displayCount; i++) {
 		const finding = sortedFindings[i];
-		const isLastFinding = i === displayCount - 1 && (expanded || sortedFindings.length <= 3);
+		const isLastFinding = i === displayCount - 1 && displayCount === sortedFindings.length;
 		const findingPrefix = isLastFinding ? theme.tree.last : theme.tree.branch;
 		const findingContinue = isLastFinding ? "   " : `${theme.tree.vertical}  `;
 
@@ -1052,8 +1053,10 @@ function renderFindings(findings: FindingDetails[], continuePrefix: string, expa
 		}
 	}
 
-	if (!expanded && findings.length > 3) {
-		lines.push(`${continuePrefix}${theme.fg("dim", formatMoreItems(findings.length - 3, "finding", theme))}`);
+	if (displayCount < sortedFindings.length) {
+		lines.push(
+			`${continuePrefix}${theme.fg("dim", formatMoreItems(sortedFindings.length - displayCount, "finding", theme))}`,
+		);
 	}
 
 	return lines;
@@ -1599,6 +1602,19 @@ function nestedAgentRows<T>(
 	return lines;
 }
 
+/** `visible`, or every one of `ordered` when the lone agent left out renders as one row ({@link revealLoneHidden}). */
+function revealSingleHiddenRow<T>(
+	ordered: readonly T[],
+	visible: readonly T[],
+	rowsOf: (item: T) => readonly string[],
+): readonly T[] {
+	const loneRows = (): number => {
+		const lone = ordered.find(item => !visible.includes(item));
+		return lone === undefined ? 0 : rowsOf(lone).length;
+	};
+	return revealLoneHidden(ordered.length, visible.length, loneRows) === ordered.length ? ordered : visible;
+}
+
 /**
  * Render `TaskToolDetails` snapshots as a tree with bounded recursion and
  * cycle detection: settled `results[]`, else (with `includeProgress`, for the
@@ -1626,7 +1642,11 @@ function renderNestedTasks(
 		seen.add(details);
 		if (details.results && details.results.length > 0) {
 			const ordered = orderResultsForDisplay(details.results);
-			const visible = expanded ? ordered : selectCollapsedResults(ordered);
+			const visible = expanded
+				? ordered
+				: revealSingleHiddenRow(ordered, selectCollapsedResults(ordered), result =>
+						renderAgentResult(result, { ...child, ...nestedMarkers(false, theme) }),
+					);
 			lines.push(
 				...nestedAgentRows(visible, ordered.length - visible.length, theme, (result, markers) =>
 					renderAgentResult(result, { ...child, ...markers }),
@@ -1634,7 +1654,13 @@ function renderNestedTasks(
 			);
 		} else if (includeProgress && details.progress && details.progress.length > 0) {
 			const ordered = orderProgressForDisplay(details.progress);
-			const visible = expanded ? ordered : ordered.slice(Math.max(0, ordered.length - COLLAPSED_AGENT_LIMIT));
+			const visible = expanded
+				? ordered
+				: revealSingleHiddenRow(
+						ordered,
+						ordered.slice(Math.max(0, ordered.length - COLLAPSED_AGENT_LIMIT)),
+						progress => renderAgentProgress(progress, { ...child, ...nestedMarkers(false, theme) }),
+					);
 			lines.push(
 				...nestedAgentRows(visible, ordered.length - visible.length, theme, (progress, markers) =>
 					renderAgentProgress(progress, { ...child, ...markers }),

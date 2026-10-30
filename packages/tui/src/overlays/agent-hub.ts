@@ -1967,8 +1967,19 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 				break;
 			}
 		}
-		const showTopOverflow = start > 0 && used < budget;
-		const showBottomOverflow = end < this.#rows.length && used + Number(showTopOverflow) < budget;
+		let showTopOverflow = start > 0 && used < budget;
+		// A lone hidden one-row entry takes the overflow label's row instead.
+		if (showTopOverflow && start === 1 && entryAt(0).length === 1) {
+			start = 0;
+			used++;
+			showTopOverflow = false;
+		}
+		let showBottomOverflow = end < this.#rows.length && used + Number(showTopOverflow) < budget;
+		if (showBottomOverflow && end === this.#rows.length - 1 && entryAt(end).length === 1) {
+			end++;
+			used++;
+			showBottomOverflow = false;
+		}
 		if (showTopOverflow) {
 			lines.push(theme.fg("dim", `… ${start} more`));
 			hitRows.push(undefined);

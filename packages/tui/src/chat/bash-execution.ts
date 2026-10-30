@@ -17,6 +17,7 @@ import { resolveImageOptions } from "../render/render-utils";
 import { OutputPane } from "../render/output-pane";
 import { loadXtermTerminal, readTerminalRows, styleTerminalRow } from "../tools/terminal-output";
 import { normalizeInputForPty } from "../tools/bash-interactive";
+import { cappedRowCount } from "../render/render-utils";
 import { getSixelLineMask, isSixelPassthroughEnabled, sanitizeWithOptionalSixelPassthrough } from "../render/sixel";
 import {
 	buildExecutionFrame,
@@ -125,7 +126,6 @@ export class BashExecutionComponent extends Container {
 		// Command header
 		this.#headerText = new Text(theme.fg(colorKey, theme.bold(`$ ${command}`)), 1, 0);
 		this.#contentContainer.addChild(this.#headerText);
-		this.#contentContainer.addChild(this.#loader);
 	}
 
 	/**
@@ -387,6 +387,12 @@ export class BashExecutionComponent extends Container {
 		this.#updateDisplay();
 	}
 
+	/** The loader animates the bottom border from outside the child tree, so teardown stops it here. */
+	override dispose(): void {
+		this.#loader.dispose();
+		super.dispose();
+	}
+
 	override render(width: number): readonly string[] {
 		if (this.#displayDirty) {
 			this.#displayDirty = false;
@@ -406,11 +412,18 @@ export class BashExecutionComponent extends Container {
 				: undefined;
 		const hasSixelOutput = sixelLineMask?.some(Boolean) ?? false;
 		const showingAllLines = this.#expanded || hasSixelOutput;
+		this.#outputPane.setLines(availableLines);
 		// Only the collapsed preview hides lines; when the full output is shown
 		// the footer must not keep advertising hidden lines / ctrl+o.
-		const hiddenLineCount = showingAllLines ? 0 : Math.max(0, availableLines.length - PREVIEW_LINES);
-		this.#outputPane.configure({ uncapSixel: hasSixelOutput });
-		this.#outputPane.setLines(availableLines);
+		// A settled run's footer marker takes its own row: a lone hidden line shows instead.
+		const lineCount = this.#outputPane.lineCount;
+		const settled = this.#status !== "running";
+		const collapsedLines = settled ? cappedRowCount(lineCount, PREVIEW_LINES) : PREVIEW_LINES;
+		const hiddenLineCount = showingAllLines ? 0 : Math.max(0, lineCount - collapsedLines);
+		this.#outputPane.configure({
+			uncapSixel: hasSixelOutput,
+			collapsedMaxLines: Math.max(PREVIEW_LINES, collapsedLines),
+		});
 
 		// Rebuild content container
 		this.#contentContainer.clear();
@@ -419,7 +432,7 @@ export class BashExecutionComponent extends Container {
 		this.#contentContainer.addChild(this.#headerText);
 
 		// Output
-		if (availableLines.length > 0) this.#contentContainer.addChild(this.#outputPane);
+		if (lineCount > 0) this.#contentContainer.addChild(this.#outputPane);
 
 		for (let index = 0; index < this.#images.length; index++) {
 			const image = this.#images[index]!;
@@ -444,11 +457,9 @@ export class BashExecutionComponent extends Container {
 			}
 		}
 
-		// Loader or status; a settled run's exit/cancel marker rides the bottom border.
-		this.#bottomBorder.setLabel(executionStatusLabel(this.#status, this.#exitCode));
-		if (this.#status === "running") {
-			this.#contentContainer.addChild(this.#loader);
-		} else {
+		// The bottom border keeps the live loader until the run settles, then its exit/cancel marker.
+		if (this.#status !== "running") {
+			this.#bottomBorder.setLabel(executionStatusLabel(this.#status, this.#exitCode));
 			const footer = buildStatusFooter({
 				truncation: this.#truncation,
 				artifactError: this.#artifactError,

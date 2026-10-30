@@ -151,7 +151,8 @@ describe("lsp expand hint", () => {
 			).includes("Expand");
 		expect(hint(references(1))).toBe(false);
 		expect(hint(references(2))).toBe(false);
-		expect(hint(references(3))).toBe(true);
+		expect(hint(references(3))).toBe(false);
+		expect(hint(references(4))).toBe(true);
 		expect(hint("Reloaded")).toBe(false);
 		expect(hint(long)).toBe(true);
 		expect(hint(`1 error(s)\nsrc/a.ts:3:5 [error] [ts] ${long} (2345)`)).toBe(true);

@@ -14,6 +14,7 @@ import type { RenderResultOptions } from "./renderer";
 import type { Theme } from "../theme/theme";
 import { Ellipsis, plainToolCard, type StatusLineOptions, truncateToWidth } from "../render";
 import {
+	cappedRowCount,
 	formatErrorText,
 	formatExpandHint,
 	formatMoreRow,
@@ -106,7 +107,7 @@ function cappedRows(
 	theme: Theme,
 	expanded: boolean,
 ): MemoryRows {
-	const shown = rows.slice(0, limit);
+	const shown = rows.slice(0, cappedRowCount(rows.length, limit));
 	const remaining = rows.length - shown.length;
 	if (remaining <= 0) return { rows: shown };
 	return { rows: shown, more: formatMoreRow(remaining, itemType, theme, { expanded }) };

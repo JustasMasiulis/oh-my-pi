@@ -12,6 +12,7 @@ import { formatCount } from "@oh-my-pi/pi-utils";
 import { plainToolCard } from "../render/tool-card";
 import { nestRows } from "../render/utils";
 import {
+	cappedRowCount,
 	formatBadge,
 	formatDuration,
 	formatErrorText,
@@ -180,7 +181,7 @@ function vibeSubject(op: VibeOp, args: VibeRenderArgs | undefined, sep: string, 
 /** The director's message being sent, indented as body rows. */
 function messageRows(uiTheme: Theme, message: string, expanded: boolean): string[] {
 	const rawLines = message.split(/\r?\n/).filter(line => line.trim().length > 0);
-	const maxRows = expanded ? COMPOSER_ROWS_EXPANDED : COMPOSER_ROWS_COLLAPSED;
+	const maxRows = cappedRowCount(rawLines.length, expanded ? COMPOSER_ROWS_EXPANDED : COMPOSER_ROWS_COLLAPSED);
 	const rows = rawLines.slice(0, maxRows).map(line => uiTheme.fg("toolOutput", frameText(line, COMPOSER_LINE_MAX)));
 	const hidden = rawLines.length - maxRows;
 	if (hidden > 0) rows.push(formatMoreRow(hidden, "line", uiTheme, { expanded }));

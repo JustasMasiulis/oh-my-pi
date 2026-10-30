@@ -11,6 +11,7 @@ import { Markdown, visibleWidth } from "../index";
 import type { RenderResultOptions } from "./renderer";
 import { getMarkdownTheme, type Theme } from "../theme/theme";
 import {
+	cappedRowCount,
 	formatAge,
 	formatCount,
 	formatErrorText,
@@ -182,7 +183,7 @@ export function renderSearchResult(
 			answerLines = [theme.fg("muted", "No answer text returned")];
 		} else if (args?.maxAnswerLines !== undefined && !expanded) {
 			// `renderedAnswer` is the Markdown component's shared cache — slice copies before appending.
-			const capped = renderedAnswer.slice(0, args.maxAnswerLines);
+			const capped = renderedAnswer.slice(0, cappedRowCount(renderedAnswer.length, args.maxAnswerLines));
 			const remaining = renderedAnswer.length - capped.length;
 			if (remaining > 0) capped.push(theme.fg("dim", formatMoreItems(remaining, "line", theme)));
 			answerLines = capped;

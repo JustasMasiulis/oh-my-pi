@@ -10,7 +10,7 @@
 import { Loader } from "../components/loader";
 import { Text } from "../components/text";
 import { Container, type TUI } from "../tui";
-import { getSymbolTheme, theme } from "../theme/theme";
+import { theme } from "../theme/theme";
 import type { OutputArtifactError } from "../tools/streaming-output";
 import { formatArtifactErrorNotice, formatTruncationMetaNotice, type TruncationMeta } from "../tools/output-meta";
 import { DynamicBorder } from "../chrome/dynamic-border";
@@ -46,9 +46,9 @@ export type ExecutionColorKey = "dim" | "bashMode" | "pythonMode";
 /**
  * Build the spacer + top border + content container + bottom border scaffold
  * that bash and eval execution components share. The caller appends the
- * header (command vs `>>>` prompt) and the returned loader to
- * `contentContainer` so per-mode order is preserved, and sets the run's exit
- * marker into `bottomBorder` once it settles ({@link executionStatusLabel}).
+ * header (command vs `>>>` prompt) to `contentContainer` and keeps the run's
+ * state in `bottomBorder` ({@link executionStatusLabel}); the returned loader
+ * animates that label rather than taking a row of its own.
  */
 export function buildExecutionFrame(
 	parent: Container,
@@ -66,17 +66,22 @@ export function buildExecutionFrame(
 		ui,
 		spinner => theme.fg(colorKey, spinner),
 		text => theme.fg("muted", text),
-		`Running… (${interruptKey()} to cancel)`,
-		getSymbolTheme().spinnerFrames,
+		`Running${theme.format.ellipsis} (${interruptKey()} to cancel)`,
+		// The status spinner, as on a running tool card's header.
+		theme.spinnerFrames,
 	);
 
 	const bottomBorder = new DynamicBorder(borderColor);
+	bottomBorder.setLabel(() => loader.inlineText());
 	parent.addChild(bottomBorder);
 	return { contentContainer, loader, bottomBorder };
 }
 
 /** The bottom-border marker of a settled run: `exit N` for a failure, `cancelled` for a cancel. */
-export function executionStatusLabel(status: ExecutionStatus, exitCode: number | undefined): string | undefined {
+export function executionStatusLabel(
+	status: Exclude<ExecutionStatus, "running">,
+	exitCode: number | undefined,
+): string | undefined {
 	if (status === "cancelled") return theme.fg("warning", "cancelled");
 	if (status === "error") return theme.fg("error", `exit ${exitCode}`);
 	return undefined;

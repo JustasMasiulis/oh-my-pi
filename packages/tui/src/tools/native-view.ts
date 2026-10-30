@@ -8,7 +8,7 @@ import type { TspSpan, TspText, TspTone } from "@oh-my-pi/pi-wire";
 import { ansi, code, compact, keyed, node, row, span, text } from "../native/describe";
 import type { NativeChild, NativeNode } from "../native/node";
 import { tryFileUri } from "../render/hyperlink";
-import { type ParsedDiagnostic, parseDiagnosticMessage, shortenPath } from "../render/render-utils";
+import { cappedRowCount, type ParsedDiagnostic, parseDiagnosticMessage, shortenPath } from "../render/render-utils";
 import { plainText } from "../native/spans";
 import type { FileDiagnosticsResult } from "./lsp";
 import { formatArtifactErrorNotice, formatTruncationMetaNotice, type OutputMeta } from "./output-meta";
@@ -360,7 +360,7 @@ export function diagnosticsSection(
 			text([span(message)], { wrap: "word", role: "omp.tool.diagnostic", key: `u${i}` }),
 		),
 	];
-	const shown = rows.slice(0, DIAGNOSTIC_ROWS);
+	const shown = rows.slice(0, cappedRowCount(rows.length, DIAGNOSTIC_ROWS));
 	const hidden = rows.length - shown.length;
 	if (hidden > 0) {
 		shown.push(text([span(`+${hidden} more`, "muted")], { role: "omp.tool.stats", key: "more" }));

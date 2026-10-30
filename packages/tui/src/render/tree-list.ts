@@ -9,7 +9,7 @@ import type { NativeNode } from "../native/node";
 import type { Theme } from "../theme/theme";
 import { visibleWidth } from "../utils";
 import { TreeView } from "../components/tree-view";
-import { formatMoreItems } from "./render-utils";
+import { formatMoreItems, revealLoneHidden } from "./render-utils";
 import type { TreeContext } from "./types";
 import { getTreeBranch, getTreeContinuePrefix } from "./utils";
 
@@ -165,15 +165,27 @@ export function renderTreeList<T>(options: TreeListOptions<T>, theme: Theme): st
 		remaining = items.length - fittingCount;
 	}
 
+	// A lone hidden one-row leaf takes no more room than its `… 1 more` row: show it instead.
+	let shownHidden: TreeListRow | undefined;
+	if (!expanded && remaining === 1 && (linesBudget === Infinity || fittedLineCount < linesBudget)) {
+		const row = toItemRow(truncateFrom === "start" ? 0 : items.length - 1);
+		if (row.kind === "item" && row.lines.length === 1) {
+			shownHidden = row;
+			remaining = 0;
+		}
+	}
+
 	const hasSummary = !expanded && remaining > 0 && (linesBudget === Infinity || fittedLineCount < linesBudget);
 
 	const roots: TreeListRow[] = [];
 	if (truncateFrom === "start" && hasSummary) {
 		roots.push({ kind: "summary", text: theme.fg("dim", formatMoreItems(remaining, itemType, theme)) });
 	}
+	if (truncateFrom === "start" && shownHidden) roots.push(shownHidden);
 	for (let i = displayedSlice.start; i < displayedSlice.end; i++) {
 		roots.push({ kind: "item", index: candidateIndices[i], lines: preRendered[i]! });
 	}
+	if (truncateFrom === "end" && shownHidden) roots.push(shownHidden);
 	if (truncateFrom === "end" && hasSummary) {
 		roots.push({ kind: "summary", text: theme.fg("dim", formatMoreItems(remaining, itemType, theme)) });
 	}
@@ -206,7 +218,21 @@ export function describeTreeList<T>(options: TreeListOptions<T>, theme: Theme): 
 		if (options.trailingSummary !== "") nodes.push(summaryNode(options.trailingSummary));
 		return node("tree", { nodes });
 	}
-	const shown = expanded ? items.length : Math.min(items.length, maxCollapsed);
+	const loneIndex = truncateFrom === "start" ? 0 : items.length - 1;
+	const loneRows = (): number => {
+		const rendered = renderItem(items[loneIndex], {
+			index: loneIndex,
+			isLast: loneIndex === items.length - 1,
+			depth: 0,
+			theme,
+			prefix: "",
+			continuePrefix: "",
+		});
+		return Array.isArray(rendered) ? rendered.length : rendered.split("\n").length;
+	};
+	const shown = expanded
+		? items.length
+		: revealLoneHidden(items.length, Math.min(items.length, maxCollapsed), loneRows);
 	const hidden = items.length - shown;
 	const start = truncateFrom === "start" ? items.length - shown : 0;
 	if (hidden > 0 && truncateFrom === "start") nodes.push(summaryNode(formatMoreItems(hidden, itemType, theme)));

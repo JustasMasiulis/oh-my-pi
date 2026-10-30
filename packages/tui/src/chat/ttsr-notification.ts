@@ -6,7 +6,7 @@ import {
 	type MessageNoticePresentation,
 } from "../chrome/message-notice";
 import { theme } from "../theme";
-import { expandHintLabel, formatMoreItems } from "../render/render-utils";
+import { cappedRowCount, expandHintLabel, formatMoreItems } from "../render/render-utils";
 import { span, text } from "../native/describe";
 import type { NativeNode } from "../native/node";
 
@@ -129,7 +129,9 @@ export class TtsrNotificationComponent extends Container {
 	#presentationMulti(expanded: boolean): MessageNoticePresentation {
 		const header = `Injecting ${this.#rules.length} rules:`;
 
-		const visible = expanded ? this.#rules : this.#rules.slice(0, MAX_COLLAPSED_RULES);
+		const visible = expanded
+			? this.#rules
+			: this.#rules.slice(0, cappedRowCount(this.#rules.length, MAX_COLLAPSED_RULES));
 		const body: Component[] = [];
 		let elidedDetail = false;
 		for (const rule of visible) {

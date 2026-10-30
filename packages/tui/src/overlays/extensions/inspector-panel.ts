@@ -17,6 +17,7 @@ import { renderTableRow } from "../../components/table";
 import { theme } from "../../theme";
 import { divider } from "../../chrome/overlay-box";
 import {
+	cappedRowCount,
 	expandHintLabel,
 	formatExpandHint,
 	formatMoreItems,
@@ -298,7 +299,8 @@ export class InspectorPanel implements Component {
 
 	/** A name-only catalog (MCP resources/prompts) under its budget until expanded. */
 	#nativeNameList(head: string, noun: string, entries: MCPRuntimeCatalogItem[]): NativeNode {
-		const { shown, hidden } = visibleMcpTools(entries, this.#expanded ? entries.length : MCP_TOOL_BUDGET);
+		const limit = this.#expanded ? entries.length : cappedRowCount(entries.length, MCP_TOOL_BUDGET);
+		const { shown, hidden } = visibleMcpTools(entries, limit);
 		const children: NativeChild[] = shown.map(entry => text([span(entry.name, "accent mono")]));
 		if (hidden > 0) children.push(this.#nativeMore(hidden, noun));
 		return this.#nativeSection(head, children);
@@ -431,7 +433,7 @@ export class InspectorPanel implements Component {
 	/** A pattern list for a `kv` value, capped until expanded. */
 	#nativeList(items: string[] | undefined): TspSpan[] | undefined {
 		if (!items || items.length === 0) return undefined;
-		const cap = this.#expanded ? items.length : PREVIEW_LIMITS.COLLAPSED_LINES;
+		const cap = this.#expanded ? items.length : cappedRowCount(items.length, PREVIEW_LIMITS.COLLAPSED_LINES);
 		const shown = items.slice(0, cap).map(item => sanitizeDisplayText(item));
 		const hidden = items.length - shown.length;
 		const spans: TspSpan[] = [span(shown.join("\n"), "accent")];
@@ -608,7 +610,7 @@ export class InspectorPanel implements Component {
 			const resourcesBody: string[] = [];
 			const { shown, hidden } = visibleMcpTools(
 				snap.resources,
-				this.#expanded ? snap.resources.length : MCP_TOOL_BUDGET,
+				this.#expanded ? snap.resources.length : cappedRowCount(snap.resources.length, MCP_TOOL_BUDGET),
 			);
 			for (const resource of shown) {
 				resourcesBody.push(`  ${theme.fg("accent", resource.name)}`);
@@ -622,7 +624,7 @@ export class InspectorPanel implements Component {
 			const promptsBody: string[] = [];
 			const { shown, hidden } = visibleMcpTools(
 				snap.prompts,
-				this.#expanded ? snap.prompts.length : MCP_TOOL_BUDGET,
+				this.#expanded ? snap.prompts.length : cappedRowCount(snap.prompts.length, MCP_TOOL_BUDGET),
 			);
 			for (const prompt of shown) {
 				promptsBody.push(`  ${theme.fg("accent", prompt.name)}`);
@@ -869,7 +871,7 @@ export class InspectorPanel implements Component {
 			if (folded.length === 0) wrapped.push("");
 			else wrapped.push(...folded);
 		}
-		if (this.#expanded || wrapped.length <= MCP_INLINE_DESC_LINES) {
+		if (this.#expanded || wrapped.length <= MCP_INLINE_DESC_LINES + 1) {
 			lines.push(...wrapped);
 		} else {
 			lines.push(...wrapped.slice(0, MCP_INLINE_DESC_LINES));
@@ -910,7 +912,7 @@ export class InspectorPanel implements Component {
 			this.#pushLabeled(lines, label, items[0], width);
 			return;
 		}
-		const cap = this.#expanded ? items.length : PREVIEW_LIMITS.COLLAPSED_LINES;
+		const cap = this.#expanded ? items.length : cappedRowCount(items.length, PREVIEW_LIMITS.COLLAPSED_LINES);
 		const shown = items.slice(0, cap);
 		const hidden = items.length - shown.length;
 		const indent = "             ";

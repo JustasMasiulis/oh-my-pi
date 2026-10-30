@@ -28,7 +28,7 @@ import {
 import { colorToAnsi } from "../theme/color";
 import { ensureThemeSync, theme } from "../theme/theme";
 import { formatAbsoluteOnlyAmount } from "../prompt/usage-amounts";
-import { truncateMiddleToWidth } from "../render/render-utils";
+import { cappedRowCount, truncateMiddleToWidth } from "../render/render-utils";
 import { sanitizeDisplayLine } from "./extensions/display-text";
 import {
 	matchesSelectCancel,
@@ -1429,7 +1429,8 @@ export class UsageDashboardComponent implements Component {
 		if (entry.unlimited) {
 			rows.push(text([span("No quotas reported", "muted")], { role: "omp.usage.none" }));
 		} else {
-			for (const [index, window] of entry.windows.slice(0, CARD_MAX_WINDOWS).entries()) {
+			const shownWindows = cappedRowCount(entry.windows.length, CARD_MAX_WINDOWS);
+			for (const [index, window] of entry.windows.slice(0, shownWindows).entries()) {
 				const label: TspSpan[] = [span(sanitizeDisplayLine(window.label))];
 				if (window.windowTag) label.push(span(` ${sanitizeDisplayLine(window.windowTag)}`, "dim"));
 				const cells: NativeChild[] = [
@@ -1451,7 +1452,7 @@ export class UsageDashboardComponent implements Component {
 				}
 				rows.push(node("row", { role: "omp.usage.window", gap: "md", align: "center" }, cells, `w${index}`));
 			}
-			const hidden = entry.windows.length - CARD_MAX_WINDOWS;
+			const hidden = entry.windows.length - shownWindows;
 			if (hidden > 0) {
 				rows.push(
 					text([span(`${hidden} more in Details`, "dim")], {

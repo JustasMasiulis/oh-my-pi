@@ -27,7 +27,7 @@ import {
 	userMessageLabel,
 	userTurnDraft,
 } from "../chat/transcript-entry";
-import { expandKeyHint, replaceTabs } from "../render/render-utils";
+import { cappedRowCount, expandKeyHint, replaceTabs } from "../render/render-utils";
 import { formatKeyHint } from "../app-keybindings";
 import { editorKey, editorKeys } from "../chrome/keybinding-hints";
 import { highlightCode, type ThemeColor, theme } from "../theme/theme";
@@ -228,7 +228,7 @@ function blockBody(block: CopyBlock): NativeNode {
 	if (block.href) return text([span(block.href, "link")], { wrap: "char", href: block.href });
 	if (block.kind === "quote") return md(block.content);
 	const lines = block.content.split("\n");
-	if (lines.length <= PREVIEW_BLOCK_LINES) return code(block.content, { lang: block.language, wrap: true });
+	if (lines.length <= PREVIEW_BLOCK_LINES + 1) return code(block.content, { lang: block.language, wrap: true });
 	const shown = lines.slice(0, PREVIEW_BLOCK_LINES).join("\n");
 	return node("col", { gap: "xs" }, [
 		code(shown, { lang: block.language, wrap: true }),
@@ -1009,7 +1009,7 @@ export class CopySelectorComponent implements Component {
 		if (cached?.blocks === blocks && cached.inner === inner) return cached.previews;
 		const previews = blocks.map(block => {
 			const raw = block.content.split("\n");
-			const shown = raw.slice(0, BLOCK_PREVIEW_LINES);
+			const shown = raw.slice(0, cappedRowCount(raw.length, BLOCK_PREVIEW_LINES));
 			const styled = block.language ? highlightCode(shown.join("\n"), block.language) : shown;
 			const rows = styled.map(row => truncateToWidth(replaceTabs(row), inner));
 			if (raw.length > shown.length) {

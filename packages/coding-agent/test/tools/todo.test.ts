@@ -798,13 +798,13 @@ describe("selectCollapsedTodos walking viewport (#5873)", () => {
 		expect(contents(sel)).toHaveLength(5);
 	});
 
-	it("caps active todos and counts the hidden actives in the summary", () => {
+	it("caps active todos and counts every hidden todo, naming the hidden actives", () => {
 		const tasks = mk(10, []);
 		const matched = (t: TodoItem) =>
 			["Task 1", "Task 2", "Task 3", "Task 4", "Task 5", "Task 6", "Task 7"].includes(t.content);
 		const sel = selectCollapsedTodos(tasks, matched, 5);
 		expect(contents(sel)).toEqual(["Task 1", "Task 2", "Task 3", "Task 4", "Task 5"]);
-		expect(sel.summary).toBe("… 2 more active todos");
+		expect(sel.summary).toBe(`… 5 more todos${theme.sep.dot}2 active`);
 		// No unrelated pending rows leak in.
 		expect(contents(sel).some(c => ["Task 8", "Task 9", "Task 10"].includes(c))).toBe(false);
 	});
@@ -829,12 +829,18 @@ describe("selectCollapsedTodos walking viewport (#5873)", () => {
 		expect(active.summary).toBe("");
 	});
 
-	it("keeps an overflow summary when one active task overflows the cap and pending remains", () => {
+	it("counts the pending work a single hidden active todo's summary row also hides", () => {
 		// 6 matched actives + 2 pending, cap 5: showing all 6 actives would hide the
-		// pending work with no summary row at all.
+		// pending work with no summary row at all, so the row counts all 3 hidden todos.
 		const sel = selectCollapsedTodos(mk(8, []), (t: TodoItem) => Number(t.content.slice(5)) <= 6, 5);
 		expect(contents(sel)).toEqual(["Task 1", "Task 2", "Task 3", "Task 4", "Task 5"]);
-		expect(sel.summary).toBe("… 1 more active todo");
+		expect(sel.summary).toBe(`… 3 more todos${theme.sep.dot}1 active`);
+	});
+
+	it("names hidden todos as active when no pending work is hidden with them", () => {
+		const sel = selectCollapsedTodos(mk(8, []), () => true, 5);
+		expect(contents(sel)).toEqual(["Task 1", "Task 2", "Task 3", "Task 4", "Task 5"]);
+		expect(sel.summary).toBe("… 3 more active todos");
 	});
 
 	it("returns the whole open set with no summary when it fits", () => {

@@ -8,7 +8,7 @@ import type { Component } from "../tui";
 import { getPaddingX, getWidthConfigEpoch } from "../utils";
 import { truncateToVisualLines } from "../chrome/visual-truncate";
 import { getSixelLineMask } from "./sixel";
-import { formatExpandHint, formatMoreRow, replaceTabs } from "./render-utils";
+import { cappedRowCount, formatExpandHint, formatMoreRow, replaceTabs } from "./render-utils";
 
 /** Which side of an output stream remains visible when the pane is capped. */
 export type OutputPaneEdge = "head" | "tail";
@@ -73,20 +73,26 @@ export function formatOutputPaneLines(options: OutputPaneFormatOptions, theme: T
 
 	if (limit !== undefined && Number.isFinite(limit)) {
 		const boundedLimit = Math.max(0, Math.floor(limit));
+		// An own-row marker hiding exactly one row would take that row's place: show the row instead.
+		const ownRowMarker = options.showHiddenMarker !== false;
 		if (boundedLimit === 0) {
 			visibleLines = [];
 			hiddenCount = styledLines.length;
 		} else if (options.visual && edge === "tail") {
-			const visual = truncateToVisualLines(styledLines.join("\n"), boundedLimit, Math.max(1, options.width ?? 1));
+			const text = styledLines.join("\n");
+			const width = Math.max(1, options.width ?? 1);
+			let visual = truncateToVisualLines(text, boundedLimit, width);
+			if (ownRowMarker && visual.skippedCount === 1) visual = truncateToVisualLines(text, boundedLimit + 1, width);
 			visibleLines = visual.visualLines;
 			hiddenCount = visual.skippedCount;
 		} else if (options.visual) {
 			const rendered = new Text(styledLines.join("\n"), 0, 0).render(Math.max(1, options.width ?? 1));
-			visibleLines = rendered.slice(0, boundedLimit);
+			visibleLines = rendered.slice(0, ownRowMarker ? cappedRowCount(rendered.length, boundedLimit) : boundedLimit);
 			hiddenCount = Math.max(0, rendered.length - visibleLines.length);
 		} else if (styledLines.length > boundedLimit) {
-			hiddenCount = styledLines.length - boundedLimit;
-			visibleLines = edge === "tail" ? styledLines.slice(-boundedLimit) : styledLines.slice(0, boundedLimit);
+			const count = ownRowMarker ? cappedRowCount(styledLines.length, boundedLimit) : boundedLimit;
+			hiddenCount = styledLines.length - count;
+			visibleLines = edge === "tail" ? styledLines.slice(styledLines.length - count) : styledLines.slice(0, count);
 		}
 	}
 
@@ -250,8 +256,14 @@ export class OutputPane implements Component {
 		this.invalidate();
 	}
 
+	/** Lines the pane shows; counts and caps must use this, not the stored rows. */
 	get lineCount(): number {
-		return this.#lines.length;
+		return this.#lines.at(-1) === "" ? this.#lines.length - 1 : this.#lines.length;
+	}
+
+	/** A trailing newline opens an empty line for the next chunk; it is not output to show. */
+	#shownLines(): readonly string[] {
+		return this.#lines.at(-1) === "" ? this.#lines.slice(0, -1) : this.#lines;
 	}
 
 	get hasSixel(): boolean {
@@ -306,14 +318,8 @@ export class OutputPane implements Component {
 		const paddingX = getPaddingX(this.#options.paddingX ?? 0);
 		const contentWidth = Math.max(1, width - paddingX * 2);
 		const content = this.#memo.get([...this.#renderDeps(), contentWidth], () => {
-			const formatted = formatOutputPaneLines(
-				{
-					...this.#options,
-					lines: this.#lines,
-					width: contentWidth,
-				},
-				this.#theme,
-			);
+			const lines = this.#shownLines();
+			const formatted = formatOutputPaneLines({ ...this.#options, lines, width: contentWidth }, this.#theme);
 			return `${this.#options.leadingBlank && formatted.lines.length > 0 ? "\n" : ""}${formatted.lines.join("\n")}`;
 		});
 		// The memo hands back the same string while its inputs hold, so the

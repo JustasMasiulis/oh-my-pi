@@ -221,7 +221,9 @@ export function renderStreamingFallback(editMode: EditMode, args: unknown, theme
 				? record.newText
 				: undefined;
 	if (!newString) return "";
-	const preview = plainTextPreview(newString, theme);
+	let preview = plainTextPreview(newString, theme, CALL_TEXT_PREVIEW_LINES);
+	// The marker takes a row of its own: one hidden line renders in its place.
+	if (preview.hidden === 1) preview = plainTextPreview(newString, theme, CALL_TEXT_PREVIEW_LINES + 1);
 	if (preview.hidden > 0) preview.lines.push(theme.fg("dim", formatMoreItems(preview.hidden, "line", theme)));
 	return preview.lines.join("\n");
 }
@@ -373,17 +375,17 @@ function hasCallPreview(args: EditRenderArgs, renderContext: EditRenderContext |
  * rule — a lone surrogate anywhere drops every U+FFFD — is replayed on the
  * head. ESC-bearing text (ANSI stripping can span lines) takes the full path.
  */
-function plainTextPreview(text: string, uiTheme: Theme): { lines: string[]; hidden: number } {
+function plainTextPreview(text: string, uiTheme: Theme, maxLines: number): { lines: string[]; hidden: number } {
 	let previewLines: { lines: readonly string[]; hidden: number };
 	let headEnd = -1;
 	if (!text.includes("\x1b")) {
-		for (let newlines = 0; newlines < CALL_TEXT_PREVIEW_LINES; newlines++) {
+		for (let newlines = 0; newlines < maxLines; newlines++) {
 			headEnd = text.indexOf("\n", headEnd + 1);
 			if (headEnd === -1) break;
 		}
 	}
 	if (headEnd === -1) {
-		previewLines = cappedHeadLines(sanitizeText(text).split("\n"), CALL_TEXT_PREVIEW_LINES);
+		previewLines = cappedHeadLines(sanitizeText(text).split("\n"), maxLines);
 	} else {
 		let head = sanitizeText(text.slice(0, headEnd));
 		if (head.includes("\ufffd") && !text.isWellFormed()) head = head.replaceAll("\ufffd", "");
@@ -486,7 +488,12 @@ function formatStreamingDiff(
 		// its Myers alignment is not monotonic in payload length, so a hunk-aware
 		// window stutters as rows move between hunks. Expanded widens the window
 		// to the viewport; the full diff appears once the result finalizes.
-		const tail = sliceStreamingDiffTail(diff, innerWidth, budget);
+		let tail = sliceStreamingDiffTail(diff, innerWidth, budget);
+		// The marker takes a row of its own: one hidden one-row line renders in its place.
+		if (tail.hiddenLines === 1) {
+			const widened = sliceStreamingDiffTail(diff, innerWidth, budget + 1);
+			if (widened.hiddenLines === 0) tail = widened;
+		}
 		const rendered = renderDiffColored(tail.content, { filePath: rawPath, theme: uiTheme });
 		if (tail.hiddenLines === 0) return rendered;
 		const marker = formatMoreRow(tail.hiddenLines, "line", uiTheme, { expanded: !widens, position: "earlier" });
@@ -526,7 +533,7 @@ function getCallPreview(
 	}
 	const text = args.diff || args.newText || args.patch;
 	if (text) {
-		const preview = plainTextPreview(text, uiTheme);
+		const preview = plainTextPreview(text, uiTheme, CALL_TEXT_PREVIEW_LINES);
 		return {
 			lines: preview.lines,
 			footer: preview.hidden > 0 ? formatMoreItems(preview.hidden, "line", uiTheme) : undefined,
@@ -881,28 +888,57 @@ function renderDiffSection(
 	innerWidth: number,
 	uiTheme: Theme,
 	renderDiffFn: (t: string, o?: { filePath?: string }) => string,
-	renderCache?: RenderedStringCache,
+	renderCache: RenderedStringCache | undefined,
+	markerOwnRow: boolean,
 ): DiffSection {
-	const {
-		text: truncatedDiff,
-		hiddenHunks,
-		hiddenLines: logicallyHiddenLines,
-	} = expanded
-		? { text: diff, hiddenHunks: 0, hiddenLines: 0 }
-		: truncateDiffByHunk(diff, PREVIEW_LIMITS.DIFF_COLLAPSED_HUNKS, PREVIEW_LIMITS.DIFF_COLLAPSED_LINES);
-
-	const renderedDiff = cachedRenderedString(renderCache, uiTheme, expanded, rawPath, truncatedDiff, () =>
-		renderDiffFn(truncatedDiff, { filePath: rawPath }),
-	);
 	if (expanded) {
+		const renderedDiff = cachedRenderedString(renderCache, uiTheme, expanded, rawPath, diff, () =>
+			renderDiffFn(diff, { filePath: rawPath }),
+		);
 		return { lines: renderedDiff.split("\n").flatMap(line => wrapEditRendererLine(line, innerWidth)) };
 	}
-	const visible = sliceCollapsedDiffRows(renderedDiff, innerWidth, PREVIEW_LIMITS.DIFF_COLLAPSED_LINES);
-	const hiddenLines = logicallyHiddenLines + visible.hiddenLines;
-	if (hiddenLines === 0 && hiddenHunks === 0) return { lines: visible.rows };
+	const collapsedLines = PREVIEW_LIMITS.DIFF_COLLAPSED_LINES;
+	let section = collapsedDiffSection(diff, rawPath, collapsedLines, innerWidth, renderDiffFn, uiTheme, renderCache);
+	// A marker on its own row hiding one line: show that line instead when it fits one row.
+	if (markerOwnRow && section.hiddenLines === 1 && section.hiddenHunks === 0) {
+		const widened = collapsedDiffSection(
+			diff,
+			rawPath,
+			collapsedLines + 1,
+			innerWidth,
+			renderDiffFn,
+			uiTheme,
+			renderCache,
+		);
+		if (widened.hiddenLines === 0 && widened.hiddenHunks === 0) section = widened;
+	}
+	const { rows, hiddenLines, hiddenHunks } = section;
+	if (hiddenLines === 0 && hiddenHunks === 0) return { lines: rows };
 	const marker =
 		hiddenLines > 0 ? formatMoreRow(hiddenLines, "line", uiTheme) : formatMoreRow(hiddenHunks, "hunk", uiTheme);
-	return { lines: visible.rows, marker };
+	return { lines: rows, marker };
+}
+
+/** Collapsed diff rows within `maxLines` (logical and visual), with what the window left out. */
+function collapsedDiffSection(
+	diff: string,
+	rawPath: string,
+	maxLines: number,
+	innerWidth: number,
+	renderDiffFn: (t: string, o?: { filePath?: string }) => string,
+	uiTheme: Theme,
+	renderCache?: RenderedStringCache,
+): { rows: string[]; hiddenLines: number; hiddenHunks: number } {
+	const truncated = truncateDiffByHunk(diff, PREVIEW_LIMITS.DIFF_COLLAPSED_HUNKS, maxLines);
+	const renderedDiff = cachedRenderedString(renderCache, uiTheme, false, rawPath, truncated.text, () =>
+		renderDiffFn(truncated.text, { filePath: rawPath }),
+	);
+	const visible = sliceCollapsedDiffRows(renderedDiff, innerWidth, maxLines);
+	return {
+		rows: visible.rows,
+		hiddenLines: truncated.hiddenLines + visible.hiddenLines,
+		hiddenHunks: truncated.hiddenHunks,
+	};
 }
 
 function wrapEditRendererLine(line: string, width: number): string[] {
@@ -1410,7 +1446,7 @@ function renderSingleFileResult(
 	const stats = formatDiffStats(diff, uiTheme);
 	type RenderDiffFn = (t: string, o?: { filePath?: string }) => string;
 	let highlightedWith: RenderDiffFn | undefined;
-	let sectionMemo: { expanded: boolean; width: number; section: DiffSection } | undefined;
+	let sectionMemo: { expanded: boolean; width: number; markerOwnRow: boolean; section: DiffSection } | undefined;
 
 	return framedToolCard(
 		uiTheme,
@@ -1422,10 +1458,17 @@ function renderSingleFileResult(
 				invalidateRenderedStringCache(renderedDiffCache);
 				sectionMemo = undefined;
 			}
-			if (sectionMemo?.expanded !== expanded || sectionMemo.width !== contentWidth) {
+			const diag = diagnosticsCardSection(diagnostics, expanded, uiTheme);
+			const markerOwnRow = diag !== undefined;
+			if (
+				sectionMemo?.expanded !== expanded ||
+				sectionMemo.width !== contentWidth ||
+				sectionMemo.markerOwnRow !== markerOwnRow
+			) {
 				sectionMemo = {
 					expanded,
 					width: contentWidth,
+					markerOwnRow,
 					section: renderDiffSection(
 						diff,
 						rawPath,
@@ -1434,11 +1477,11 @@ function renderSingleFileResult(
 						uiTheme,
 						renderDiffFn,
 						renderedDiffCache,
+						markerOwnRow,
 					),
 				};
 			}
 			const { lines, marker } = sectionMemo.section;
-			const diag = diagnosticsCardSection(diagnostics, expanded, uiTheme);
 			// The last section's marker rides the bottom border; the diff's stays in place above diagnostics.
 			return {
 				status: editStatus(header, framedHeaderBudget(width, uiTheme), uiTheme),

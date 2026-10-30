@@ -31,7 +31,7 @@ import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "..
 import { actionHint, type NativeHint, hintsRow } from "../native/overlay";
 import { CLOSE_ACTION, type PickerEvent, picker, pickerEvent, pickerQuery } from "../native/picker";
 import type { AgentSource } from "../tools/task";
-import { shortenPath } from "../render/render-utils";
+import { cappedRowCount, shortenPath } from "../render/render-utils";
 import { sanitizeDisplaySingleLine } from "./extensions/display-text";
 import { getEditorTheme, theme } from "../theme";
 import { matchesAppFollowUp, matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
@@ -1165,10 +1165,10 @@ export class AgentsHubComponent implements Component {
 				for (const w of wrapTextWithAnsi(replaceTabs(raw), promptWidth)) wrapped.push(w);
 			}
 			const budget = Math.max(3, rows - lines.length - 3);
-			for (const line of wrapped.slice(0, budget)) {
+			for (const line of wrapped.slice(0, cappedRowCount(wrapped.length, budget))) {
 				lines.push(truncateToWidth(`   ${theme.fg("dim", line)}`, width));
 			}
-			if (wrapped.length > budget) {
+			if (wrapped.length > budget + 1) {
 				lines.push(theme.fg("dim", `   … ${wrapped.length - budget} more lines`));
 			}
 		} else {

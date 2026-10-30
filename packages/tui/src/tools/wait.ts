@@ -30,6 +30,7 @@ import {
 	isFeedModelBadgeEnabled,
 	PREVIEW_LIMITS,
 	replaceTabs,
+	revealLoneHidden,
 	type ToolUIStatus,
 	cappedHeadLines,
 	createCachedComponent,
@@ -546,8 +547,14 @@ function jobsRenderResult(
 				);
 			}
 			// A capped list carries the hint on its `… N more` row; otherwise say so when a row holds back detail.
+			const cap = PREVIEW_LIMITS.COLLAPSED_ITEMS;
+			const listCapped = <T>(items: readonly T[], rowsOf: (item: T) => number): boolean => {
+				const shown = revealLoneHidden(items.length, Math.min(items.length, cap), () => rowsOf(items[cap]));
+				return shown < items.length;
+			};
 			const capped =
-				sortedJobs.length > PREVIEW_LIMITS.COLLAPSED_ITEMS || agents.length > PREVIEW_LIMITS.COLLAPSED_ITEMS;
+				listCapped(sortedJobs, job => jobLines(job, expanded, rowWidth, live).length) ||
+				listCapped(agents, () => 1);
 			if (!expanded && !capped && sortedJobs.some(job => jobHidesDetail(job, rowWidth))) {
 				body.push(formatExpandHint(uiTheme));
 			}

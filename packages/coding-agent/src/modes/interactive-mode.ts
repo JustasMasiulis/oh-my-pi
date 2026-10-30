@@ -182,6 +182,7 @@ import { StreamPublisher } from "../stream/publisher";
 import { newRecordingPath, SessionRecorder } from "../stream/recording";
 import { StreamRedactor } from "../stream/redactor";
 import {
+	cappedRowCount,
 	FEED_MODEL_BADGE_WIDTH,
 	formatFeedModelBadge,
 	formatMoreItems,
@@ -1062,11 +1063,13 @@ export interface PinnedHudLayout {
 /**
  * Pinned jump-list layout for `runningTotal` live agents. Collapsed shows a
  * few rows plus an expander; expanded shows every row plus a collapse row.
+ * An expander that would hide a single agent is replaced by that agent's row,
+ * in both states, so a lone hidden agent never costs a toggle row.
  * Single source of truth for the renderer and the click row map, so painted
  * rows and hit-testing can never disagree.
  */
 export function layoutPinnedHud(runningTotal: number, expanded: boolean): PinnedHudLayout {
-	if (runningTotal <= SUBAGENT_HUD_COLLAPSED_LIMIT) {
+	if (cappedRowCount(runningTotal, SUBAGENT_HUD_COLLAPSED_LIMIT) === runningTotal) {
 		return { itemRows: runningTotal, toggle: undefined, toggleRow: undefined };
 	}
 	if (!expanded) {

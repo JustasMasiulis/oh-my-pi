@@ -12,6 +12,7 @@ import { framedToolCard, plainToolCard } from "../render/tool-card";
 import { wrapPrefixedLine } from "../render/hanging-wrap";
 import {
 	cachedRenderedString,
+	cappedRowCount,
 	createRenderedStringCache,
 	formatCount,
 	formatErrorText,
@@ -371,7 +372,7 @@ function formatStreamingContent(
 		let visibleLines: string[];
 		if (state) {
 			totalLines = state.lineCount;
-			startIndex = expanded ? 0 : Math.max(0, totalLines - PREVIEW_LIMITS.EXPANDED_LINES);
+			startIndex = expanded ? 0 : totalLines - cappedRowCount(totalLines, PREVIEW_LIMITS.EXPANDED_LINES);
 			const flushed = argsComplete === true && state.finalFlushedLength === content.length;
 			const trailingLine = flushed ? state.finalTrailing : content.slice(state.completeLength).replace(/\r/g, "");
 			if (totalLines === 1 && trailingLine.length === 0) return "";
@@ -381,7 +382,7 @@ function formatStreamingContent(
 			if (normalized.length === 0) return "";
 			const lines = normalized.split("\n");
 			totalLines = lines.length;
-			startIndex = expanded ? 0 : Math.max(0, totalLines - PREVIEW_LIMITS.EXPANDED_LINES);
+			startIndex = expanded ? 0 : totalLines - cappedRowCount(totalLines, PREVIEW_LIMITS.EXPANDED_LINES);
 			visibleLines = highlightCode(lines.slice(startIndex).join("\n"), language);
 		}
 		const lineNumberWidth = Math.max(WRITE_GUTTER_MIN_WIDTH, String(totalLines).length);
@@ -405,18 +406,23 @@ function wrapWritePreviewRows(lines: readonly string[], width: number): string[]
 	});
 }
 
-/** The written file's head rows (`rawLines` are its display lines) and the count of lines hidden below them. */
+/**
+ * The written file's head rows (`rawLines` are its display lines) and the count of lines hidden below them.
+ * `markerOwnRow`: the hidden-line marker takes a row of its own, so one hidden line renders instead.
+ */
 function renderContentPreview(
 	content: string,
 	rawLines: readonly string[],
 	expanded: boolean,
+	markerOwnRow: boolean,
 	language: string | undefined,
 	uiTheme: Theme,
 	cache?: RenderedStringCache,
 ): { lines: string[]; hidden: number } {
-	const shown = expanded ? rawLines.length : Math.min(rawLines.length, WRITE_PREVIEW_LINES);
+	const cap = markerOwnRow ? cappedRowCount(rawLines.length, WRITE_PREVIEW_LINES) : WRITE_PREVIEW_LINES;
+	const shown = expanded ? rawLines.length : Math.min(rawLines.length, cap);
 	if (shown === 0) return { lines: [], hidden: 0 };
-	const text = cachedRenderedString(cache, uiTheme, expanded, language ?? "", content, () => {
+	const text = cachedRenderedString(cache, uiTheme, expanded, `${language ?? ""}:${shown}`, content, () => {
 		const highlighted = highlightCode(rawLines.slice(0, shown).join("\n"), language);
 		const lineNumberWidth = Math.max(WRITE_GUTTER_MIN_WIDTH, String(rawLines.length).length);
 		return highlighted
@@ -747,9 +753,17 @@ export const writeToolRenderer = {
 			uiTheme,
 			({ contentWidth }) => {
 				const { expanded } = options;
-				const preview = renderContentPreview(fileContent, rawLines, expanded, lang, uiTheme, previewCache);
-				const marker = preview.hidden > 0 ? formatMoreRow(preview.hidden, "line", uiTheme) : undefined;
 				const diag = diagnosticsCardSection(diagnostics, expanded, uiTheme);
+				const preview = renderContentPreview(
+					fileContent,
+					rawLines,
+					expanded,
+					diag !== undefined,
+					lang,
+					uiTheme,
+					previewCache,
+				);
+				const marker = preview.hidden > 0 ? formatMoreRow(preview.hidden, "line", uiTheme) : undefined;
 				const lines = wrapWritePreviewRows(preview.lines, contentWidth);
 				if (progressRow) lines.unshift(progressRow);
 				// The last section's marker rides the bottom border; the preview's stays in place above diagnostics.
@@ -843,5 +857,6 @@ export const writeToolRenderer = {
 	// as stale content above the new frame without a full replay. Expanded and
 	// short previews stay top-anchored and skip the (scrollback-wiping) reset.
 	forceFirstResultViewportRepaint: (args: unknown, options: RenderResultOptions) =>
-		!options.expanded && exceedsLineCount(writeContentOf(args), PREVIEW_LIMITS.EXPANDED_LINES),
+		// cap+1 lines still render whole (no tail window), so only a longer stream scrolls.
+		!options.expanded && exceedsLineCount(writeContentOf(args), PREVIEW_LIMITS.EXPANDED_LINES + 1),
 } satisfies ToolRenderer<WriteRenderArgs, WriteToolDetails>;

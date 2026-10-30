@@ -17,7 +17,7 @@
 - `read` of a web page keeps the title, description, author and dates of its `<meta>` tags and lists the others by name only, so pages cost about 6% fewer tokens ([#17393](https://github.com/can1357/oh-my-pi/pull/17393) by [@will-bogusz](https://github.com/will-bogusz))
 - Tool calls in the transcript share a single header and list layout across every tool and symbol preset. The ASCII preset no longer mixes frame styles or status glyphs, and errors keep the tool's title.
 - `omp gallery` draws its section chrome with the active symbol preset.
-- The subagent HUD marks running agents with the running status glyph instead of a dot, its toggle reads `… N more agents · expand`, and multi-line descriptions are joined with `·`.
+- The subagent HUD marks running agents with the running status glyph instead of a dot, its toggle reads `… N more agents · expand`, and multi-line descriptions are joined with `·`. The subagent and todo HUDs show a lone hidden agent or stage instead of a `… 1 more` row.
 
 ### Fixed
 

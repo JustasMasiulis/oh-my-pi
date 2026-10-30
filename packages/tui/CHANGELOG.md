@@ -16,7 +16,7 @@
 ### Added
 
 - Added a `maxRows` callback to `FigureMarkdown`, `SvgFigure` and `TableChartFigure` so surfaces shorter than the screen can fit their figures; zero hides a figure without delaying transcript completion ([#15661](https://github.com/can1357/oh-my-pi/issues/15661), [#15853](https://github.com/can1357/oh-my-pi/pull/15853) by [@KunoLu](https://github.com/KunoLu))
-- Added `formatMoreRow`, `clipRows`, `nestRows` and `CardRowsMemo` for renderers: a dim `… N more` row with the expand hint, clipped flush rows, tree-nested rows and a width/expansion row memo.
+- Added `formatMoreRow`, `clipRows`, `nestRows`, `CardRowsMemo`, `cappedRowCount` and `revealLoneHidden` for renderers: a dim `… N more` row with the expand hint, clipped flush rows, tree-nested rows, a width/expansion row memo, and list caps that never hide a single one-row entry. `DynamicBorder.setLabel` accepts a function for live labels, and `Loader.inlineText()` returns the spinner and message as one line.
 
 ### Changed
 
@@ -29,7 +29,7 @@
 - Background job, supervised process, tangent and prompt file-mention rows start at column 0 with a status glyph: `[+]` when done, `[-]` when failed, `[!]` for a skipped file and `[i]` for a tangent.
 - The idle recap leads with `[i]` instead of `※`, collab guest prompts show the author's name in bold instead of `«name» ›`, and rule-injection banners drop the rewind glyph and end with the `[Ctrl+O: Expand]` hint.
 - Advisor notes open with an `[i] Advisor` header at column 0 and end with `… N more notes [Ctrl+O: Expand]` while collapsed; extension and hook messages drop their icons.
-- User `!`/`$` runs show `exit N` or `cancelled` in their bottom border instead of a `(exit N)` / `(cancelled)` row under the output.
+- User `!`/`$` runs show the spinner and `Running… (Esc to cancel)` in their bottom border while they run, then `exit N` or `cancelled`, instead of rows under the output.
 - Compaction, branch and handoff dividers show the `[Ctrl+O: Expand]` hint until expanded, the expanded summary no longer leaves two blank rows under the divider, and collapsed provider errors end with the shared `… N more lines` row.
 - IRC message cards name the recipient with an arrow (`IRC: → Reviewer`), like incoming and relayed messages, and their delivery badges (`injected`, `revived`, `failed`) are gray.
 - Tool cards and skill prompts that hide detail while collapsed always say so with the `Ctrl+O: Expand` hint: GitHub search results whose rows omit fields, Find's search accounting, Wait's job output, Task results with clipped output, the earlier lines of a streaming Write or Edit (Edit only when expanding widens its tail), the clipped arguments of tools without their own renderer, and a skill message's folded SKILL.md prompt.
@@ -40,6 +40,7 @@
 - Grouped Read cards show their count as header meta (`Read 4 files`).
 - Search headers dim the `in` between the pattern and its scope (`useState in src`).
 - `… N more` rows and card footers are dim everywhere, like the expand hint; only facts the tool colors itself, such as `+2 -1` or `No output`, stand out.
+- Lists never hide a single one-row entry behind a `… 1 more` row of its own; they show the entry, which takes the same row. Footer markers and hidden multi-row entries (a file's match group, an agent with detail rows) keep their marker.
 - The extension inspector and collapsed synthetic prompts use the shared `[Ctrl+O: Expand]` hint, and the inspector's `… N more` rows name what they hide.
 - A color applied over already-styled text now holds after the inner styling ends, so a footer such as `+2 -1 · … 3 more lines` stays dim past the colored counts.
 
@@ -49,6 +50,8 @@
 - Fixed session tree rows overlapping when messages, tool arguments, or labels contain carriage returns or Unicode line/paragraph separators (`U+2028`, `U+2029`), while keeping multiline formatting in the selected entry preview ([#17430](https://github.com/can1357/oh-my-pi/pull/17430) by [@lincicomb](https://github.com/lincicomb)).
 - Fixed MCP tool cards showing pending instead of running on frames without a spinner, and grouped Read rows holding a running and a pending read showing pending.
 - Fixed multi-line Resolve reasons, Goal reports, todo fallback text and process errors running together in one row, and tabs breaking the alignment of IRC cards and Goal objectives.
+- Fixed the collapsed todo list's overflow row counting only the hidden active todos when it also hides pending ones; it now counts every hidden todo (`… 3 more todos · 1 active`).
+- Fixed settled `!`/`$` runs counting the empty line after a trailing newline as hidden output.
 
 ## [18.14.0] - 2026-10-29
 

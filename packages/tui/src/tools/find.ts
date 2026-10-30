@@ -338,7 +338,20 @@ export const findToolRenderer = {
 							rows.push(...hitRows);
 							shown++;
 						}
-						if (shown < hits.length) {
+						const lastHitRows =
+							hits.length - shown === 1
+								? renderHit(
+										hits[shown]!,
+										rangeLimit,
+										linkTargets.cwd,
+										linkTargets.rel(hits[shown]!, shown),
+										uiTheme,
+									)
+								: undefined;
+						if (lastHitRows?.length === 1) {
+							// A single one-row hit renders in place of its own `… 1 more hit` row.
+							rows.push(...lastHitRows, formatExpandHint(uiTheme));
+						} else if (shown < hits.length) {
 							rows.push(formatMoreRow(hits.length - shown, "hit", uiTheme));
 						} else if (!expanded) {
 							// The search accounting (and any further ranges) only shows expanded.

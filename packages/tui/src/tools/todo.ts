@@ -15,7 +15,6 @@ import {
 	formatErrorText,
 	formatMoreItems,
 	PREVIEW_LIMITS,
-	pluralize,
 	replaceTabs,
 	sanitizeDisplayLines,
 } from "../render/render-utils";
@@ -167,8 +166,8 @@ const COLLAPSED_CLOSED_CONTEXT = 1;
  *    the first active one, in todo order (falling back to leading pending tasks
  *    when no active task exists), so a freshly-promoted task leads the preview.
  * 3. When active tasks alone exceed `cap`, only the first `cap` active tasks are
- *    shown and the summary counts the hidden *active* todos, never replacing
- *    them with unrelated pending rows.
+ *    shown, never replaced by unrelated pending rows; the summary counts every
+ *    hidden todo and says how many of them are active.
  *
  * The summary occupies a row, so a summary that would hide exactly one task is
  * replaced by that task: the selection spends at most `cap + 1` rows.
@@ -186,9 +185,12 @@ function selectWithinCap<T extends { status: TodoStatus }>(
 	// branch still surfaces any following pending work in the summary.
 	if (active.length > cap) {
 		const hiddenActive = active.length - cap;
+		const hidden = base.length - cap;
+		const onlyActive = hidden === hiddenActive;
+		const more = formatMoreItems(hidden, onlyActive ? "active todo" : "todo", theme);
 		return {
 			items: active.slice(0, cap),
-			summary: `${theme.format.ellipsis} ${hiddenActive} more active ${pluralize("todo", hiddenActive)}`,
+			summary: onlyActive ? more : `${more}${theme.sep.dot}${hiddenActive} active`,
 		};
 	}
 

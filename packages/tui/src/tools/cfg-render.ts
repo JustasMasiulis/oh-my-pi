@@ -7,7 +7,13 @@
  */
 import type { Component } from "../tui";
 import type { StatusLineOptions } from "../render";
-import { cappedHeadLines, formatErrorText, formatMoreRow, PREVIEW_LIMITS } from "../render/render-utils";
+import {
+	cappedHeadLines,
+	cappedRowCount,
+	formatErrorText,
+	formatMoreRow,
+	PREVIEW_LIMITS,
+} from "../render/render-utils";
 import { highlightCode, type Theme } from "../theme/theme";
 import { parseCfgUrl } from "./cfg-url";
 import type { NativeToolView, RenderResultOptions } from "./renderer";
@@ -64,7 +70,10 @@ export function renderCfgRead(
 		if (!result) return [header];
 		if (result.isError) return [header, `  ${formatErrorText(firstText(result) || "Settings read failed.", theme)}`];
 		const body = firstText(result).trimEnd().split("\n");
-		const shown = cappedHeadLines(body, expanded ? body.length : PREVIEW_LIMITS.COLLAPSED_ITEMS);
+		const shown = cappedHeadLines(
+			body,
+			expanded ? body.length : cappedRowCount(body.length, PREVIEW_LIMITS.COLLAPSED_ITEMS),
+		);
 		const rows = highlightCode(safe(shown.lines.join("\n")), "yaml", theme).map(line => `  ${line}`);
 		if (shown.hidden) rows.push(`  ${formatMoreRow(shown.hidden, "line", theme, { expanded })}`);
 		return [header, ...rows];

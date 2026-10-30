@@ -2,6 +2,7 @@ import type { Component } from "../tui";
 import { FLUSH_BODY_INDENT, renderTreeList, type StatusLineOptions, truncateToWidth } from "../render";
 import {
 	cappedHeadLines,
+	cappedRowCount,
 	formatBadge,
 	formatCount,
 	formatDuration,
@@ -292,16 +293,17 @@ export function renderProcRead(
 		if (daemon) {
 			const output = details.terminalRows ?? (details.log ?? "").split("\n").filter(Boolean);
 			const limit = expanded ? PREVIEW_LIMITS.EXPANDED_LINES : PREVIEW_LIMITS.COLLAPSED_LINES;
-			const visible = output.slice(-limit).map(line => {
+			const shownCount = cappedRowCount(output.length, limit);
+			const visible = output.slice(output.length - shownCount).map(line => {
 				const row = styleTerminalRow(
 					truncateToWidth(safe(line), TRUNCATE_LENGTHS.LINE),
 					theme.fg("toolOutput", ""),
 				);
 				return `${INDENT}${row}`;
 			});
-			if (output.length > limit)
+			if (output.length > shownCount)
 				visible.unshift(
-					`${INDENT}${theme.fg("dim", formatMoreItems(output.length - limit, "line", theme, "earlier"))}`,
+					`${INDENT}${theme.fg("dim", formatMoreItems(output.length - shownCount, "line", theme, "earlier"))}`,
 				);
 			return [headerFor("success", daemonMeta(daemon, theme)), ...visible];
 		}

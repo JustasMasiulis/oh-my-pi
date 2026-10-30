@@ -15,6 +15,7 @@ import { formatShortSha, pushLine } from "./gh-format";
 import type { OutputMeta } from "./output-meta";
 import type { IsoBackendKind } from "@oh-my-pi/pi-natives";
 import {
+	cappedRowCount,
 	formatCount,
 	formatErrorText,
 	formatExpandHint,
@@ -253,7 +254,12 @@ function renderFailedLogs(
 		const tailLines = replaceTabs(entry.tail)
 			.split("\n")
 			.filter(line => line.length > 0);
-		const shown = expanded ? tailLines : tailLines.slice(-PREVIEW_LIMITS.OUTPUT_COLLAPSED);
+		const isLast = index === failedLogs.length - 1;
+		// A non-last entry's marker takes its own row; the last entry's goes to the bottom border.
+		const visibleCount = isLast
+			? PREVIEW_LIMITS.OUTPUT_COLLAPSED
+			: cappedRowCount(tailLines.length, PREVIEW_LIMITS.OUTPUT_COLLAPSED);
+		const shown = expanded ? tailLines : tailLines.slice(tailLines.length - Math.min(visibleCount, tailLines.length));
 		const hidden = tailLines.length - shown.length;
 		const entryMarker =
 			hidden > 0 ? formatMoreRow(hidden, "log line", theme, { expanded, position: "earlier" }) : undefined;
@@ -350,7 +356,9 @@ function renderSearchResults(
 	const summaryFields = SEARCH_SUMMARY_FIELDS[args.op ?? ""] ?? [];
 	return plainToolCard(theme, ({ contentWidth }) => {
 		const { expanded } = options;
-		const shown = expanded ? search.items : search.items.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS);
+		const shown = expanded
+			? search.items
+			: search.items.slice(0, cappedRowCount(search.items.length, PREVIEW_LIMITS.COLLAPSED_ITEMS));
 		const body: string[] = [];
 		for (const item of shown) {
 			const title = theme.fg("toolOutput", replaceTabs(item.title));
@@ -408,7 +416,7 @@ function renderFallbackComponent(
 	const status = githubStatus(args, "success", theme);
 	return plainToolCard(theme, ({ contentWidth }) => {
 		const { expanded } = options;
-		const shown = expanded ? rows : rows.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS);
+		const shown = expanded ? rows : rows.slice(0, cappedRowCount(rows.length, PREVIEW_LIMITS.COLLAPSED_ITEMS));
 		const body = shown.map(row => theme.fg("toolOutput", expanded ? row : truncateVisualWidth(row, contentWidth)));
 		const remaining = rows.length - shown.length;
 		if (remaining > 0) body.push(formatMoreRow(remaining, "line", theme, { expanded }));

@@ -77,8 +77,8 @@ function renderGlobFileRows(files: FileEntry[], expanded: boolean, theme: Theme)
 		{ files, expanded, maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS, hyperlinkFn: fileHyperlink },
 		theme,
 	);
-	// renderFileList appends its `… N more files` row exactly when collapsed past the cap.
-	if (!expanded && files.length > PREVIEW_LIMITS.COLLAPSED_ITEMS) {
+	// renderFileList appends its `… N more files` row exactly when it hides 2+ files past the cap.
+	if (!expanded && files.length > PREVIEW_LIMITS.COLLAPSED_ITEMS + 1) {
 		rows[rows.length - 1] += ` ${formatExpandHint(theme)}`;
 	}
 	return rows;

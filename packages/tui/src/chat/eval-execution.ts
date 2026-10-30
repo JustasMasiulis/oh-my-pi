@@ -11,6 +11,7 @@ import { highlightCode, theme } from "../theme/theme";
 import type { OutputArtifactError } from "../tools/streaming-output";
 import type { TruncationMeta } from "../tools/output-meta";
 import { OutputPane } from "../render/output-pane";
+import { cappedRowCount } from "../render/render-utils";
 import {
 	buildExecutionFrame,
 	buildStatusFooter,
@@ -93,7 +94,6 @@ export class EvalExecutionComponent extends Container {
 		});
 
 		this.#contentContainer.addChild(this.#formatHeader(colorKey));
-		this.#contentContainer.addChild(this.#loader);
 	}
 
 	/**
@@ -192,10 +192,20 @@ export class EvalExecutionComponent extends Container {
 		this.#updateDisplay();
 	}
 
+	/** The loader animates the bottom border from outside the child tree, so teardown stops it here. */
+	override dispose(): void {
+		this.#loader.dispose();
+		super.dispose();
+	}
+
 	#updateDisplay(): void {
 		// Only the collapsed preview hides lines; when expanded the footer must
 		// not keep advertising hidden lines / ctrl+o.
-		const hiddenLineCount = this.#expanded ? 0 : Math.max(0, this.#outputPane.lineCount - PREVIEW_LINES);
+		// A settled run's footer marker takes its own row: a lone hidden line shows instead.
+		const lineCount = this.#outputPane.lineCount;
+		const collapsedLines = this.#status === "running" ? PREVIEW_LINES : cappedRowCount(lineCount, PREVIEW_LINES);
+		const hiddenLineCount = this.#expanded ? 0 : Math.max(0, lineCount - collapsedLines);
+		this.#outputPane.configure({ collapsedMaxLines: Math.max(PREVIEW_LINES, collapsedLines) });
 
 		this.#contentContainer.clear();
 
@@ -204,11 +214,9 @@ export class EvalExecutionComponent extends Container {
 
 		if (this.#outputPane.lineCount > 0) this.#contentContainer.addChild(this.#outputPane);
 
-		// A settled run's exit/cancel marker rides the bottom border.
-		this.#bottomBorder.setLabel(executionStatusLabel(this.#status, this.#exitCode));
-		if (this.#status === "running") {
-			this.#contentContainer.addChild(this.#loader);
-		} else {
+		// The bottom border keeps the live loader until the run settles, then its exit/cancel marker.
+		if (this.#status !== "running") {
+			this.#bottomBorder.setLabel(executionStatusLabel(this.#status, this.#exitCode));
 			const footer = buildStatusFooter({
 				truncation: this.#truncation,
 				artifactError: this.#artifactError,

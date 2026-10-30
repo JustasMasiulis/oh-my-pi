@@ -12,6 +12,7 @@ import type { NativeToolHead, NativeToolView, RenderResultOptions, ToolRenderer,
 import type { Component } from "../tui";
 import { highlightCode as highlightThemeCode, type Theme } from "../theme/theme";
 import {
+	cappedRowCount,
 	formatCount,
 	formatErrorText,
 	formatExpandHint,
@@ -305,8 +306,10 @@ function hoverView(codeBlockMatch: RegExpMatchArray, fullText: string, theme: Th
 		rows(expanded) {
 			const before = docLines(beforeCode);
 			const after = docLines(afterCode);
-			if (expanded) return { rows: [...before, ...codeLines, ...after] };
-			const hidden = before.length + codeLines.length - 1 + after.length;
+			const full = [...before, ...codeLines, ...after];
+			// A single hidden line renders in place of its own `… 1 more line` row.
+			if (expanded || full.length <= 2) return { rows: full };
+			const hidden = full.length - 1;
 			return {
 				rows: [codeLines[0] ?? ""],
 				more: hidden > 0 ? formatMoreRow(hidden, "line", theme) : undefined,
@@ -386,7 +389,7 @@ function diagnosticsView(
 		icon: unreportedLines.length > 0 ? "warning" : "success",
 		meta,
 		rows(expanded) {
-			const shown = expanded ? items : items.slice(0, COLLAPSED_DIAGNOSTICS);
+			const shown = expanded ? items : items.slice(0, cappedRowCount(items.length, COLLAPSED_DIAGNOSTICS));
 			const remaining = items.length - shown.length;
 			return {
 				rows: shown.map(renderItem),
@@ -437,7 +440,7 @@ function referencesView(refCount: number, lines: string[], theme: Theme): LspRes
 			shownFiles.forEach((file, fileIndex) => {
 				const locs = byFile.get(file)!;
 				rows.push(`${formatStyledPath(replaceTabs(file), theme)} ${theme.fg("dim", `(${locs.length})`)}`);
-				const children = locs.slice(0, maxLocs).map(loc => theme.fg("muted", loc));
+				const children = locs.slice(0, cappedRowCount(locs.length, maxLocs)).map(loc => theme.fg("muted", loc));
 				const hiddenLocs = locs.length - children.length;
 				// Only the body's final row carries the expand hint.
 				markerLast = hiddenLocs > 0 && fileIndex === shownFiles.length - 1 && hiddenFiles === 0;
@@ -520,9 +523,12 @@ function symbolsView(lines: string[], theme: Theme): LspResultView {
 		icon: symbols.length > 0 ? "success" : "warning",
 		meta: [formatCount("symbol", symbols.length)],
 		rows(expanded) {
-			if (expanded) return { rows: symbols.map((sym, i) => `${prefixes[i]}${symbolLabel(sym)}`) };
+			const fullRows = symbols.map((sym, i) => `${prefixes[i]}${symbolLabel(sym)}`);
+			if (expanded) return { rows: fullRows };
 			const shown = topLevel.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS);
 			const hidden = symbols.length - shown.length;
+			// One hidden symbol renders as its own row instead of a `… 1 more symbol` row.
+			if (hidden === 1) return { rows: fullRows };
 			return {
 				rows: shown.map(symbolLabel),
 				more: hidden > 0 ? formatMoreRow(hidden, "symbol", theme) : undefined,
@@ -546,7 +552,9 @@ function genericView(text: string, lines: string[], theme: Theme): LspResultView
 		icon: (hasError && !hasSuccess) || /^no\b.*\bfound\b/i.test(text.trim()) ? "warning" : "success",
 		meta: [],
 		rows(expanded) {
-			const shown = expanded ? outputLines : outputLines.slice(0, COLLAPSED_GENERIC_LINES);
+			const shown = expanded
+				? outputLines
+				: outputLines.slice(0, cappedRowCount(outputLines.length, COLLAPSED_GENERIC_LINES));
 			const remaining = outputLines.length - shown.length;
 			return {
 				rows: shown.map(line => theme.fg("toolOutput", line)),

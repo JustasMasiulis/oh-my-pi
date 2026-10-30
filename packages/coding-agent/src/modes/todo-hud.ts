@@ -6,7 +6,7 @@
 import { visibleWidth } from "@oh-my-pi/pi-tui";
 import { node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
-import { formatMoreItems, replaceTabs } from "@oh-my-pi/pi-tui/render/render-utils";
+import { cappedRowCount, formatMoreItems, replaceTabs } from "@oh-my-pi/pi-tui/render/render-utils";
 import { renderTreeList } from "@oh-my-pi/pi-tui/render/tree-list";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import {
@@ -147,7 +147,10 @@ export function renderTodoHud(allPhases: readonly TodoPhase[], options: TodoHudO
 	// "… n more stages" row for anything past the cap. Expanded: every stage
 	// from the top. Roman numerals stay tied to the real phase index.
 	const baseIdx = expanded ? 0 : activeIdx;
-	const phaseSlice = expanded ? phases.slice(baseIdx) : phases.slice(baseIdx, baseIdx + 1 + SUBSEQUENT_STAGE_CAP);
+	const stageCount = expanded
+		? phases.length - baseIdx
+		: cappedRowCount(phases.length - baseIdx, 1 + SUBSEQUENT_STAGE_CAP);
+	const phaseSlice = phases.slice(baseIdx, baseIdx + stageCount);
 	const hiddenStages = phases.length - baseIdx - phaseSlice.length;
 
 	// Flatten the stage tree into content rows plus a per-row top-level spine

@@ -224,6 +224,25 @@ export function truncateMiddleToWidth(text: string, maxWidth: number, ellipsis =
 	return `${head}${ellipsis}${tail}`;
 }
 
+/**
+ * How many of `total` one-row entries to show under a cap whose overflow is
+ * announced on a row of its own. Hiding a single entry is never worth it: its
+ * `… 1 more` row would take the row the entry needs, so the cap gives way.
+ */
+export function cappedRowCount(total: number, cap: number): number {
+	return total > cap + 1 ? cap : total;
+}
+
+/**
+ * How many of `total` entries a collapsed list shows when its cap leaves
+ * `shown`: every entry when the one left out renders as a single row, since
+ * its `… 1 more` row would take that row anyway. `loneRows` measures that
+ * entry and runs only when exactly one is left out.
+ */
+export function revealLoneHidden(total: number, shown: number, loneRows: () => number): number {
+	return total - shown === 1 && loneRows() === 1 ? total : shown;
+}
+
 /** Select a leading line window and count the lines hidden after it. */
 export function cappedHeadLines(lines: readonly string[], max: number): { lines: readonly string[]; hidden: number } {
 	const count = Math.max(0, Math.min(lines.length, Math.floor(max)));
@@ -634,7 +653,13 @@ export function formatDiagnostics(
 	const label = `${theme.fg("toolTitle", options?.title ?? "Diagnostics")}${summaryTag}`;
 	const rows = [label];
 
-	const maxDiags = expanded ? diag.messages.length : COLLAPSED_DIAGNOSTICS;
+	// The cap gives way to a lone hidden diagnostic unless it would open a new file group (two rows).
+	const total = diag.messages.length;
+	const lastOpensGroup = unparsed.length === 0 && [...byFile.values()].at(-1)?.length === 1;
+	let maxDiags = lastOpensGroup
+		? Math.min(total, COLLAPSED_DIAGNOSTICS)
+		: cappedRowCount(total, COLLAPSED_DIAGNOSTICS);
+	if (expanded) maxDiags = total;
 	let shown = 0;
 	for (const [filePath, diagnostics] of byFile) {
 		if (shown >= maxDiags) break;
@@ -1049,7 +1074,7 @@ export function sanitizeDisplayWarning(text: string): string {
 /** Sanitize and bound warning text before showing it in TUI. */
 export function sanitizeDisplayWarnings(warnings: readonly string[], theme: Theme): string[] {
 	const visible = warnings
-		.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS)
+		.slice(0, cappedRowCount(warnings.length, PREVIEW_LIMITS.COLLAPSED_ITEMS))
 		.map(warning => truncateToWidth(sanitizeDisplayWarning(warning), TRUNCATE_LENGTHS.LONG));
 	const hidden = warnings.length - visible.length;
 	if (hidden > 0) visible.push(formatMoreItems(hidden, "warning", theme));
@@ -1236,7 +1261,7 @@ export function appendParseErrorsBulletList(
 ): void {
 	if (!parseErrors || parseErrors.length === 0) return;
 	const fullCount = total ?? parseErrors.length;
-	const capped = parseErrors.slice(0, PARSE_ERRORS_LIMIT);
+	const capped = parseErrors.slice(0, cappedRowCount(fullCount, PARSE_ERRORS_LIMIT));
 	for (const err of capped) {
 		lines.push(theme.fg("warning", `  - ${err}`));
 	}

@@ -735,7 +735,7 @@ describe("subagent HUD lines", () => {
 		});
 
 		it("routes clicks on a preview row to its agent and keeps later rows and the expander aligned", () => {
-			const sessions = ["Alpha", "Beta", "Gamma", "Delta"].map(id =>
+			const sessions = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"].map(id =>
 				makeSession({ id, progress: makeProgress({ id, currentTool: "read", currentToolArgs: `${id}.ts` }) }),
 			);
 			const layout = layoutPinnedHud(sessions.length, false);
@@ -749,7 +749,7 @@ describe("subagent HUD lines", () => {
 			expect(hud.getClickAgentAtRow(rowOf("Alpha.ts"))).toBe("Alpha");
 			expect(hud.getClickAgentAtRow(rowOf("Beta"))).toBe("Beta");
 			expect(hud.getClickAgentAtRow(rowOf("Gamma.ts"))).toBe("Gamma");
-			expect(hud.getClickAgentAtRow(rowOf("1 more agent"))).toBe(PINNED_HUD_TOGGLE_ID);
+			expect(hud.getClickAgentAtRow(rowOf("2 more agents"))).toBe(PINNED_HUD_TOGGLE_ID);
 		});
 
 		it("labels a call with its own intent, never an earlier call's", () => {
@@ -905,10 +905,13 @@ describe("layoutPinnedHud", () => {
 		expect(layoutPinnedHud(0, false)).toEqual({ itemRows: 0, toggle: undefined, toggleRow: undefined });
 		expect(layoutPinnedHud(3, false)).toEqual({ itemRows: 3, toggle: undefined, toggleRow: undefined });
 		expect(layoutPinnedHud(3, true)).toEqual({ itemRows: 3, toggle: undefined, toggleRow: undefined });
+		// A lone overflow agent takes the expander's row instead of hiding behind it.
+		expect(layoutPinnedHud(4, false)).toEqual({ itemRows: 4, toggle: undefined, toggleRow: undefined });
+		expect(layoutPinnedHud(4, true)).toEqual({ itemRows: 4, toggle: undefined, toggleRow: undefined });
 	});
 
 	it("collapses longer lists behind an expander", () => {
-		expect(layoutPinnedHud(4, false)).toEqual({ itemRows: 3, toggle: "expand", toggleRow: 5 });
+		expect(layoutPinnedHud(5, false)).toEqual({ itemRows: 3, toggle: "expand", toggleRow: 5 });
 		expect(layoutPinnedHud(10, false)).toEqual({ itemRows: 3, toggle: "expand", toggleRow: 5 });
 	});
 

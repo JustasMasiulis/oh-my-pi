@@ -8,7 +8,7 @@ import { Markdown } from "../components/markdown";
 import { code, md, span } from "../native/describe";
 import type { NativeNode } from "../native/node";
 import { getMarkdownTheme, highlightCode, type Theme } from "../theme/theme";
-import { formatMoreRow, replaceTabs } from "./render-utils";
+import { cappedRowCount, formatMoreRow, replaceTabs } from "./render-utils";
 import { wrapPrefixedLine } from "./hanging-wrap";
 import {
 	describeOutputBlock,
@@ -154,7 +154,12 @@ export function renderCodeCell(options: CodeCellOptions, theme: Theme): string[]
 
 	const normalizedCode = replaceTabs(code ?? "");
 	const rawCodeLines = splitTerminalOutputLines(normalizedCode);
-	const maxCodeLines = expanded ? rawCodeLines.length : Math.min(rawCodeLines.length, codeMaxLines);
+	// The hidden-line marker takes its own row when tailing or above an output section; there a lone hidden line shows instead.
+	const ownRowMarker = options.codeTail === true || Boolean(options.output?.trim());
+	const collapsedCodeLines = ownRowMarker
+		? cappedRowCount(rawCodeLines.length, codeMaxLines)
+		: Math.min(rawCodeLines.length, codeMaxLines);
+	const maxCodeLines = expanded ? rawCodeLines.length : collapsedCodeLines;
 	const hiddenCodeLines = rawCodeLines.length - maxCodeLines;
 	const tail = options.codeTail === true && !expanded && hiddenCodeLines > 0;
 	const startIndex = tail ? rawCodeLines.length - maxCodeLines : 0;
@@ -212,7 +217,10 @@ export function renderMarkdownCell(options: MarkdownCellOptions, theme: Theme): 
 	// `renderOutputBlock`, so collapsed row caps are applied after final wrapping.
 	const innerWidth = Math.max(20, outputBlockContentWidth(width));
 	const allLines = content.trim() ? new Markdown(content, 0, 0, getMarkdownTheme()).render(innerWidth) : [];
-	const maxContentLines = expanded ? allLines.length : Math.min(allLines.length, contentMaxLines);
+	const collapsedContentLines = options.output?.trim()
+		? cappedRowCount(allLines.length, contentMaxLines)
+		: Math.min(allLines.length, contentMaxLines);
+	const maxContentLines = expanded ? allLines.length : collapsedContentLines;
 
 	return renderCellBlock(
 		options,

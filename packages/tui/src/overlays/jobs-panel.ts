@@ -12,7 +12,7 @@ import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keyb
 import { matchesKey } from "../keys";
 import { replaceTabs, truncateToWidth, wrapTextWithAnsi } from "../utils";
 import { collapseCommand } from "../apps/ps-data";
-import { PREVIEW_LIMITS, shortenEmbeddedPaths } from "../render/render-utils";
+import { cappedRowCount, PREVIEW_LIMITS, shortenEmbeddedPaths } from "../render/render-utils";
 import { ansi, code, col, compact, item, node, row, span, stableKey, text } from "../native/describe";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import { actionBar, actionButton, selectList } from "../native/overlay";
@@ -210,8 +210,9 @@ export class JobsSheet implements Component {
 					shortenEmbeddedPaths(replaceTabs(sanitizeText(detail.command))),
 					Math.max(1, width - 3),
 				);
-				for (const line of commandRows.slice(0, PREVIEW_LIMITS.EXPANDED_LINES)) lines.push(`   ${line}`);
-				const hidden = commandRows.length - PREVIEW_LIMITS.EXPANDED_LINES;
+				const shownCount = cappedRowCount(commandRows.length, PREVIEW_LIMITS.EXPANDED_LINES);
+				for (const line of commandRows.slice(0, shownCount)) lines.push(`   ${line}`);
+				const hidden = commandRows.length - shownCount;
 				if (hidden > 0) lines.push(truncateToWidth(`   … ${hidden} more command lines`, width));
 			}
 			const facts = compact([

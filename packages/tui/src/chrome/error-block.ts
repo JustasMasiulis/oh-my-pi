@@ -49,7 +49,8 @@ export function formatErrorBlock(
 			rows.push(rows.length === 0 ? row : `${CONTINUATION_INDENT}${row}`);
 		}
 	}
-	if (rows.length > maxRows) {
+	// The marker takes a row of its own: one extra row shows instead of `… 1 more line`.
+	if (rows.length > maxRows + 1) {
 		const hidden = rows.length - maxRows;
 		rows.length = maxRows;
 		rows.push(`${CONTINUATION_INDENT}${formatMoreRow(hidden, "line", theme)}`);

@@ -387,7 +387,8 @@ export function renderJsonTreeLines(
 				if (multilineStrings && sanitized.includes("\n")) {
 					const sourceLines = sanitized.split("\n");
 					const available = Math.max(1, maxLines - renderedLineCount);
-					const displayedCount = Math.min(sourceLines.length, Math.max(1, available - 1));
+					// The `… N more lines` row takes a row of its own, so it only pays off hiding two or more.
+					const displayedCount = sourceLines.length <= available ? sourceLines.length : Math.max(1, available - 1);
 					const head = `${label}: `;
 					// Continuation rows sit under the opening quote.
 					const indent = " ".repeat(Bun.stringWidth(Bun.stripANSI(head)) + 1);
@@ -479,6 +480,13 @@ function jsonScalarToken(value: unknown): ThemeColor {
 	return "dim";
 }
 
+/** Whether `value` renders as a single leaf row in {@link describeJsonTree} (no child rows). */
+function isOneRowJsonLeaf(value: unknown): boolean {
+	if (inlineJson(value, plainText)) return true;
+	if (Array.isArray(value) || isRecord(value)) return false;
+	return typeof value !== "string" || !value.includes("\n");
+}
+
 /**
  * TSP `tree` of a JSON value: containers that fit {@link JSON_TREE_INLINE_LEN}
  * become `key: [1, "a"]` leaves, larger ones expandable nodes labelled with
@@ -497,7 +505,8 @@ export function describeJsonTree(value: unknown, options: JsonTreeDescribeOption
 	const describeEntries = (entries: readonly JsonEntry[], depth: number): TspTreeNode[] => {
 		const out: TspTreeNode[] = [];
 		for (let index = 0; index < entries.length; index++) {
-			if (budget <= 0) {
+			// A lone one-row leaf takes the marker's own row; render it instead.
+			if (budget <= 0 && !(index === entries.length - 1 && isOneRowJsonLeaf(entries[index][1]))) {
 				truncated = true;
 				out.push(leaf([span(`… ${entries.length - index} more`, "dim")]));
 				break;
@@ -532,7 +541,7 @@ export function describeJsonTree(value: unknown, options: JsonTreeDescribeOption
 			if (lines.length === 1) return { id, label: [...prefix, span(`"${first}"`, "syntaxString")] };
 			const children: TspTreeNode[] = [];
 			for (let index = 0; index < lines.length; index++) {
-				if (budget <= 0) {
+				if (budget <= 0 && index < lines.length - 1) {
 					truncated = true;
 					children.push(leaf([span(`… ${lines.length - index} more lines`, "dim")]));
 					break;

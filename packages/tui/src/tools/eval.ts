@@ -37,6 +37,7 @@ import {
 	DEFAULT_TERMINAL_PREVIEW_LINES,
 	PREVIEW_LIMITS,
 	cappedHeadLines,
+	cappedRowCount,
 	formatDuration,
 	formatMoreRow,
 	formatMoreItems,
@@ -578,16 +579,18 @@ function formatStatusEventExpanded(event: EvalStatusEvent, theme: Theme): string
 
 	const addItems = (items: unknown[], formatter: (item: unknown) => string, max = 5) => {
 		const arr = Array.isArray(items) ? items : [];
-		for (let i = 0; i < Math.min(arr.length, max); i++) {
+		const shown = cappedRowCount(arr.length, max);
+		for (let i = 0; i < shown; i++) {
 			lines.push(`  ${theme.fg("dim", formatter(arr[i]))}`);
 		}
-		if (arr.length > max) {
-			lines.push(`  ${theme.fg("dim", formatMoreItems(arr.length - max, "item", theme))}`);
+		if (arr.length > shown) {
+			lines.push(`  ${theme.fg("dim", formatMoreItems(arr.length - shown, "item", theme))}`);
 		}
 	};
 
 	const addPreview = (preview: string, maxLines = 3) => {
-		const previewLines = cappedHeadLines(String(preview).split("\n"), maxLines);
+		const sourceLines = String(preview).split("\n");
+		const previewLines = cappedHeadLines(sourceLines, cappedRowCount(sourceLines.length, maxLines));
 		for (const line of previewLines.lines) {
 			lines.push(`  ${theme.fg("toolOutput", truncateToWidth(replaceTabs(line), 80))}`);
 		}
@@ -641,7 +644,10 @@ function formatStatusEventExpanded(event: EvalStatusEvent, theme: Theme): string
 function renderStatusEvents(events: EvalStatusEvent[], theme: Theme, expanded: boolean, elided = 0): string[] {
 	if (events.length === 0 && elided === 0) return [];
 
-	const max = expanded ? Math.max(10, previewWindowRows()) : 3;
+	const cap = expanded ? Math.max(10, previewWindowRows()) : 3;
+	// Collapsed events are one row each, so a lone hidden one renders instead of its marker.
+	// Elided events are gone from the log and expanded events carry detail rows.
+	const max = expanded || elided > 0 ? cap : cappedRowCount(events.length, cap);
 	const shownFrom = Math.max(0, events.length - max);
 	const hidden = shownFrom + elided;
 	const visible = shownFrom > 0 ? events.slice(shownFrom) : events;
