@@ -30,6 +30,7 @@ import {
 } from "../render/render-utils";
 import {
 	classifyGroupedLines,
+	createCodeFrameStyler,
 	describeGroupedOutput,
 	formatGroupedFileHeader,
 	groupLineIndicesByBlank,
@@ -192,6 +193,7 @@ function createSearchLineStyler(
 	target: (displayPath: string) => string,
 ): (index: number) => string {
 	const contexts = classifyGroupedLines(lines, headerBase, fileScope);
+	const styleCodeFrame = createCodeFrameStyler(lines, contexts, "toolOutput", uiTheme);
 	// `classifyGroupedLines` can't resolve internal URLs (TUI-only), so track the
 	// resolved URL target here and use it for the body lines that follow.
 	const urlRaw: (string | undefined)[] = Array.from({ length: lines.length }, () => undefined);
@@ -234,7 +236,7 @@ function createSearchLineStyler(
 				styled = resolved ? fileHyperlink(resolved, header) : uriHyperlink(raw, header);
 			}
 		} else {
-			const tinted = uiTheme.fg("toolOutput", themeCodeFrameGutter(line, uiTheme));
+			const tinted = styleCodeFrame(index) ?? uiTheme.fg("toolOutput", themeCodeFrameGutter(line, uiTheme));
 			const lineNumber = parseSearchDisplayLineNumber(line);
 			const filePath = ctx.filePath ? target(ctx.filePath) : urlFiles[index];
 			styled = filePath && lineNumber !== undefined ? fileHyperlink(filePath, tinted, { line: lineNumber }) : tinted;

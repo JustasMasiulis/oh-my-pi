@@ -20,7 +20,8 @@ import {
 	replaceTabs,
 	toDisplayPathList,
 } from "../render/render-utils";
-import type { Theme } from "../theme/theme";
+import { getLanguageFromPath } from "../lang-from-path";
+import { highlightCode, isHighlightLanguage, type Theme, type ThemeColor } from "../theme/theme";
 import { formatHashlineHeader } from "./hashline-format";
 import { fileRow } from "./native-view";
 
@@ -365,6 +366,107 @@ export function themeCodeFrameGutter(line: string, theme: Theme): string {
 	const match = CODE_FRAME_ROW_RE.exec(line);
 	if (!match) return line;
 	return `${match[1]}${theme.boxSharp.vertical}${line.slice(match[0].length)}`;
+}
+
+/** A code-frame row split at its rule: the gutter (match marker and padded line number) and the source line. */
+export interface CodeFrameRow {
+	gutter: string;
+	source: string;
+}
+
+/**
+ * Draw the code-frame rows of consecutive source lines: each gutter and the
+ * theme's vertical rule in `color`, the sources highlighted in `lang` as one
+ * run, so a multi-line string or comment keeps its colors. Without a language
+ * the sources take `color` too.
+ */
+export function renderCodeFrameRun(
+	rows: readonly CodeFrameRow[],
+	lang: string | undefined,
+	color: ThemeColor,
+	theme: Theme,
+): string[] {
+	const sources = rows.map(row => replaceTabs(row.source));
+	const highlighted = isHighlightLanguage(lang) ? highlightCode(sources.join("\n"), lang, theme) : undefined;
+	return rows.map((row, index) => {
+		const gutter = theme.fg(color, `${row.gutter}${theme.boxSharp.vertical}`);
+		return `${gutter}${highlighted?.[index] ?? theme.fg(color, sources[index]!)}`;
+	});
+}
+
+/** A persisted code-frame row that carries a line number. */
+interface NumberedCodeFrame {
+	row: CodeFrameRow;
+	n: number;
+}
+
+function parseNumberedCodeFrame(line: string): NumberedCodeFrame | undefined {
+	const match = CODE_FRAME_ROW_RE.exec(line);
+	const digits = match ? /\d+/.exec(match[1]!)?.[0] : undefined;
+	if (!match || digits === undefined) return undefined;
+	return { row: { gutter: match[1]!, source: line.slice(match[0].length) }, n: Number(digits) };
+}
+
+/**
+ * Styled code-frame rows of grouped search output, highlighted in each owning
+ * file's language. A run of consecutive line numbers in one file highlights
+ * together on its first request; a gap row, a jump in line numbers or another
+ * file starts a new run. Rows without a numbered code frame (headers, gap rows,
+ * notes) return undefined, for the caller to style.
+ */
+export function createCodeFrameStyler(
+	lines: readonly string[],
+	contexts: readonly GroupedLineContext[],
+	color: ThemeColor,
+	theme: Theme,
+): (index: number) => string | undefined {
+	// The owning file of each body row: its resolved path, else its file header's display path.
+	const owners: (string | undefined)[] = [];
+	let headerPath: string | undefined;
+	for (const ctx of contexts) {
+		if (ctx.kind === "content") {
+			owners.push(ctx.filePath ?? headerPath);
+			continue;
+		}
+		headerPath = ctx.kind === "file" && !ctx.isUrl ? ctx.displayPath : undefined;
+		owners.push(undefined);
+	}
+
+	const frames: (NumberedCodeFrame | null)[] = [];
+	const frameAt = (index: number): NumberedCodeFrame | null => {
+		let frame = frames[index];
+		if (frame === undefined) {
+			frame = parseNumberedCodeFrame(lines[index]!) ?? null;
+			frames[index] = frame;
+		}
+		return frame;
+	};
+	// Whether the row at `index` continues the run of the row above it.
+	const continuesRun = (index: number): boolean => {
+		if (index <= 0 || owners[index] !== owners[index - 1]) return false;
+		const frame = frameAt(index);
+		const above = frameAt(index - 1);
+		return frame !== null && above !== null && frame.n === above.n + 1;
+	};
+
+	const styled: string[] = [];
+	return index => {
+		if (frameAt(index) === null) return undefined;
+		const cached = styled[index];
+		if (cached !== undefined) return cached;
+		let start = index;
+		while (continuesRun(start)) start--;
+		let end = index + 1;
+		while (end < lines.length && continuesRun(end)) end++;
+		const owner = owners[index];
+		const runRows: CodeFrameRow[] = [];
+		for (let i = start; i < end; i++) runRows.push(frameAt(i)!.row);
+		const rendered = renderCodeFrameRun(runRows, owner ? getLanguageFromPath(owner) : undefined, color, theme);
+		rendered.forEach((row, offset) => {
+			styled[start + offset] = row;
+		});
+		return styled[index];
+	};
 }
 
 /** `*12│`, `*12|`, `*12:`: a match row of search display output. */

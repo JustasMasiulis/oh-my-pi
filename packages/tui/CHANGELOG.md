@@ -44,6 +44,7 @@
 - A collapsed card or banner renders expanded when its expansion draws in no more rows than the collapsed form, counting that form's own expand-hint and `… N more` rows, so expanding only consumes the notice. Markers inside an existing row (bottom-border footers, header meta) cost no row, so they stay, even for `… 1 more line`.
 - The extension inspector and collapsed synthetic prompts use the shared `[Ctrl+O: Expand]` hint, and the inspector's `… N more` rows name what they hide.
 - A color applied over already-styled text now holds after the inner styling ends, so a footer such as `+2 -1 · … 3 more lines` stays dim past the colored counts.
+- Source lines in Grep, AST Grep, Find, LSP definition results and LSP symbol names are syntax-highlighted in their file's language instead of drawn in one color; consecutive lines highlight together, so multi-line strings and comments keep their colors.
 
 ### Fixed
 

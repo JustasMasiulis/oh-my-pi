@@ -23,7 +23,8 @@ import {
 	replaceTabs,
 	type ToolUIStatus,
 } from "../render/render-utils";
-import type { Theme, ThemeColor } from "../theme/theme";
+import { getLanguageFromPath } from "../lang-from-path";
+import { highlightCode, isHighlightLanguage, type Theme, type ThemeColor } from "../theme/theme";
 import type { Component } from "../tui";
 import type { OutputMeta } from "./output-meta";
 import type {
@@ -180,10 +181,14 @@ function renderHit(hit: FindHit, rangeLimit: number, cwd: string | undefined, ra
 	const score = theme.fg(scoreColor(hit.contentScore), hit.contentScore.toFixed(2));
 	const head = `${gauge(hit.contentScore, theme)} ${score} ${link(label)} ${theme.fg("dim", coverage)}`;
 	const ranges = [...hit.ranges].sort((a, b) => b.p - a.p || a.start - b.start).slice(0, rangeLimit);
+	const lang = getLanguageFromPath(hit.rel);
 	const rangeRows = ranges.map(range => {
 		const span = range.start === range.end ? String(range.start) : `${range.start}-${range.end}`;
 		const ref = link(theme.fg("muted", `:${span}`), range.start);
-		const snippet = theme.fg("toolOutput", replaceTabs(range.snippet.trim()));
+		const source = replaceTabs(range.snippet.trim());
+		const snippet = isHighlightLanguage(lang)
+			? highlightCode(source, lang, theme).join("\n")
+			: theme.fg("toolOutput", source);
 		return `${ref} ${theme.fg("dim", range.p.toFixed(2))} ${snippet}`;
 	});
 	return [head, ...nestRows(rangeRows, theme)];

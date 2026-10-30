@@ -10,7 +10,7 @@
 import type { TspSpan, TspText, TspTone, TspTreeNode } from "@oh-my-pi/pi-wire";
 import type { NativeToolHead, NativeToolView, RenderResultOptions, ToolRenderer, ToolRenderResult } from "./renderer";
 import type { Component } from "../tui";
-import { highlightCode as highlightThemeCode, type Theme } from "../theme/theme";
+import { highlightCode as highlightThemeCode, isHighlightLanguage, type Theme } from "../theme/theme";
 import {
 	cappedRowCount,
 	expansionFits,
@@ -39,7 +39,8 @@ import { ansi, code, col, compact, keyed, md, node, row, span, text } from "../n
 import type { NativeNode } from "../native/node";
 import { OwnerMemo } from "../native/memo";
 import { plainText } from "../native/spans";
-import { numberedCode, walkGroupedOutput } from "./grouped-file-output";
+import { numberedCode, renderCodeFrameRun, walkGroupedOutput } from "./grouped-file-output";
+import { getLanguageFromPath } from "../lang-from-path";
 import { diagnosticGlyph, fileHref, fileRow, inlineErrorView } from "./native-view";
 import { activeThemeSymbol } from "../theme/active-symbols";
 
@@ -291,7 +292,8 @@ function parseLspResult(text: string, action: string, theme: Theme): LspResultVi
 	const refMatch = text.match(/(\d+)\s+reference\(s\)/);
 	if (refMatch) return referencesView(Number.parseInt(refMatch[1], 10), lines, theme);
 
-	if (/Symbols in (.+):/.test(text)) return symbolsView(lines, theme);
+	const symbolsMatch = /Symbols in (.+):/.exec(text);
+	if (symbolsMatch) return symbolsView(lines, getLanguageFromPath(symbolsMatch[1]), theme);
 
 	if (action === "diagnostics" && text.trim() === "OK") {
 		return { icon: "success", meta: ["no issues"], rows: () => ({ rows: [] }) };
@@ -537,21 +539,18 @@ function parseLspLocations(lines: readonly string[]): LspLocations | undefined {
 	return { noun: header[2], count: Number(header[1]), locations };
 }
 
-/** A location's `file:line:col` row over its source context, framed like a grep match. */
+/** A location's `file:line:col` row over its source context, framed like a grep match and highlighted in its language. */
 function locationRows(location: LspLocation, theme: Theme): string[] {
 	const head = `${formatStyledPath(replaceTabs(location.file), theme)}${theme.fg("muted", `:${location.line}:${location.col}`)}`;
 	const numberWidth = location.context.reduce((width, line) => Math.max(width, String(line.n).length), 0);
-	const frame = location.context.map(line =>
-		theme.fg(
-			"toolOutput",
-			formatCodeFrameLine(
-				line.mark ? "*" : "",
-				line.n,
-				replaceTabs(line.text),
-				numberWidth,
-				theme.boxSharp.vertical,
-			),
-		),
+	const frame = renderCodeFrameRun(
+		location.context.map(line => ({
+			gutter: formatCodeFrameLine(line.mark ? "*" : "", line.n, "", numberWidth, ""),
+			source: line.text,
+		})),
+		getLanguageFromPath(location.file),
+		"toolOutput",
+		theme,
 	);
 	return [head, ...frame];
 }
@@ -601,8 +600,8 @@ function parseSymbols(lines: readonly string[]): SymbolInfo[] {
 	return symbols;
 }
 
-/** Document symbols: top-level symbols flush, nested symbols as tree children. */
-function symbolsView(lines: string[], theme: Theme): LspResultView {
+/** Document symbols: top-level symbols flush, nested symbols as tree children, names highlighted in `lang`. */
+function symbolsView(lines: string[], lang: string | undefined, theme: Theme): LspResultView {
 	const symbols = parseSymbols(lines);
 	const topLevelIndent = symbols.reduce((min, sym) => Math.min(min, sym.indent), Number.POSITIVE_INFINITY);
 
@@ -634,8 +633,14 @@ function symbolsView(lines: string[], theme: Theme): LspResultView {
 		prefixes.push(prefix);
 		lastAtIndent.set(myIndent, i);
 	}
+	// The glyph keeps the accent; the name and signature read as code in the file's language.
+	const symbolName = (name: string): string => {
+		const plain = replaceTabs(name);
+		if (!isHighlightLanguage(lang)) return theme.fg("toolOutput", plain);
+		return highlightThemeCode(plain, lang, theme)[0] ?? plain;
+	};
 	const symbolLabel = (sym: SymbolInfo) =>
-		`${theme.fg("accent", sym.icon)} ${theme.fg("accent", sym.name)} ${theme.fg("dim", `line ${sym.line}`)}`;
+		`${theme.fg("accent", sym.icon)} ${symbolName(sym.name)} ${theme.fg("dim", `line ${sym.line}`)}`;
 	const topLevel = symbols.filter(sym => sym.indent === topLevelIndent);
 
 	return {

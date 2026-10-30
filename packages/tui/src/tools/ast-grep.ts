@@ -15,6 +15,7 @@ import {
 } from "../render/render-utils";
 import {
 	classifyGroupedLines,
+	createCodeFrameStyler,
 	describeGroupedOutput,
 	formatGroupedFileHeader,
 	groupedHeaderLinkTargets,
@@ -133,6 +134,7 @@ export const astGrepToolRenderer = {
 		// reconstruct across blank-line groups.
 		const contexts = classifyGroupedLines(allLines, details?.cwd ?? details?.searchPath, details?.searchPath);
 		const linkTarget = groupedHeaderLinkTargets(contexts, textContent, options.renderContext?.rawDetails);
+		const styleCodeFrame = createCodeFrameStyler(allLines, contexts, "toolOutput", uiTheme);
 		// Style lazily: the collapsed preview only shows the first few rows, so a
 		// large result never styles/hyperlinks rows nobody sees.
 		const styledLines: (string | undefined)[] = Array.from({ length: allLines.length }, () => undefined);
@@ -150,7 +152,7 @@ export const astGrepToolRenderer = {
 				styled = target ? fileHyperlink(target, header) : header;
 			} else {
 				const color = line.startsWith("  meta:") ? "dim" : "toolOutput";
-				styled = uiTheme.fg(color, themeCodeFrameGutter(line, uiTheme));
+				styled = styleCodeFrame(index) ?? uiTheme.fg(color, themeCodeFrameGutter(line, uiTheme));
 			}
 			styledLines[index] = styled;
 			return styled;

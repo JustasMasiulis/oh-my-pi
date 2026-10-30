@@ -141,6 +141,64 @@ export const codeintelFixtures: Record<string, GalleryFixture> = {
 		},
 	},
 
+	lsp_symbols: {
+		label: "LSP (symbols)",
+		renderer: "lsp",
+		streamingArgs: {
+			action: "symbols",
+		},
+		args: {
+			action: "symbols",
+			file: "src/server/auth.ts",
+		},
+		result: {
+			content: [
+				{
+					type: "text",
+					text: [
+						"Symbols in src/server/auth.ts:",
+						"• TOKEN_TTL @ line 8",
+						"⬢ AuthService @ line 12",
+						"  ⟲ constructor @ line 13",
+						"  • secret @ line 14",
+						"  ⟲ validateToken (token: string) => Claims @ line 42",
+						"  ⟲ refresh @ line 61",
+						"⬢ Claims @ line 90",
+						"  • sub @ line 91",
+						"⟲ stripBearer @ line 120",
+					].join("\n"),
+				},
+			],
+			details: {
+				serverName: "typescript-language-server",
+				action: "symbols",
+				success: true,
+				request: {
+					action: "symbols",
+					file: "src/server/auth.ts",
+				},
+			},
+		},
+		errorResult: {
+			content: [
+				{
+					type: "text",
+					text: "No language server found for this file",
+				},
+			],
+			isError: true,
+			details: {
+				serverName: "typescript-language-server",
+				action: "symbols",
+				success: false,
+				request: {
+					action: "symbols",
+					file: "src/server/auth.ts",
+				},
+			},
+		},
+	},
+
 	debug: {
 		label: "Debug",
 		streamingArgs: {
