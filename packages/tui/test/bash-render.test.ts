@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { RenderResultOptions } from "../src/tools/renderer";
 import { getThemeByName, setThemeInstance, type Theme } from "@oh-my-pi/pi-tui/theme";
-import { bashToolRenderer, formatBackgroundNotice } from "@oh-my-pi/pi-tui/tools/bash";
+import { bashToolRenderer, formatBackgroundNotice, SESSION_SHELL_BUSY_NOTICE } from "@oh-my-pi/pi-tui/tools/bash";
 import { previewWindowRows } from "@oh-my-pi/pi-tui/render/render-utils";
 import { ImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
@@ -135,6 +135,23 @@ describe("bashToolRenderer", () => {
 		// Notice text must not appear in the output region — the bottom border is the
 		// only place wall time is shown so users don't read it twice.
 		expect(rendered).not.toContain("Wall time: 1.23 seconds");
+	});
+
+	it("moves the temporary-shell notice out of the output into the bottom border", () => {
+		const component = bashToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: `hello\n\nWall time: 1.23 seconds\n${SESSION_SHELL_BUSY_NOTICE}` }],
+				details: { timeoutSeconds: 5, wallTimeMs: 1230 },
+				isError: false,
+			},
+			{ expanded: false, isPartial: false },
+			uiTheme,
+			{ command: "echo hello" },
+		);
+		const rendered = sanitizeText(component.render(120).join("\n"));
+		expect(rendered).not.toContain("Ran in a temporary shell");
+		expect(rendered).not.toContain("Wall time: 1.23 seconds");
+		expect(rendered).toContain(`Timeout: 5s${uiTheme.sep.dot}temporary shell`);
 	});
 
 	it("strips only the generated subsecond footer from older results with identical stdout", () => {

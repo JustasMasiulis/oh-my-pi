@@ -14,7 +14,8 @@ import { theme } from "../theme/theme";
 import type { OutputArtifactError } from "../tools/streaming-output";
 import type { TruncationMeta } from "../tools/output-meta";
 import { resolveImageOptions } from "../render/render-utils";
-import { OutputPane } from "../render/output-pane";
+import { OutputPane, type OutputRowRange } from "../render/output-pane";
+import { createShellOutputStyler, inferShellOutputHints, type ShellOutputHints } from "../render/shell-output";
 import { loadXtermTerminal, readTerminalRows, styleTerminalRow } from "../tools/terminal-output";
 import { normalizeInputForPty } from "../tools/bash-interactive";
 import { cappedRowCount } from "../render/render-utils";
@@ -93,6 +94,7 @@ export class BashExecutionComponent extends Container {
 	#showImages = true;
 	readonly #instanceId = nextBashExecutionId++;
 	readonly #command: string;
+	readonly #outputHints: ShellOutputHints;
 	readonly #colorKey: ExecutionColorKey;
 	readonly #startedAt = performance.now();
 	#endedAt: number | undefined;
@@ -104,6 +106,7 @@ export class BashExecutionComponent extends Container {
 	constructor(command: string, ui: TUI, excludeFromContext = false) {
 		super();
 		this.#command = command;
+		this.#outputHints = inferShellOutputHints(command);
 		this.#ui = ui;
 
 		// Use dim border for excluded-from-context commands (!! prefix)
@@ -122,7 +125,7 @@ export class BashExecutionComponent extends Container {
 			leadingBlank: true,
 			showHiddenMarker: false,
 			showExpandHint: false,
-			styleLine: line => this.#styleDisplayLine(line),
+			styleRows: (lines, visible) => this.#outputStyler(lines, visible),
 		});
 
 		// Command header
@@ -262,7 +265,7 @@ export class BashExecutionComponent extends Container {
 		if (this.#status !== "running" && !this.#ptyWriting && this.#ptyQueue.length === 0) return;
 		if (!this.#ptyMode) {
 			this.#ptyMode = true;
-			// The pane's `styleLine` reads `#ptyMode`, so its styled rows change
+			// The pane's `styleRows` reads `#ptyMode`, so its styled rows change
 			// the moment this flips — with the rows themselves unchanged. The pane
 			// memoizes its styled output, so it has to be told.
 			this.#outputPane.invalidate();
@@ -478,9 +481,10 @@ export class BashExecutionComponent extends Container {
 		}
 	}
 
-	/** PTY replay rows arrive pre-styled (safe SGR + reset); plain lines get muted. */
-	#styleDisplayLine(line: string): string {
-		return this.#ptyMode ? line : theme.fg("muted", line);
+	/** PTY replay rows arrive pre-styled (safe SGR + reset); plain output is muted, with paths and sources styled. */
+	#outputStyler(lines: readonly string[], visible: OutputRowRange): (line: string, index: number) => string {
+		if (this.#ptyMode) return line => line;
+		return createShellOutputStyler(this.#outputHints, lines, visible, "muted", theme);
 	}
 
 	#clampLinesPreservingSixel(lines: string[]): string[] {

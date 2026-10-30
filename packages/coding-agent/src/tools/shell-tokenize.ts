@@ -1,3 +1,5 @@
+import { lexShellCommand } from "@oh-my-pi/pi-utils";
+
 /**
  * Conservative shell command tokenizer shared by the bash approval-pattern
  * matcher, the gh-cache invalidator, and the session anonymizer.
@@ -7,9 +9,9 @@
  * standard operators (`;`, `&&`, `||`, `|`, `&`, `(`, `)`, newlines) as segment
  * boundaries so callers treat the pieces as independent command sequences.
  *
- * It is deliberately not a full POSIX parser — heredocs, command substitution,
- * and arithmetic expansion are out of scope; callers fall through when they
- * cannot find the structure they need.
+ * Word boundaries are those of {@link lexShellCommand}, so the same limits
+ * apply: heredocs, command substitution, and arithmetic expansion are out of
+ * scope; callers fall through when they cannot find the structure they need.
  */
 export function tokenizeShellSegments(command: string): string[][] {
 	const segments: string[][] = [];
@@ -25,87 +27,6 @@ export function tokenizeShellSegments(command: string): string[][] {
 	}
 	if (current.length > 0) segments.push(current);
 	return segments;
-}
-
-/** One lexical piece of a shell command: a word, or the whitespace/operator run between words. */
-export type ShellToken = { kind: "word"; raw: string; value: string } | { kind: "separator"; raw: string };
-
-/**
- * Lex a command into words and separators with their source text, so callers can rewrite words
- * and reassemble the command. Word boundaries match {@link tokenizeShellSegments}: `value` is the
- * quote/escape-removed word, `raw` its verbatim spelling; separators are runs of spaces, tabs, and
- * the operator characters `\n ; & | ( )`.
- */
-export function lexShellCommand(command: string): ShellToken[] {
-	const tokens: ShellToken[] = [];
-	let value = "";
-	let wordStart = -1;
-	let separatorStart = -1;
-	let inSingle = false;
-	let inDouble = false;
-	const startWord = (index: number) => {
-		if (wordStart >= 0) return;
-		if (separatorStart >= 0) {
-			tokens.push({ kind: "separator", raw: command.slice(separatorStart, index) });
-			separatorStart = -1;
-		}
-		wordStart = index;
-	};
-	const endWord = (index: number) => {
-		if (wordStart < 0) return;
-		tokens.push({ kind: "word", raw: command.slice(wordStart, index), value });
-		value = "";
-		wordStart = -1;
-	};
-	for (let i = 0; i < command.length; i++) {
-		const ch = command[i];
-		if (inSingle) {
-			if (ch === "'") inSingle = false;
-			else value += ch;
-			continue;
-		}
-		if (inDouble) {
-			if (ch === "\\" && i + 1 < command.length) {
-				const next = command[i + 1];
-				if (next === '"' || next === "\\" || next === "$" || next === "`") {
-					value += next;
-					i++;
-					continue;
-				}
-			}
-			if (ch === '"') inDouble = false;
-			else value += ch;
-			continue;
-		}
-		if (
-			ch === " " ||
-			ch === "\t" ||
-			ch === "\n" ||
-			ch === ";" ||
-			ch === "&" ||
-			ch === "|" ||
-			ch === "(" ||
-			ch === ")"
-		) {
-			endWord(i);
-			if (separatorStart < 0) separatorStart = i;
-			continue;
-		}
-		startWord(i);
-		if (ch === "'") {
-			inSingle = true;
-		} else if (ch === '"') {
-			inDouble = true;
-		} else if (ch === "\\" && i + 1 < command.length) {
-			value += command[i + 1];
-			i++;
-		} else {
-			value += ch;
-		}
-	}
-	endWord(command.length);
-	if (separatorStart >= 0) tokens.push({ kind: "separator", raw: command.slice(separatorStart) });
-	return tokens;
 }
 
 /** A command in a conservative, flat `&&` chain. */

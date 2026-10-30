@@ -17,6 +17,7 @@
 
 - Added a `maxRows` callback to `FigureMarkdown`, `SvgFigure` and `TableChartFigure` so surfaces shorter than the screen can fit their figures; zero hides a figure without delaying transcript completion ([#15661](https://github.com/can1357/oh-my-pi/issues/15661), [#15853](https://github.com/can1357/oh-my-pi/pull/15853) by [@KunoLu](https://github.com/KunoLu))
 - Added `formatMoreRow`, `clipRows`, `nestRows`, `CardRowsMemo`, `fitsOneRow`, `revealLoneHidden`, `cappedRowCount`, `wrappedRowCount`, `expansionFits` and `foldBody` for renderers: a dim `… N more` row with the expand hint, clipped flush rows, tree-nested rows, a width/expansion row memo, caps that show a lone hidden entry only when it fits its marker's row, the wrapped height of card rows, and collapsed bodies that render expanded when their expansion draws in no more rows. `TreeListOptions` takes the draw `width`, notice presentations receive their body width, `DynamicBorder.setLabel` accepts a function for live labels, and `Loader.inlineText()` returns the spinner and message as one line.
+- Added `createShellOutputStyler`/`inferShellOutputHints` and the output pane's `styleRows` option, for row styling that reads the whole output and highlights only the rows that can show.
 
 ### Changed
 
@@ -45,6 +46,8 @@
 - The extension inspector and collapsed synthetic prompts use the shared `[Ctrl+O: Expand]` hint, and the inspector's `… N more` rows name what they hide.
 - A color applied over already-styled text now holds after the inner styling ends, so a footer such as `+2 -1 · … 3 more lines` stays dim past the colored counts.
 - Source lines in Grep, AST Grep, Find, LSP definition results and LSP symbol names are syntax-highlighted in their file's language instead of drawn in one color; consecutive lines highlight together, so multi-line strings and comments keep their colors.
+- Bash and `!` command output is styled from its shape and the files its command names: paths (including `:12:5` locations) are styled wherever they appear, `git diff` hunks highlight unchanged lines in the file's language with added and removed lines tinted, `rg`/`grep` rows and compiler snippets (rustc, tsc) highlight their source, and rows printed whole by `cat`, `sed`, `head`, `git show rev:path` and similar are highlighted in the language of the files they read when nothing else in the command writes output. Filters later in a pipeline (`| tail`, `| grep`), programs that run a file (`bun test a.test.ts`), a reader's own errors and output that colors itself stay plain.
+- Bash cards show `temporary shell` in the bottom border instead of printing the "Ran in a temporary shell…" notice under the output.
 
 ### Fixed
 

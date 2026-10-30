@@ -13,10 +13,9 @@
  * `name: "Probe"` → `PLACEHOLDER_7` and `agent://Probe` → `agent://seg7`.
  */
 import { editErrorKinds } from "@oh-my-pi/pi-natives";
-import { logger } from "@oh-my-pi/pi-utils";
+import { lexShellCommand, logger } from "@oh-my-pi/pi-utils";
 import { getBundledAgentsMap } from "../task/agents";
 import { BUILTIN_TOOL_NAMES, isMCPToolName } from "../tools/builtin-names";
-import { lexShellCommand } from "../tools/shell-tokenize";
 import type { SessionEntry, SessionHeader } from "./session-entries";
 import { collectSubSessions, type SubSession } from "./sub-sessions";
 

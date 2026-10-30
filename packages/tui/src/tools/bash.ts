@@ -4,6 +4,7 @@ import { highlightCode, type Theme } from "../theme/theme";
 import type { StatusLineOptions } from "../render/status-line";
 import { framedToolCard, plainToolCard, type ToolCardSection, type ToolCardSnapshot } from "../render/tool-card";
 import { formatOutputPaneLines } from "../render/output-pane";
+import { createShellOutputStyler, inferShellOutputHints } from "../render/shell-output";
 import {
 	capPreviewLines,
 	DEFAULT_TERMINAL_PREVIEW_LINES,
@@ -211,6 +212,13 @@ export function formatExitCodeNotice(exitCode: number): string {
 	return `Command exited with code ${exitCode}`;
 }
 
+/** Model-facing notice for a call that overlapped another one and could not use the session's shell. */
+export const SESSION_SHELL_BUSY_NOTICE =
+	"Ran in a temporary shell while the session shell is busy with another command: session variables and functions were unavailable, and nothing set here persists.";
+
+/** Bottom-border fact standing in for {@link SESSION_SHELL_BUSY_NOTICE}. */
+const TEMPORARY_SHELL_FACT = "temporary shell";
+
 /** Shell arguments used to build a command preview. */
 export interface BashRenderArgs {
 	command?: string;
@@ -299,11 +307,11 @@ export function formatBashCommandText(args: BashRenderArgs): string {
 	return parts.join(" ");
 }
 
-/** Bash output with the LLM-facing notices (background, exit, wall time, artifact, truncation) removed. */
+/** Bash output with the LLM-facing notices (background, exit, wall time, temporary shell, artifact, truncation) removed. */
 function stripBashNotices(
 	rawOutput: string,
 	details: BashToolDetails | undefined,
-): { text: string; artifactId?: string } {
+): { text: string; artifactId?: string; temporaryShell: boolean } {
 	const job = details?.async;
 	const withoutBackground =
 		job?.state === "running"
@@ -314,12 +322,15 @@ function stripBashNotices(
 		details?.exitCode === undefined
 			? strippedOutput
 			: stripTrailingNotice(strippedOutput, formatExitCodeNotice(details.exitCode));
+	const withoutShell = stripTrailingNotice(withoutExit, SESSION_SHELL_BUSY_NOTICE);
+	const temporaryShell = withoutShell !== withoutExit;
 	const withoutWall =
 		details?.wallTimeMs === undefined || details.wallTimeNoticeEmitted === false
-			? withoutExit
-			: stripTrailingNotice(withoutExit, formatWallTimeNotice(details.wallTimeMs));
+			? withoutShell
+			: stripTrailingNotice(withoutShell, formatWallTimeNotice(details.wallTimeMs));
 	const stripped = stripRawOutputArtifactNotice(withoutWall);
-	return stripped.text.trim() === NO_OUTPUT_NOTICE ? { ...stripped, text: "" } : stripped;
+	const text = stripped.text.trim() === NO_OUTPUT_NOTICE ? "" : stripped.text;
+	return { text, artifactId: stripped.artifactId, temporaryShell };
 }
 /** `1.2s`, `Timeout: 30s`, … metadata parts shown under bash output. */
 function bashStatsParts(
@@ -504,6 +515,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			args?: TArgs,
 		): Component {
 			const renderArgs = toBashRenderArgs(args, config);
+			const outputHints = inferShellOutputHints(renderArgs.command ?? "");
 			let cmdLines: string[] | undefined;
 			const isError = result.isError === true;
 			const details = result.details;
@@ -582,6 +594,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 						rawOutputArtifact.artifactId,
 						isError,
 					);
+					if (rawOutputArtifact.temporaryShell) statsParts.push(TEMPORARY_SHELL_FACT);
 					if (elapsedSecond !== undefined && elapsedSecond > 0) {
 						statsParts.unshift(`elapsed ${formatDuration(elapsedSecond * 1000)}`);
 					}
@@ -602,7 +615,8 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 							edge: "tail",
 							visual: true,
 							width: contentWidth,
-							styleLine: line => uiTheme.fg("toolOutput", replaceTabs(line)),
+							styleRows: (lines, visible) =>
+								createShellOutputStyler(outputHints, lines, visible, "toolOutput", uiTheme),
 							uncapSixel: true,
 							showHiddenMarker: false,
 						},
@@ -718,6 +732,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					: (details?.wallTimeMs ?? options.elapsedMs);
 			const meta = details?.meta;
 			const facts = shellFootParts(details, stripped.artifactId);
+			if (stripped.temporaryShell) facts.push(TEMPORARY_SHELL_FACT);
 			if (output.trim().length === 0 && !isPartial && state !== "background") facts.unshift("No output");
 			const box = runBox(
 				[

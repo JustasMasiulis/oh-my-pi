@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `lexShellCommand`, a quote-aware shell lexer that splits a command into words and separators with their verbatim spelling (moved from the coding agent).
+
 ## [18.14.0] - 2026-10-29
 
 ### Added

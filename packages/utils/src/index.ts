@@ -30,6 +30,7 @@ export * as ptree from "./ptree";
 export { AbortError, ChildProcess, Exception, NonZeroExitError } from "./ptree";
 export * from "./runtime-install";
 export * from "./sanitize-text";
+export * from "./shell-lex";
 export * from "./slugify";
 export * from "./snowflake";
 export * from "./sqlite";

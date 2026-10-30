@@ -13,6 +13,12 @@ import { cappedRowCount, formatExpandHint, formatMoreRow, replaceTabs } from "./
 /** Which side of an output stream remains visible when the pane is capped. */
 export type OutputPaneEdge = "head" | "tail";
 
+/** Rows `[start, end)` of an output that can show under its cap. */
+export interface OutputRowRange {
+	start: number;
+	end: number;
+}
+
 /** Inputs for the shared output capping and styling algorithm. */
 export interface OutputPaneFormatOptions {
 	lines: readonly string[];
@@ -25,6 +31,11 @@ export interface OutputPaneFormatOptions {
 	/** Content width used by visual capping. Required when `visual` is true. */
 	width?: number;
 	styleLine?: (line: string, index: number) => string;
+	/**
+	 * Build the row styler from every row and the rows that can show, for
+	 * styling that reads the whole output; takes the place of `styleLine`.
+	 */
+	styleRows?: (lines: readonly string[], visible: OutputRowRange) => (line: string, index: number) => string;
 	/** Keep sixel payload rows byte-for-byte and show the complete payload. */
 	uncapSixel?: boolean;
 	showHiddenMarker?: boolean;
@@ -52,6 +63,19 @@ export function splitTerminalOutputLines(text: string): string[] {
 }
 
 /**
+ * Rows a cap of `limit` can show: each row draws at least one terminal row and
+ * a lone hidden row may take its marker's place, so at most `limit + 1` rows at
+ * the kept edge.
+ */
+function visibleRowRange(count: number, limit: number | undefined, edge: OutputPaneEdge): OutputRowRange {
+	if (limit === undefined || !Number.isFinite(limit)) return { start: 0, end: count };
+	const shown = Math.max(0, Math.floor(limit)) + 1;
+	return edge === "tail"
+		? { start: Math.max(0, count - shown), end: count }
+		: { start: 0, end: Math.min(count, shown) };
+}
+
+/**
  * Style and cap output rows for code cells, tool cards, and live execution
  * panes. Sixel rows are never styled or split; with `uncapSixel`, the complete
  * payload is retained so terminal image protocols remain valid.
@@ -62,12 +86,11 @@ export function formatOutputPaneLines(options: OutputPaneFormatOptions, theme: T
 	const sixelMask =
 		TERMINAL.imageProtocol === ImageProtocol.Sixel && rawLines.length > 0 ? getSixelLineMask(rawLines) : undefined;
 	const hasSixel = sixelMask?.some(Boolean) ?? false;
-	const styledLines = rawLines.map((line, index) =>
-		sixelMask?.[index] ? line : (options.styleLine?.(line, index) ?? line),
-	);
-
 	const configuredLimit = options.expanded ? options.expandedMaxLines : options.collapsedMaxLines;
 	const limit = hasSixel && options.uncapSixel ? undefined : configuredLimit;
+	const styleLine = options.styleRows?.(rawLines, visibleRowRange(rawLines.length, limit, edge)) ?? options.styleLine;
+	const styledLines = rawLines.map((line, index) => (sixelMask?.[index] ? line : (styleLine?.(line, index) ?? line)));
+
 	let visibleLines: readonly string[] = styledLines;
 	let hiddenCount = 0;
 

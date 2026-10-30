@@ -92,6 +92,68 @@ export const shellFixtures: Record<string, GalleryFixture> = {
 		},
 	},
 
+	bash_diff: {
+		label: "Bash (git diff)",
+		renderer: "bash",
+		streamingArgs: { command: "git diff src/server/au" },
+		args: { command: "git diff src/server/auth.ts", timeout: 30 },
+		result: {
+			content: [
+				{
+					type: "text",
+					text: [
+						"diff --git a/src/server/auth.ts b/src/server/auth.ts",
+						"index 3f2a1c4..9b8e7d2 100644",
+						"--- a/src/server/auth.ts",
+						"+++ b/src/server/auth.ts",
+						"@@ -41,5 +41,7 @@ export function validateToken(token: string): Claims {",
+						"   const claims = verifyJwt(token);",
+						"   /* expiry is checked",
+						"      against the server clock */",
+						'-  if (claims.exp < Date.now()) throw new HttpError(401, "expired");',
+						"+  if (claims.exp * 1000 < Date.now()) {",
+						'+    throw new HttpError(401, "expired");',
+						"+  }",
+						"   return claims;",
+					].join("\n"),
+				},
+			],
+			details: { exitCode: 0, wallTimeMs: 42, timeoutSeconds: 30 },
+		},
+		errorResult: {
+			content: [{ type: "text", text: "fatal: ambiguous argument 'src/server/auth.ts': unknown revision" }],
+			isError: true,
+			details: { exitCode: 128, wallTimeMs: 9, timeoutSeconds: 30 },
+		},
+	},
+
+	bash_search: {
+		label: "Bash (rg)",
+		renderer: "bash",
+		streamingArgs: { command: "rg -n useState packa" },
+		args: { command: "rg -n -C1 useState packages/tui/src", timeout: 30 },
+		result: {
+			content: [
+				{
+					type: "text",
+					text: [
+						"packages/tui/src/components/search-box.tsx-17-export function SearchBox() {",
+						'packages/tui/src/components/search-box.tsx:18:  const [query, setQuery] = useState("");',
+						"packages/tui/src/components/search-box.tsx-19-  return <input value={query} />;",
+						"--",
+						"packages/tui/src/hooks/use-debounced.ts:9:  const [value, setValue] = useState(initial);",
+					].join("\n"),
+				},
+			],
+			details: { exitCode: 0, wallTimeMs: 31, timeoutSeconds: 30 },
+		},
+		errorResult: {
+			content: [{ type: "text", text: "rg: packages/tui/srcx: The system cannot find the file specified." }],
+			isError: true,
+			details: { exitCode: 2, wallTimeMs: 6, timeoutSeconds: 30 },
+		},
+	},
+
 	bash_service: {
 		label: "Bash service",
 		renderer: "bash",
