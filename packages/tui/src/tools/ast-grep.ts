@@ -1,27 +1,26 @@
-import { isRecord, sanitizeText } from "@oh-my-pi/pi-utils";
-import { Ellipsis } from "@oh-my-pi/pi-natives";
 import type { Component } from "../tui";
 import type { Theme } from "../theme/theme";
 import { fileHyperlink } from "../render";
 import type { StatusLineOptions } from "../render/status-line";
-import { plainToolCard } from "../render/tool-card";
+import { CardRowsMemo, plainToolCard } from "../render/tool-card";
 import {
 	appendParseErrorsBulletList,
+	clipRows,
 	formatCount,
 	formatErrorText,
 	formatParseErrorsCountLabel,
-	formatScopedSubject,
 	PREVIEW_LIMITS,
 	toDisplayPathList,
 	type ToolUIStatus,
 } from "../render/render-utils";
-import { truncateToWidth } from "../utils";
 import {
 	classifyGroupedLines,
 	describeGroupedOutput,
 	formatGroupedFileHeader,
+	groupedHeaderLinkTargets,
 	groupLineIndicesByBlank,
 	renderSearchPreviewRows,
+	searchSubject,
 	themeCodeFrameGutter,
 } from "./grouped-file-output";
 import { code, compact, node, span } from "../native/describe";
@@ -66,13 +65,6 @@ interface AstGrepRenderArgs {
 const COLLAPSED_MATCH_LIMIT = PREVIEW_LIMITS.COLLAPSED_LINES * 2;
 const EXPANDED_MATCH_LIMIT = PREVIEW_LIMITS.EXPANDED_LINES * 2;
 
-/** `pattern in scope`, the same in the call and the result. */
-function astGrepSubject(args: AstGrepRenderArgs | undefined, theme: Theme, scope?: string): string | undefined {
-	if (!args?.pat) return undefined;
-	const paths = toDisplayPathList(args.path ?? args.paths);
-	return formatScopedSubject(args.pat, scope ?? (paths.length > 0 ? paths.join(", ") : undefined), theme);
-}
-
 /** Render AST grep calls and results. */
 export const astGrepToolRenderer = {
 	inline: true,
@@ -84,7 +76,7 @@ export const astGrepToolRenderer = {
 				icon: options.executionStarted ? "running" : "pending",
 				spinnerFrame: options.spinnerFrame,
 				title: "AST Grep",
-				description: astGrepSubject(args, uiTheme),
+				description: searchSubject(args.pat, args.path ?? args.paths, uiTheme),
 				meta,
 			},
 		}));
@@ -100,7 +92,7 @@ export const astGrepToolRenderer = {
 		const status = (icon: ToolUIStatus, meta?: string[]): StatusLineOptions => ({
 			icon,
 			title: "AST Grep",
-			description: astGrepSubject(args, uiTheme, details?.scopePath),
+			description: searchSubject(args?.pat, args?.path ?? args?.paths, uiTheme, details?.scopePath),
 			meta,
 		});
 
@@ -141,20 +133,7 @@ export const astGrepToolRenderer = {
 		// Resolve hyperlinks over the whole output so nested directory headers
 		// reconstruct across blank-line groups.
 		const contexts = classifyGroupedLines(allLines, details?.cwd ?? details?.searchPath, details?.searchPath);
-		// The displayed lines are sanitized, but OSC 8 destinations must retain the
-		// original path bytes. Only substitute targets for headers already linked
-		// by the sanitized output; never let raw text create additional links.
-		const rawDetails = options.renderContext?.rawDetails;
-		const rawContent =
-			isRecord(rawDetails) && typeof rawDetails.displayContent === "string" ? rawDetails.displayContent : undefined;
-		const rawLines = rawContent?.split("\n");
-		const rawCwd = isRecord(rawDetails) && typeof rawDetails.cwd === "string" ? rawDetails.cwd : undefined;
-		const rawSearchPath =
-			isRecord(rawDetails) && typeof rawDetails.searchPath === "string" ? rawDetails.searchPath : undefined;
-		const rawContexts =
-			rawContent !== undefined && rawLines?.length === allLines.length && sanitizeText(rawContent) === textContent
-				? classifyGroupedLines(rawLines, rawCwd ?? rawSearchPath, rawSearchPath)
-				: undefined;
+		const linkTarget = groupedHeaderLinkTargets(contexts, textContent, options.renderContext?.rawDetails);
 		// Style lazily: the collapsed preview only shows the first few rows, so a
 		// large result never styles/hyperlinks rows nobody sees.
 		const styledLines: (string | undefined)[] = Array.from({ length: allLines.length }, () => undefined);
@@ -163,19 +142,16 @@ export const astGrepToolRenderer = {
 			if (cached !== undefined) return cached;
 			const line = allLines[index]!;
 			const ctx = contexts[index]!;
-			const rawContext = rawContexts?.[index];
-			const target =
-				ctx.headerPath && rawContext?.kind === ctx.kind && rawContext.depth === ctx.depth
-					? (rawContext.headerPath ?? ctx.headerPath)
-					: ctx.headerPath;
 			let styled: string;
 			// Directory header rows never reach here: previews drop them, since
 			// file headers carry the full path.
 			if (ctx.kind === "file") {
 				const header = formatGroupedFileHeader(ctx, uiTheme);
+				const target = linkTarget(index);
 				styled = target ? fileHyperlink(target, header) : header;
 			} else {
-				styled = uiTheme.fg(line.startsWith("  meta:") ? "dim" : "toolOutput", themeCodeFrameGutter(line, uiTheme));
+				const color = line.startsWith("  meta:") ? "dim" : "toolOutput";
+				styled = uiTheme.fg(color, themeCodeFrameGutter(line, uiTheme));
 			}
 			styledLines[index] = styled;
 			return styled;
@@ -196,15 +172,15 @@ export const astGrepToolRenderer = {
 		}
 
 		// Rows are clipped, never wrapped; recomputed only when width or expansion changes.
-		let memo: { width: number; expanded: boolean; rows: readonly string[] } | undefined;
+		const memo = new CardRowsMemo();
 		return plainToolCard(
 			uiTheme,
 			() => ({
 				status: status(limitReached ? "warning" : "success", meta),
 				phase: limitReached ? "warning" : "success",
-				body: width => {
-					const expanded = options.expanded;
-					if (memo?.width !== width || memo.expanded !== expanded) {
+				body: width =>
+					memo.rows(width, options.expanded, () => {
+						const expanded = options.expanded;
 						const budget = (expanded ? EXPANDED_MATCH_LIMIT : COLLAPSED_MATCH_LIMIT) - extraLines.length;
 						const rows = renderSearchPreviewRows(
 							matchGroups,
@@ -214,12 +190,10 @@ export const astGrepToolRenderer = {
 							uiTheme,
 						);
 						rows.push(...extraLines);
-						memo = { width, expanded, rows: rows.map(row => truncateToWidth(row, width, Ellipsis.Omit)) };
-					}
-					return memo.rows;
-				},
+						return clipRows(rows, width);
+					}),
 			}),
-			{ onInvalidate: () => (memo = undefined), onReleaseRenderCaches: () => (memo = undefined) },
+			memo.cardOptions,
 		);
 	},
 	describeCall(args: AstGrepRenderArgs): NativeToolView {

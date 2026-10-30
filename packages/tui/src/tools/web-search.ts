@@ -7,15 +7,15 @@ import type { NativeToolView, ToolRenderer, ToolRenderResult } from "./renderer"
  */
 
 import type { Component } from "../index";
-import { Markdown } from "../index";
+import { Markdown, visibleWidth } from "../index";
 import type { RenderResultOptions } from "./renderer";
 import { getMarkdownTheme, type Theme } from "../theme/theme";
 import {
 	formatAge,
 	formatCount,
 	formatErrorText,
-	formatExpandHint,
 	formatMoreItems,
+	formatMoreRow,
 	getDomain,
 	PREVIEW_LIMITS,
 	replaceTabs,
@@ -34,6 +34,7 @@ import { errorText, noteText, resultText } from "./native-view";
 const MAX_COLLAPSED_ITEMS = PREVIEW_LIMITS.COLLAPSED_ITEMS;
 /** Collapsed line budget for a raw (detail-less) response. */
 const FALLBACK_COLLAPSED_LINES = 6;
+const SEARCH_TITLE = "Web Search";
 
 /** Search response and optional failure shown in the transcript. */
 export interface SearchRenderDetails {
@@ -44,7 +45,7 @@ export interface SearchRenderDetails {
 /** Status line shared by every state: the fixed title and the query as subject. */
 function searchStatus(query: string | undefined, options: Omit<StatusLineOptions, "title">): StatusLineOptions {
 	return {
-		title: "Web Search",
+		title: SEARCH_TITLE,
 		description: query ? truncateToWidth(replaceTabs(query), 80) : undefined,
 		...options,
 	};
@@ -58,8 +59,7 @@ function joinFooter(theme: Theme, parts: readonly string[]): string | undefined 
 
 /** Truncation marker plus expand hint for the last section, destined for the bottom border. */
 function moreMarker(remaining: number, itemType: string, expanded: boolean, theme: Theme): string {
-	if (remaining <= 0) return "";
-	return `${formatMoreItems(remaining, itemType, theme)} ${formatExpandHint(theme, expanded, true)}`;
+	return remaining > 0 ? formatMoreRow(remaining, itemType, theme, { expanded }) : "";
 }
 
 /** A raw response without structured details: its text as the body, capped while collapsed. */
@@ -90,11 +90,23 @@ function renderFallbackText(
 	});
 }
 
+/** Short auth-mode label: `OAuth`, `API`, or the raw mode. */
+function searchAuthLabel(authMode: SearchResponse["authMode"]): string | undefined {
+	if (authMode === "oauth") return "OAuth";
+	if (authMode === "api_key") return "API";
+	return authMode;
+}
+
+/** A source's display title: its title, else its URL, else `Untitled`. */
+function sourceTitle(src: SearchResponse["sources"][number], url: string): string {
+	if (typeof src.title === "string" && src.title.trim()) return src.title;
+	return url.trim() ? url : "Untitled";
+}
+
 /** Provider, model, auth mode, source count and usage for the bottom border. */
 function searchFooterParts(response: SearchResponse, sourceCount: number): string[] {
 	const providerLabel = response.provider !== "none" ? getSearchProviderLabel(response.provider) : "None";
-	const authShort =
-		response.authMode === "oauth" ? "OAuth" : response.authMode === "api_key" ? "API" : response.authMode;
+	const authShort = searchAuthLabel(response.authMode);
 	const parts = [authShort ? `${providerLabel} (${authShort})` : providerLabel];
 	if (response.model) parts.push(response.model);
 	parts.push(formatCount("source", sourceCount));
@@ -111,15 +123,14 @@ function searchFooterParts(response: SearchResponse, sourceCount: number): strin
 /** One source row: the linked title, then dim `(domain) · age`. */
 function renderSourceRow(src: SearchResponse["sources"][number], width: number, theme: Theme): string {
 	const url = typeof src.url === "string" ? src.url : "";
-	const titleText = typeof src.title === "string" && src.title.trim() ? src.title : url.trim() ? url : "Untitled";
 	const domain = url ? getDomain(url) : "";
 	const age = formatAge(src.ageSeconds) || (typeof src.publishedDate === "string" ? src.publishedDate : "");
 	const metaParts: string[] = [];
 	if (domain) metaParts.push(theme.fg("dim", `(${domain})`));
 	if (age) metaParts.push(theme.fg("muted", age));
 	const metaSuffix = metaParts.length > 0 ? ` ${metaParts.join(theme.fg("dim", theme.sep.dot))}` : "";
-	const titleBudget = Math.max(12, width - Bun.stringWidth(metaSuffix));
-	const title = theme.fg("accent", truncateToWidth(replaceTabs(titleText), titleBudget));
+	const titleBudget = Math.max(12, width - visibleWidth(metaSuffix));
+	const title = theme.fg("accent", truncateToWidth(replaceTabs(sourceTitle(src, url)), titleBudget));
 	return `${url ? urlHyperlink(url, title) : title}${metaSuffix}`;
 }
 
@@ -215,8 +226,6 @@ export function renderSearchCall(
 
 type SearchRenderArgs = { query?: string; [key: string]: unknown };
 
-const SEARCH_TITLE = "Web Search";
-
 function searchHead(query: string | undefined, meta?: string, badge?: { text: string; title?: string }) {
 	return {
 		title: SEARCH_TITLE,
@@ -230,7 +239,7 @@ function searchHead(query: string | undefined, meta?: string, badge?: { text: st
 /** One cited source row: domain-initial mark, linked title, muted `domain · age`. */
 function sourceRow(src: SearchResponse["sources"][number], index: number): NativeChild {
 	const url = typeof src.url === "string" ? src.url : "";
-	const title = typeof src.title === "string" && src.title.trim() ? src.title : url.trim() ? url : "Untitled";
+	const title = sourceTitle(src, url);
 	const domain = url ? getDomain(url) : "";
 	const age =
 		formatAge(src.ageSeconds).replace(/ ago$/, "") ||
@@ -283,8 +292,7 @@ function describeSearchResult(
 	const query = argQuery || searchQueries[0];
 	const answer = (typeof response.answer === "string" ? response.answer.trim() : "") || rawText;
 
-	const authShort =
-		response.authMode === "oauth" ? "OAuth" : response.authMode === "api_key" ? "API" : response.authMode;
+	const authShort = searchAuthLabel(response.authMode);
 	let providerInfo = response.model ? `${response.model} @ ${providerLabel}` : providerLabel;
 	if (authShort) providerInfo += ` (${authShort})`;
 	const usage = response.usage;

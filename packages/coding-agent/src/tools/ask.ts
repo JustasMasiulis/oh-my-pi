@@ -1015,8 +1015,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
  * Format a model-provided id/label for a validation error. Degenerate input
  * can carry tabs or kilobytes of text, and the error echoes through the
  * plain `Text` fallback renderer — expand tabs FIRST so the width bound
- * applies to displayed cells, then clamp like every other error display
- * path (`formatErrorMessage`).
+ * applies to displayed cells, then clamp to one line's width.
  */
 function formatErrorValue(value: string): string {
 	return truncateToWidth(replaceTabs(value), TRUNCATE_LENGTHS.LINE);

@@ -150,11 +150,12 @@ export class TtsrNotificationComponent extends Container {
 			body.push(new Text(line, 0, 0));
 		}
 
+		// The inverse banner would turn a dim fg into a gray band: keep the
+		// `… N more rules` row and its hint unstyled (not formatMoreRow).
 		const hidden = this.#rules.length - visible.length;
-		if (hidden > 0) {
-			body.push(new Text(theme.italic(`${formatMoreItems(hidden, "rule", theme)} ${expandHintLabel(theme)}`), 0, 0));
-		} else if (elidedDetail) {
-			body.push(new Text(theme.italic(expandHintLabel(theme)), 0, 0));
+		if (hidden > 0 || elidedDetail) {
+			const more = hidden > 0 ? `${formatMoreItems(hidden, "rule", theme)} ` : "";
+			body.push(new Text(theme.italic(`${more}${expandHintLabel(theme)}`), 0, 0));
 		}
 		return { icon: theme.icon.warning, header, body };
 	}

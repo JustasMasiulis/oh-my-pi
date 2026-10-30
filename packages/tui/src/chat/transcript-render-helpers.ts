@@ -20,7 +20,11 @@ import { FLUSH_BODY_INDENT } from "../render/tool-card";
 import { canonicalizeMessage } from "./thinking-display";
 import { ToolActivityContainer } from "../chrome/tool-activity";
 import { type TranscriptBlock } from "../chrome/transcript-container";
-import { TranscriptStatusBlock, type TranscriptStatusRow } from "../chrome/transcript-status";
+import {
+	TranscriptStatusBlock,
+	type TranscriptStatusPart,
+	type TranscriptStatusRow,
+} from "../chrome/transcript-status";
 import { theme } from "../theme";
 
 type CustomOrHookMessage = Extract<AgentMessage, { role: "custom" | "hookMessage" }>;
@@ -201,9 +205,12 @@ export function buildFileMentionBlock(files: FileMentionMessage["files"]): Trans
 					? "unknown lines"
 					: formatCount("line", file.lineCount);
 		}
+		const glyph: TranscriptStatusPart = skipped
+			? { text: theme.status.warning, color: "warning" }
+			: { text: theme.status.success, color: "muted" };
 		rows.push({
 			parts: [
-				skipped ? { text: theme.status.warning, color: "warning" } : { text: theme.status.success, color: "muted" },
+				glyph,
 				{ text: "Read", color: "muted" },
 				// The path styles itself; `dim` only covers its directory.
 				{ text: formatStyledPath(file.path, theme), color: "dim" },

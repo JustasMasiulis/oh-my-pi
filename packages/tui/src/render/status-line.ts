@@ -3,16 +3,16 @@
  *
  *     <status> <Title>: <subject> [badge] <meta · meta>
  *
- * The status slot always carries a `status.*` lifecycle glyph, and the title
- * alone names the tool. The title is the fixed tool name and the subject the
- * call's primary argument, identical across the call, success, and failure.
+ * The status slot carries a `status.*` lifecycle glyph. The title is the fixed
+ * tool name and the subject the call's primary argument, identical across the
+ * call, success, and failure.
  */
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { span } from "../native/describe";
 import { styledSpans } from "../native/spans";
 import type { Theme, ThemeColor } from "../theme/theme";
 import { visibleWidth } from "../utils";
-import { formatStatusIcon, type ToolUIStatus, truncateMiddleToWidth } from "./render-utils";
+import { formatStatusIcon, type ToolUIStatus, truncateMiddleToWidth, wrapBrackets } from "./render-utils";
 
 /** Status icon, title, description, and metadata for a single header row. */
 export interface StatusLineOptions {
@@ -46,7 +46,7 @@ export function renderStatusLine(options: StatusLineOptions, theme: Theme): stri
 
 	if (options.badge) {
 		const { label, color } = options.badge;
-		line += ` ${theme.fg(color, `${theme.format.bracketLeft}${flattenForHeader(label)}${theme.format.bracketRight}`)}`;
+		line += ` ${theme.fg(color, wrapBrackets(flattenForHeader(label), theme))}`;
 	}
 
 	const meta = options.meta?.map(flattenForHeader).filter(value => value.trim().length > 0) ?? [];
@@ -86,8 +86,7 @@ export function statusLineSpans(options: StatusLineOptions, theme: Theme): TspSp
 	const spans: TspSpan[] = [span(flattenForHeader(options.title), "accent")];
 	if (options.description) spans.push(span(": "), ...part(flattenForHeader(options.description), "muted"));
 	if (options.badge) {
-		const label = `${theme.format.bracketLeft}${flattenForHeader(options.badge.label)}${theme.format.bracketRight}`;
-		spans.push(span(" "), span(label, options.badge.color));
+		spans.push(span(" "), span(wrapBrackets(flattenForHeader(options.badge.label), theme), options.badge.color));
 	}
 	const meta = options.meta?.map(flattenForHeader).filter(value => value.trim().length > 0) ?? [];
 	if (meta.length > 0) spans.push(span(" "), ...part(meta.join(theme.sep.dot), "dim"));

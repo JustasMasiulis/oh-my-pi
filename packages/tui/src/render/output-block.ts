@@ -6,7 +6,6 @@ import { node, span } from "../native/describe";
 import type { NativeChild, NativeNode } from "../native/node";
 import { ImageProtocol, TERMINAL } from "../terminal-capabilities";
 import type { Theme, ThemeColor } from "../theme/theme";
-import type { Component } from "../tui";
 import { Ellipsis, padding, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
 import { getSixelLineMask } from "./sixel";
 import type { State } from "./types";
@@ -16,7 +15,6 @@ import { getStateBgColor, Hasher, padToWidth } from "./utils";
 /** Sections and presentation options for a bordered output block. */
 export interface OutputBlockOptions {
 	header?: string;
-	headerMeta?: string;
 	/** Facts drawn inside the bottom border (`╰── Wall 0.16s · Timeout 300s ──╯`). */
 	footerMeta?: string;
 	state?: State;
@@ -25,29 +23,10 @@ export interface OutputBlockOptions {
 	applyBg?: boolean;
 	contentPaddingLeft?: number;
 	contentPaddingRight?: number;
-	/** Override the state-derived border color. Used for muted "legacy" tool
-	 * frames that should not visually compete with framed-output tools. */
-	borderColor?: ThemeColor;
-}
-
-const FRAMED_BLOCK_COMPONENT = Symbol("framedBlockComponent");
-
-/** A component marked as rendering its own output frame. */
-export type FramedBlockComponent = Component & { [FRAMED_BLOCK_COMPONENT]?: true };
-
-/** Mark a component as owning its output frame. */
-export function markFramedBlockComponent<T extends Component>(component: T): T & FramedBlockComponent {
-	(component as T & FramedBlockComponent)[FRAMED_BLOCK_COMPONENT] = true;
-	return component as T & FramedBlockComponent;
-}
-
-/** Return whether a component owns its output frame. */
-export function isFramedBlockComponent(component: Component): boolean {
-	return (component as FramedBlockComponent)[FRAMED_BLOCK_COMPONENT] === true;
 }
 
 type BlockRow =
-	| { kind: "bar"; leftChar: string; rightChar: string; label?: string; meta?: string }
+	| { kind: "bar"; leftChar: string; rightChar: string; label?: string }
 	| { kind: "bottom"; leftChar: string; rightChar: string; meta?: string }
 	| { kind: "content"; inner: string }
 	| { kind: "sixel"; raw: string };
@@ -86,21 +65,20 @@ export function outputBlockHeaderWidth(width: number, theme: Theme): number {
 
 /** Render a bordered output block with optional header and sections. */
 export function renderOutputBlock(options: OutputBlockOptions, theme: Theme): string[] {
-	const { header, headerMeta, state, sections = [], width, applyBg = true } = options;
+	const { header, state, sections = [], width, applyBg = true } = options;
 	const h = theme.boxRound.horizontal;
 	const v = theme.boxRound.vertical;
 	const cap = h.repeat(3);
 	const lineWidth = Math.max(0, width);
 	// Border colors: running/pending use accent, success uses dim (gray), error/warning keep their colors
 	const borderColor: ThemeColor =
-		options.borderColor ??
-		(state === "error"
+		state === "error"
 			? "error"
 			: state === "warning"
 				? "warning"
 				: state === "running" || state === "pending"
 					? "accent"
-					: "dim");
+					: "dim";
 	const border = (text: string) => theme.fg(borderColor, text);
 	const bgFn = (() => {
 		if (!state || !applyBg) return undefined;
@@ -126,13 +104,7 @@ export function renderOutputBlock(options: OutputBlockOptions, theme: Theme): st
 
 	// ── Layout pass: collect row descriptors before emitting the bordered lines. ──
 	const rows: BlockRow[] = [];
-	rows.push({
-		kind: "bar",
-		leftChar: theme.boxRound.topLeft,
-		rightChar: theme.boxRound.topRight,
-		label: header,
-		meta: headerMeta,
-	});
+	rows.push({ kind: "bar", leftChar: theme.boxRound.topLeft, rightChar: theme.boxRound.topRight, label: header });
 
 	const normalizedSections = sections.length > 0 ? sections : [{ lines: [] as string[] }];
 	for (let sectionIndex = 0; sectionIndex < normalizedSections.length; sectionIndex++) {
@@ -285,8 +257,6 @@ export interface NativeOutputBlockOptions {
 	state?: State;
 	/** Card role (`omp.tool.bash`, `omp.eval.cell`, …). Defaults to `omp.output`. */
 	role?: string;
-	/** Override the state-derived tone (the ANSI path's `borderColor`). */
-	tone?: TspTone;
 	sections?: readonly NativeOutputBlockSection[];
 	collapsible?: boolean;
 	collapsed?: boolean;
@@ -327,7 +297,7 @@ export function describeOutputBlock(options: NativeOutputBlockOptions): NativeNo
 		"card",
 		{
 			role: options.role ?? "omp.output",
-			tone: options.tone ?? outputStateTone(options.state),
+			tone: outputStateTone(options.state),
 			status: outputStateStatus(options.state),
 			head,
 			collapsible: options.collapsible,
@@ -383,10 +353,8 @@ export class CachedOutputBlock {
 			),
 		);
 		h.optional(options.header);
-		h.optional(options.headerMeta);
 		h.optional(options.footerMeta);
 		h.optional(options.state);
-		h.optional(options.borderColor);
 		h.bool(options.applyBg ?? true);
 		if (options.sections) {
 			for (const s of options.sections) {

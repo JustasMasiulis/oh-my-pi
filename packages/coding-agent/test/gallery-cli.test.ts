@@ -14,6 +14,8 @@ import {
 	getMessageGalleryEntries,
 	getMessageGalleryInventory,
 	getSegmentGalleryInventory,
+	getWidgetGalleryEntries,
+	getWidgetGalleryInventory,
 } from "@oh-my-pi/pi-coding-agent/cli/gallery-fixtures";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
@@ -47,20 +49,24 @@ describe("gallery harness", () => {
 		expect(parseGallerySurfaces(["segment", "tool", "segment"])).toEqual(["tool", "segment"]);
 		expect(parseGallerySurfaces(["all"])).toEqual([...GALLERY_SURFACES]);
 		expect(() => parseGallerySurfaces(["bogus"])).toThrow(
-			/Invalid --surface 'bogus'.*tool.*message.*composer.*segment.*all/,
+			/Invalid --surface 'bogus'.*tool.*message.*widget.*composer.*segment.*all/,
 		);
 	});
 
-	it("orders surfaces tool, message, composer, segment and lets entry filters imply their surface", async () => {
+	it("orders surfaces tool, message, widget, composer, segment and lets entry filters imply their surface", async () => {
 		const message = getMessageGalleryInventory()[0];
+		const widget = getWidgetGalleryInventory()[0];
 		const composer = getComposerGalleryInventory()[0];
 		const segment = getSegmentGalleryInventory()[0];
-		if (!message || !composer || !segment) throw new Error("Production gallery registries must not be empty");
+		if (!message || !widget || !composer || !segment) {
+			throw new Error("Production gallery registries must not be empty");
+		}
 
 		const sections = await renderGallerySurfaceSections({
 			surfaces: [...GALLERY_SURFACES],
 			tool: "bash",
 			message,
+			widget,
 			composer,
 			segment,
 			states: ["success"],
@@ -69,6 +75,7 @@ describe("gallery harness", () => {
 		expect(sections.map(section => section.heading)).toEqual([
 			`bash${dot}Bash`,
 			expect.stringContaining(`message${dot}${message}`),
+			expect.stringContaining(`widget${dot}${widget}`),
 			expect.stringContaining(`composer${dot}${composer}`),
 			`segment${dot}${segment}`,
 		]);
@@ -78,6 +85,9 @@ describe("gallery harness", () => {
 		const messageOnly = await renderGallerySurfaceSections({ message });
 		expect(messageOnly).toHaveLength(1);
 		expect(messageOnly[0]?.heading).toContain(`message${dot}${message}`);
+		const widgetOnly = await renderGallerySurfaceSections({ widget });
+		expect(widgetOnly).toHaveLength(1);
+		expect(widgetOnly[0]?.heading).toContain(`widget${dot}${widget}`);
 		const composerOnly = await renderGallerySurfaceSections({ composer });
 		expect(composerOnly).toHaveLength(1);
 		expect(composerOnly[0]?.heading).toContain(`composer${dot}${composer}`);
@@ -104,6 +114,18 @@ describe("gallery harness", () => {
 				for (const expanded of [false, true]) {
 					const lines = await variant.render(100, expanded);
 					// An empty sample means the transcript dispatch dropped this message kind.
+					expect(lines.length, `${entry.id}/${variant.label} rendered nothing`).toBeGreaterThan(0);
+				}
+			}
+		}
+	});
+
+	it("renders every live-window widget sample, collapsed and expanded, without throwing", async () => {
+		for (const entry of getWidgetGalleryEntries()) {
+			for (const variant of entry.variants) {
+				for (const expanded of [false, true]) {
+					const lines = await variant.render(100, expanded);
+					// Every sample carries content its widget shows; empty output means the widget dropped it.
 					expect(lines.length, `${entry.id}/${variant.label} rendered nothing`).toBeGreaterThan(0);
 				}
 			}

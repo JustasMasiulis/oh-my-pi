@@ -8,7 +8,15 @@ import { Text } from "../components/text";
 import { getImageDimensions, ImageProtocol, imageFallback, TERMINAL } from "../terminal-capabilities";
 import { type Component, Container, type TUI } from "../tui";
 import { truncateToWidth } from "../utils";
-import { getProjectDir, isRecord, logger, sanitizeText, sanitizeTextDeep } from "@oh-my-pi/pi-utils";
+import {
+	formatCount,
+	getProjectDir,
+	isRecord,
+	logger,
+	pluralize,
+	sanitizeText,
+	sanitizeTextDeep,
+} from "@oh-my-pi/pi-utils";
 import type { Theme } from "../theme/theme";
 import { ensureThemeSync, getThemeEpoch, theme } from "../theme/theme";
 import {
@@ -40,9 +48,14 @@ import { taskCardAgentIds } from "../tools/task";
 import { TODO_STRIKE_TOTAL_FRAMES, type TodoToolDetails } from "../tools/todo";
 import { isNativeRendering } from "../native/state";
 import { isWaitingPollDetails } from "../tools/wait";
-import { DEFAULT_TERMINAL_PREVIEW_LINES, replaceTabs, resolveImageOptions } from "../render/render-utils";
+import {
+	DEFAULT_TERMINAL_PREVIEW_LINES,
+	replaceTabs,
+	resolveImageOptions,
+	type ToolUIStatus,
+} from "../render/render-utils";
 import type { XdevMountedState } from "../tools/xdev";
-import { isFramedBlockComponent, markFramedBlockComponent, renderStatusLine, WidthAwareText } from "../render/index";
+import { renderFittedStatusLine, renderStatusLine, WidthAwareText } from "../render/index";
 import { cachedPngConversion, convertImageToPngShared, imagePayloadKey } from "./image-loading";
 import { FenceFigure } from "./fence-figure";
 import { sanitizeWithOptionalSixelPassthrough } from "../render/sixel";
@@ -143,9 +156,6 @@ class SafeToolRendererComponent implements Component {
 		this.#component = component;
 		this.#fallback = fallback;
 		this.wantsKeyRelease = component.wantsKeyRelease;
-		if (isFramedBlockComponent(component)) {
-			markFramedBlockComponent(this);
-		}
 	}
 
 	render(width: number): readonly string[] {
@@ -288,6 +298,15 @@ const NATIVE_STATUS_TONE: Record<TspCardStatus, TspTone | undefined> = {
 	done: undefined,
 	error: "error",
 	cancelled: "info",
+};
+
+/** Status glyph of the compact one-row header for each card status. */
+const COMPACT_STATUS_ICON: Record<TspCardStatus, ToolUIStatus> = {
+	pending: "pending",
+	running: "running",
+	done: "success",
+	error: "error",
+	cancelled: "aborted",
 };
 
 /** Phase-locked spinner glyph index shared by every live tool block so parallel
@@ -517,8 +536,8 @@ export class ToolExecutionComponent extends Container {
 		} else {
 			this.addChild(this.#contentText);
 		}
-		// Tool blocks are visually distinct cards (background-tinted or framed),
-		// so keep their horizontal padding even when the user enables tight layout.
+		// Tool blocks are visually distinct cards (flush or framed), so keep
+		// their layout even when the user enables tight layout.
 		this.setIgnoreTight(true);
 
 		this.#updateSpinnerAnimation();
@@ -1068,7 +1087,7 @@ export class ToolExecutionComponent extends Container {
 				: node("col", { gap: "sm", role: "omp.tool.diagnostics" }, sections, "late");
 		return {
 			section,
-			chip: { text: count === 1 ? "1 diagnostic" : `${count} diagnostics`, tone: errored ? "error" : "warning" },
+			chip: { text: formatCount("diagnostic", count), tone: errored ? "error" : "warning" },
 		};
 	}
 
@@ -1390,29 +1409,21 @@ export class ToolExecutionComponent extends Container {
 		const summary = this.#activitySummary();
 		// Elapsed ticks only while the call is genuinely running; a settled
 		// placeholder row must not read as live ("Todo · running 0s").
-		const elapsed =
-			this.#isRunning() && this.#executionStartedAtNow !== undefined
-				? `${Math.max(0, Math.floor((this.#presentationFrame.now - this.#executionStartedAtNow) / 1000))}s`
+		const startedAt = this.#executionStartedAtNow;
+		const elapsedSeconds =
+			this.#isRunning() && startedAt !== undefined
+				? Math.max(0, Math.floor((this.#presentationFrame.now - startedAt) / 1000))
 				: undefined;
-		const status = this.#nativeStatus();
-		const row = renderStatusLine(
+		const row = renderFittedStatusLine(
 			{
-				icon:
-					status === "error"
-						? "error"
-						: status === "done"
-							? "success"
-							: status === "cancelled"
-								? "aborted"
-								: status === "running"
-									? "running"
-									: "pending",
+				icon: COMPACT_STATUS_ICON[this.#nativeStatus()],
 				spinnerFrame: this.#spinnerFrame,
 				title: summary.label,
 				description: summary.detail?.replace(/\s+/g, " "),
-				meta: elapsed ? [elapsed] : undefined,
+				meta: elapsedSeconds === undefined ? undefined : [`${elapsedSeconds}s`],
 			},
 			theme,
+			width,
 		);
 		return [truncateToWidth(row, width)];
 	}
@@ -1473,11 +1484,11 @@ export class ToolExecutionComponent extends Container {
 
 		// Every renderer path is flush or framed: no padding, no state tint. A
 		// benign skip (steering/peer interrupt aborted a still-pending call)
-		// is a synthetic placeholder for a call that never executed, so it
-		// bypasses any bespoke error frame and draws the neutral generic card —
-		// the per-tool error frame would misread normal mid-turn steering as a
-		// failure (#7199).
-		if (this.#isBenignSkip()) {
+		// is a synthetic placeholder for a call that never executed, so a
+		// bespoke renderer is bypassed for the neutral generic card — the
+		// per-tool error frame would misread normal mid-turn steering as a
+		// failure (#7199). Generic-fallback tools already draw that card.
+		if (this.#isBenignSkip() && this.#usesContentBox) {
 			this.#renderBenignSkipCard();
 		} else if (this.#tool && (this.#tool.renderCall || this.#tool.renderResult)) {
 			const tool = this.#tool;
@@ -1636,7 +1647,7 @@ export class ToolExecutionComponent extends Container {
 							icon: "running",
 							spinnerFrame: this.#spinnerFrame,
 							title: "Edit",
-							description: `${remaining} more ${remaining > 1 ? "files" : "file"} pending`,
+							description: `${remaining} more ${pluralize("file", remaining)} pending`,
 						},
 						theme,
 					);
@@ -1963,16 +1974,11 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	/**
-	 * Render a benign skip as the neutral generic card, replacing any bespoke
-	 * renderer's error frame. Generic-fallback tools already route through
-	 * {@link #renderDefaultCard} (which emits the info card for a skip).
-	 * Bespoke-renderer tools get their content box swapped for the same card.
+	 * Render a benign skip as the neutral generic card ({@link #renderDefaultCard},
+	 * which emits the info card for a skip), swapping out the bespoke renderer's
+	 * content box and any multi-file boxes.
 	 */
 	#renderBenignSkipCard(): void {
-		if (!this.#usesContentBox) {
-			this.#contentText.reformat();
-			return;
-		}
 		for (const box of this.#multiFileBoxes) {
 			this.removeChild(box);
 		}

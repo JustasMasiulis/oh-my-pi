@@ -485,7 +485,7 @@ export class SelectorController {
 			const dirs = { projectDir, agentDir };
 			const initialDoc = await loadWatchdogConfigFile(await resolveAdvisorConfigEditPath(initialScope, dirs));
 			if (initialDoc.warnings?.length) {
-				this.ctx.showWarning(`WATCHDOG.yml: ${sanitizeDisplayWarnings(initialDoc.warnings).join("; ")}`);
+				this.ctx.showWarning(`WATCHDOG.yml: ${sanitizeDisplayWarnings(initialDoc.warnings, theme).join("; ")}`);
 			}
 			// Fullscreen editor on the alternate screen (the /settings idiom): the
 			// overlay holds the alt buffer + mouse tracking; the transcript stays put.
@@ -532,7 +532,9 @@ export class SelectorController {
 					);
 					this.ctx.statusLine.invalidate();
 					if (discovered.warnings.length > 0) {
-						this.ctx.showWarning(`WATCHDOG.yml: ${sanitizeDisplayWarnings(discovered.warnings).join("; ")}`);
+						this.ctx.showWarning(
+							`WATCHDOG.yml: ${sanitizeDisplayWarnings(discovered.warnings, theme).join("; ")}`,
+						);
 					}
 					this.ctx.showStatus(
 						count > 0

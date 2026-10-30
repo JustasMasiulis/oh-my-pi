@@ -6,8 +6,8 @@
  * saved), and whether the user approved it.
  */
 import type { Component } from "../tui";
-import { renderStatusLine } from "../render";
-import { cappedHeadLines, formatErrorText, formatMoreItems, PREVIEW_LIMITS } from "../render/render-utils";
+import type { StatusLineOptions } from "../render";
+import { cappedHeadLines, formatErrorText, formatMoreRow, PREVIEW_LIMITS } from "../render/render-utils";
 import { highlightCode, type Theme } from "../theme/theme";
 import { parseCfgUrl } from "./cfg-url";
 import type { NativeToolView, RenderResultOptions } from "./renderer";
@@ -55,22 +55,19 @@ export function renderCfgRead(
 			meta.push(details.count === 1 ? "1 setting" : `${details.count} settings`);
 			if (details.modified) meta.push(`${details.modified} modified`);
 		}
-		const header = renderStatusLine(
-			{
-				icon: result === undefined ? "pending" : result.isError ? "error" : "success",
-				title: "Config",
-				description: (details?.path ?? parseCfgUrl(url)?.segments.join(".")) || "all settings",
-				meta,
-			},
-			theme,
-		);
+		const header: StatusLineOptions = {
+			icon: result === undefined ? "pending" : result.isError ? "error" : "success",
+			title: "Config",
+			description: (details?.path ?? parseCfgUrl(url)?.segments.join(".")) || "all settings",
+			meta,
+		};
 		if (!result) return [header];
 		if (result.isError) return [header, `  ${formatErrorText(firstText(result) || "Settings read failed.", theme)}`];
 		const body = firstText(result).trimEnd().split("\n");
 		const shown = cappedHeadLines(body, expanded ? body.length : PREVIEW_LIMITS.COLLAPSED_ITEMS);
-		const lines = [header, ...highlightCode(safe(shown.lines.join("\n")), "yaml", theme).map(line => `  ${line}`)];
-		if (shown.hidden) lines.push(`  ${theme.fg("dim", formatMoreItems(shown.hidden, "line", theme))}`);
-		return lines;
+		const rows = highlightCode(safe(shown.lines.join("\n")), "yaml", theme).map(line => `  ${line}`);
+		if (shown.hidden) rows.push(`  ${formatMoreRow(shown.hidden, "line", theme, { expanded })}`);
+		return [header, ...rows];
 	}, options);
 }
 
@@ -157,28 +154,23 @@ export function renderCfgWrite(
 						? "warning"
 						: "success";
 		const meta = details?.outcome === "declined" || details?.outcome === "unchanged" ? [details.outcome] : [];
-		const header = renderStatusLine(
-			{
-				icon,
-				title: "Config",
-				description: details?.path ?? target?.segments.join("."),
-				badge: { label: save ? "persist" : "session", color: save ? "accent" : "muted" },
-				meta,
-			},
-			theme,
-		);
+		const header: StatusLineOptions = {
+			icon,
+			title: "Config",
+			description: details?.path ?? target?.segments.join("."),
+			badge: { label: save ? "persist" : "session", color: save ? "accent" : "muted" },
+			meta,
+		};
 		if (result?.isError)
 			return [header, `  ${formatErrorText(firstText(result) || "Settings write failed.", theme)}`];
 		const arrow = theme.fg("dim", theme.format.arrowRight);
 		const next = theme.fg("toolOutput", details?.value ?? content?.trim() ?? "");
-		const lines = [
+		const change = details ? `  ${theme.fg("dim", details.previous)} ${arrow} ${next}` : `  ${arrow} ${next}`;
+		if (details?.effective === undefined) return [header, change];
+		return [
 			header,
-			details ? `  ${theme.fg("dim", details.previous)} ${arrow} ${next}` : `  ${arrow} ${next}`,
+			change,
+			theme.fg("warning", `  still ${details.effective}: a higher-precedence layer overrides the saved value`),
 		];
-		if (details?.effective !== undefined)
-			lines.push(
-				theme.fg("warning", `  still ${details.effective}: a higher-precedence layer overrides the saved value`),
-			);
-		return lines;
 	}, options);
 }

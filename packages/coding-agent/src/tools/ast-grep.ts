@@ -30,13 +30,13 @@ import {
 	searchPathTier,
 } from "./path-utils";
 import { searchApprovalCacheTargets } from "./search-approval-targets";
-import { toPathList } from "@oh-my-pi/pi-tui/render/render-utils";
 import { isRawSelector } from "./read-selector";
 import {
 	CODE_FRAME_GUTTER,
 	capParseErrors,
 	formatCodeFrameLine,
 	formatParseErrors,
+	toPathList,
 } from "@oh-my-pi/pi-tui/render/render-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { toolResult } from "./tool-result";

@@ -258,7 +258,9 @@ export function positionRail(
 	for (let index = 0; index < count; index++) {
 		dots.push(index === active ? theme.fg("accent", theme.radio.selected) : theme.fg("dim", theme.radio.unselected));
 	}
-	const rail = `${moreLeft ? theme.fg("dim", "… ") : "  "}${dots.join(" ")}${moreRight ? theme.fg("dim", " …") : ""}`;
+	const ellipsis = theme.fg("dim", theme.format.ellipsis);
+	const leftGap = moreLeft ? `${ellipsis} ` : " ".repeat(visibleWidth(ellipsis) + 1);
+	const rail = `${leftGap}${dots.join(" ")}${moreRight ? ` ${ellipsis}` : ""}`;
 	const pad = Math.max(0, Math.floor((width - visibleWidth(rail)) / 2));
 	return " ".repeat(pad) + rail;
 }

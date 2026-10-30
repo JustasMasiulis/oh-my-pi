@@ -8,6 +8,8 @@ import type { NativeNode } from "../native/node";
 /** SGR dim on / normal intensity — additive, preserves fg/bg colors. */
 const DIM = "\x1b[2m";
 const DIM_OFF = "\x1b[22m";
+/** Printable ASCII only: such indent glyphs are left blank (see {@link indentMarkers}). */
+const PLAIN_ASCII = /^[\x20-\x7e]*$/;
 
 /** Indentation glyphs for one diff render: a dim marker per space and per tab stop. */
 interface IndentMarkers {
@@ -25,11 +27,12 @@ function indentMarkers(renderTheme: Theme): IndentMarkers {
 	const tabWidth = DEFAULT_TAB_WIDTH;
 	const dot = renderTheme.sep.dot.trim();
 	const arrow = renderTheme.format.arrowRight;
-	const space = /^[\x20-\x7e]*$/.test(dot) ? " " : `${DIM}${dot}${DIM_OFF}`;
-	if (/^[\x20-\x7e]*$/.test(arrow)) return { space, tab: " ".repeat(tabWidth) };
+	const space = PLAIN_ASCII.test(dot) ? " " : `${DIM}${dot}${DIM_OFF}`;
+	if (PLAIN_ASCII.test(arrow)) return { space, tab: " ".repeat(tabWidth) };
 	const leftPadding = Math.floor(tabWidth / 2);
 	const rightPadding = Math.max(0, tabWidth - leftPadding - 1);
-	return { space, tab: `${DIM}${" ".repeat(leftPadding)}${arrow}${" ".repeat(rightPadding)}${DIM_OFF}` };
+	const tab = `${DIM}${" ".repeat(leftPadding)}${arrow}${" ".repeat(rightPadding)}${DIM_OFF}`;
+	return { space, tab };
 }
 
 /**

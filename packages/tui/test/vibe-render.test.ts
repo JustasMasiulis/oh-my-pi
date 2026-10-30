@@ -120,7 +120,7 @@ describe("vibe tool renderers", () => {
 		}
 	});
 
-	it("send result frames the ack under the composer", () => {
+	it("send result shows the delivery mode with the message under the Vibe header", () => {
 		const renderer = createVibeToolRenderer("send");
 		const details: VibeToolDetails = {
 			op: "send",
@@ -140,7 +140,7 @@ describe("vibe tool renderers", () => {
 		expect(text).toContain("  Focus on the API first.");
 	});
 
-	it("wait renders stacked TV screens: live trace + streamed text, idle gist, settled footer", () => {
+	it("wait renders one row per worker: live trace + streamed text, idle gist, settled outcome", () => {
 		const renderer = createVibeToolRenderer("wait");
 		const details: VibeToolDetails = {
 			op: "wait",
@@ -186,7 +186,7 @@ describe("vibe tool renderers", () => {
 		expect(text).toContain("edit: Fixing the parser");
 		expect(text).toContain("The parser now accepts nested arrays");
 		expect(text).toContain("prov/fast-model");
-		// Idle screen + settled footer.
+		// Idle worker gist + settled turn outcome.
 		expect(text).toContain("Bob");
 		expect(text).toContain("turn 2 completed");
 		expect(text).toContain("turn completed");

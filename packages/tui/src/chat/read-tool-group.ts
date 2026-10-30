@@ -22,9 +22,17 @@ import {
 	shortenPath,
 	type ToolUIStatus,
 } from "../render/render-utils";
-import { fileHyperlink, renderCodeCell, renderMarkdownCell, renderStatusLine, type StatusLineOptions } from "../render";
+import {
+	FLUSH_BODY_INDENT,
+	fileHyperlink,
+	nestRows,
+	renderCodeCell,
+	renderFittedStatusLine,
+	renderMarkdownCell,
+	type StatusLineOptions,
+} from "../render";
 import { wrapPrefixedLine, wrapTreeLine } from "../render/hanging-wrap";
-import { visibleWidth } from "../utils";
+import { replaceTabs, visibleWidth } from "../utils";
 import { canonicalizeMessage } from "./thinking-display";
 import { internalUrlSchemeSpec, splitUrlScheme } from "../tools/url-scheme-host";
 import type { ToolExecutionHandle } from "./tool-execution";
@@ -189,16 +197,21 @@ type ReadSummaryRow = {
 	targets: ReadDisplayTarget[];
 };
 
+/** Worst status wins a merged row; a running read outranks one still pending. */
 const READ_STATUS_RANK: Record<ReadEntry["status"], number> = {
 	success: 0,
-	running: 1,
-	pending: 2,
+	pending: 1,
+	running: 2,
 	warning: 3,
 	error: 4,
 };
 
 function isInFlight(entry: ReadEntry): boolean {
 	return entry.status === "pending" || entry.status === "running";
+}
+
+function formatReadUsage(row: ReadUsageRow): string {
+	return formatUsageRow(row.usage, row.durationMs, row.ttftMs, row.timestamp, row.turnElapsedMs);
 }
 
 function getDisplayReadTargets(
@@ -373,17 +386,38 @@ function formatMergedSelectorParts(selectors: string[]): string {
 	return `${first},${second},${theme.format.ellipsis},${last}`;
 }
 
+/**
+ * A flush header row fitted to the render width like ToolCard's: an overlong
+ * path is cut in its middle so the header never wraps into the rows below.
+ */
+function fittedHeader(options: StatusLineOptions): Component {
+	let cache: { width: number; lines: readonly string[] } | undefined;
+	const drop = (): void => {
+		cache = undefined;
+	};
+	return {
+		render(width: number): readonly string[] {
+			if (cache?.width === width) return cache.lines;
+			const header = replaceTabs(renderFittedStatusLine(options, theme, width - FLUSH_BODY_INDENT));
+			// Hang only when even the fitted title and meta exceed a very narrow width.
+			cache = { width, lines: wrapPrefixedLine("", " ".repeat(FLUSH_BODY_INDENT), header, width) };
+			return cache.lines;
+		},
+		invalidate: drop,
+		releaseRenderCaches: drop,
+	};
+}
+
 export class ReadToolGroupComponent extends Container implements ToolExecutionHandle {
 	#entries = new Map<string, ReadEntry>();
 	#usageRows = new Map<string, ReadUsageRow>();
 	#usageBatchByToolCallId = new Map<string, string>();
-	#text: Text;
 	#expanded = false;
 	#toolActivityVisible = true;
 	#showContentPreview: boolean;
 	// A read group accretes entries across multiple assistant completions for as
 	// long as the run of reads is uninterrupted. It remains active while its
-	// header can change from `Read <path>` to `Read (N)` plus a tree. The
+	// header can change from `Read <path>` to `Read N files` plus a tree. The
 	// controller calls `finalize()` once the run breaks; TranscriptContainer
 	// retires the finalized block as an immutable history batch.
 	#finalized = false;
@@ -403,8 +437,6 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	constructor(options: ReadToolGroupOptions = {}) {
 		super();
 		this.#showContentPreview = options.showContentPreview ?? false;
-		this.#text = new Text("", 0, 0);
-		this.addChild(this.#text);
 		this.#updateDisplay();
 	}
 
@@ -619,7 +651,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	/**
 	 * The read run as one inline `tool` on terminals that list the kind, else
 	 * the fallback: a bare `card` (role `omp.tool.read`) with `Read <path>` or
-	 * `Read (N)` in the head, a `list` of path items (status tone, link,
+	 * `Read N files` in the head, a `list` of path items (status tone, link,
 	 * correction and conflict detail, nested usage) and a clamped preview per
 	 * read when content previews are on.
 	 */
@@ -650,7 +682,9 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		if (rows.length <= 1) {
 			const row = rows[0];
 			const error = row && this.#statusForTargets(row.targets) === "error" ? this.#errorFor(row) : undefined;
-			const rowHead: NativeToolHead = row ? this.#nativeRowHead(row) : { target: "…", targetKind: "path" };
+			const rowHead: NativeToolHead = row
+				? this.#nativeRowHead(row)
+				: { target: theme.format.ellipsis, targetKind: "path" };
 			if (error !== undefined) {
 				const view = inlineErrorView(rowHead, error);
 				head = view.tool ?? rowHead;
@@ -680,7 +714,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			for (const entry of previews) {
 				const split = splitPathAndSel(entry.path);
 				const name = shortenPath(split.path);
-				const sectionHead: TspSpan[] = [span(name || "…", "path")];
+				const sectionHead: TspSpan[] = [span(name || theme.format.ellipsis, "path")];
 				if (split.sel) sectionHead.push(span(`:${split.sel}`, "muted"));
 				body.push(node("section", { head: sectionHead }, this.#nativePreview(entry), `p${entry.toolCallId}`));
 				const usage = this.#usageRows.get(entry.toolCallId);
@@ -712,13 +746,11 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		const correctedFrom = this.#correctedFromForTargets(row.targets);
 		const conflicts = this.#conflictCountForTargets(row.targets);
 		return {
-			target: filePath ? `${filePath}${split.sel ? `:${split.sel}` : ""}` : "…",
+			target: filePath ? `${filePath}${split.sel ? `:${split.sel}` : ""}` : theme.format.ellipsis,
 			targetKind: "path",
 			href: fileHref(linkPathForTargets(row.targets)),
 			meta: correctedFrom ? [`corrected from ${shortenPath(correctedFrom)}`] : undefined,
-			badges: conflicts
-				? [{ text: `${conflicts} conflict${conflicts === 1 ? "" : "s"}`, tone: "warning" }]
-				: undefined,
+			badges: conflicts ? [{ text: formatCount("conflict", conflicts), tone: "warning" }] : undefined,
 		};
 	}
 
@@ -740,7 +772,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			href: fileHref(linkPathForTargets(row.targets)),
 			icon: status === "error" ? "x-circle" : undefined,
 			tone: READ_STATUS_TONE[status],
-			chip: conflicts ? { text: `${conflicts} conflict${conflicts === 1 ? "" : "s"}` } : undefined,
+			chip: conflicts ? { text: formatCount("conflict", conflicts) } : undefined,
 			detail,
 			title: error,
 			key: row.targetPath,
@@ -805,24 +837,14 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 				for (const usage of usageByRow.get(0) ?? []) children.push(this.#nativeUsage(usage, "u0"));
 			}
 		} else if (rows.length > 1) {
-			head = [title, span(` (${rows.length})`, "dim")];
+			head = [title, span(` ${formatCount("file", rows.length)}`, "dim")];
 			const summaryTargets = this.#displayTargetsForEntries(
 				entries.filter(entry => !this.#shouldRenderPreview(entry)),
 			);
 			const summaryRows = this.#buildSummaryRows(summaryTargets);
 			const summaryUsage = this.#usageRowsBySummaryRow(summaryRows);
 			const items = summaryRows.map((row, index) => {
-				const usage = (summaryUsage.get(index) ?? []).map(usageRow =>
-					plainText(
-						formatUsageRow(
-							usageRow.usage,
-							usageRow.durationMs,
-							usageRow.ttftMs,
-							usageRow.timestamp,
-							usageRow.turnElapsedMs,
-						),
-					),
-				);
+				const usage = (summaryUsage.get(index) ?? []).map(usageRow => plainText(formatReadUsage(usageRow)));
 				return node(
 					"item",
 					{
@@ -899,18 +921,18 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			const href = linkPath ? fileHref(linkPath) : undefined;
 			spans.push(span(filePath, "path", href ? { href } : undefined));
 		} else {
-			spans.push(span("…", "toolOutput"));
+			spans.push(span(theme.format.ellipsis, "toolOutput"));
 		}
 		if (split.sel) spans.push(span(`:${split.sel}`, "accent"));
 		const correctedFrom = this.#correctedFromForTargets(row.targets);
 		if (correctedFrom) spans.push(span(` (corrected from ${shortenPath(correctedFrom)})`, "dim"));
 		const conflicts = this.#conflictCountForTargets(row.targets);
-		if (conflicts) spans.push(span(` (⚠ ${conflicts} conflict${conflicts === 1 ? "" : "s"})`, "warning"));
+		if (conflicts) spans.push(span(` (⚠ ${formatCount("conflict", conflicts)})`, "warning"));
 		return spans;
 	}
 
 	#nativeUsage(usage: ReadUsageRow, key: string): NativeNode {
-		const line = formatUsageRow(usage.usage, usage.durationMs, usage.ttftMs, usage.timestamp, usage.turnElapsedMs);
+		const line = formatReadUsage(usage);
 		return text([span(plainText(line), "dim")], { wrap: "word", key, role: "omp.usage" });
 	}
 
@@ -920,12 +942,17 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		const displayTargets = this.#displayTargetsForEntries(entries);
 		const displayRows = this.#buildSummaryRows(displayTargets);
 
-		// Clear previous children and rebuild the summary and preview blocks.
+		// Clear previous children and rebuild the header, summary and preview blocks.
 		this.clear();
-		// Item rows hang their path under the label column; usage rows hang under
-		// their connector; the header hangs at the body column.
+		if (displayRows.length === 0) {
+			this.addChild(fittedHeader({ icon: this.#groupIcon(entries), title: "Read" }));
+			return;
+		}
+
+		// Item rows hang their path under the label column; usage rows hang under their connector.
 		const itemPrefixes = new Map<string, string>();
-		this.#text = new Text("", 0, 0).setWrapLine((line, width) => {
+		const lines: string[] = [];
+		const body = new Text("", 0, 0).setWrapLine((line, width) => {
 			const itemPrefix = itemPrefixes.get(line);
 			if (itemPrefix !== undefined) {
 				const hang = " ".repeat(visibleWidth(itemPrefix));
@@ -934,22 +961,14 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			return wrapTreeLine(line, width, theme) ?? wrapPrefixedLine("", "  ", line, width);
 		});
 
-		if (displayRows.length === 0) {
-			this.#text.setText(renderStatusLine({ icon: this.#groupIcon(entries), title: "Read" }, theme));
-			this.addChild(this.#text);
-			return;
-		}
-
 		if (displayRows.length === 1) {
 			const row = displayRows[0]!;
 			if (!this.#shouldRenderPreviewRow(row)) {
 				const icon = this.#statusForTargets(row.targets);
-				const description = this.#formatRowPath(row, true);
-				const lines = [renderStatusLine({ icon, title: "Read", description }, theme)];
-				const usageRows = this.#usageRowsBySummaryRow(displayRows).get(0) ?? [];
-				this.#appendUsageRows(lines, usageRows, "  ");
-				this.#text.setText(lines.join("\n"));
-				this.addChild(this.#text);
+				this.addChild(fittedHeader({ icon, title: "Read", description: this.#formatRowPath(row, true) }));
+				this.#appendUsageRows(lines, this.#usageRowsBySummaryRow(displayRows).get(0) ?? [], "  ");
+				body.setText(lines.join("\n"));
+				this.addChild(body);
 			}
 			for (const entry of this.#previewEntriesForRow(row)) {
 				this.#addContentPreview(entry);
@@ -958,12 +977,13 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			return;
 		}
 
-		const lines = [
-			renderStatusLine(
-				{ icon: this.#groupIcon(entries), title: "Read", meta: [formatCount("file", displayRows.length)] },
-				theme,
-			),
-		];
+		this.addChild(
+			fittedHeader({
+				icon: this.#groupIcon(entries),
+				title: "Read",
+				meta: [formatCount("file", displayRows.length)],
+			}),
+		);
 		const entriesWithoutPreview = entries.filter(entry => !this.#shouldRenderPreview(entry));
 		const summaryTargets = this.#displayTargetsForEntries(entriesWithoutPreview);
 		const rows = this.#buildSummaryRows(summaryTargets);
@@ -975,9 +995,8 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			lines.push(line);
 			this.#appendUsageRows(lines, usageRowsBySummaryRow.get(index) ?? [], "  ");
 		}
-
-		this.#text.setText(lines.join("\n"));
-		this.addChild(this.#text);
+		body.setText(lines.join("\n"));
+		this.addChild(body);
 
 		for (const entry of entries) {
 			if (this.#shouldRenderPreview(entry)) {
@@ -1062,8 +1081,9 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	}
 
 	/**
-	 * Overall outcome of the group: pending while any read runs, error only when
-	 * every read failed, warning when some reads failed or need attention.
+	 * Overall outcome of the group: running/pending while any read is in flight
+	 * (aborted once sealed), error only when every read failed, warning when
+	 * some reads failed or need attention.
 	 */
 	#groupIcon(entries: readonly ReadEntry[]): ToolUIStatus {
 		if (entries.length === 0) return "pending";
@@ -1102,17 +1122,8 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	/** Usage rows nest under their item with tree connectors. */
 	#appendUsageRows(lines: string[], usageRows: ReadUsageRow[], prefix: string): void {
-		for (const [index, usageRow] of usageRows.entries()) {
-			const connector = index === usageRows.length - 1 ? theme.tree.last : theme.tree.branch;
-			const usage = formatUsageRow(
-				usageRow.usage,
-				usageRow.durationMs,
-				usageRow.ttftMs,
-				usageRow.timestamp,
-				usageRow.turnElapsedMs,
-			);
-			lines.push(`${prefix}${theme.fg("dim", `${connector} ${usage}`)}`);
-		}
+		const usage = usageRows.map(usageRow => theme.fg("dim", formatReadUsage(usageRow)));
+		for (const row of nestRows(usage, theme)) lines.push(`${prefix}${row}`);
 	}
 
 	/** A row's path: styled in the body, or plain in a header so it takes the subject color. */
@@ -1183,17 +1194,22 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		const isUrl = isUrlLikePath(base);
 		// `?q=…` queries read like selectors: muted after the path, outside its link.
 		const queryIndex = isUrl ? -1 : base.indexOf("?");
-		const filePath = shortenPath(queryIndex > 0 ? base.slice(0, queryIndex) : base);
-		const selectors = `${queryIndex > 0 ? base.slice(queryIndex) : ""}${split.sel ? `:${split.sel}` : ""}`;
-		// Headers keep the plain subject color; body rows use the shared path
-		// style, with URLs whole in the file-name color.
-		let pathDisplay = !filePath
-			? theme.fg("toolOutput", theme.format.ellipsis)
-			: options.header
-				? filePath
-				: isUrl
-					? theme.fg(FILE_NAME_COLOR, filePath)
-					: formatStyledPath(filePath, theme);
+		const hasQuery = queryIndex > 0;
+		const filePath = shortenPath(hasQuery ? base.slice(0, queryIndex) : base);
+		const query = hasQuery ? base.slice(queryIndex) : "";
+		const selectors = split.sel ? `${query}:${split.sel}` : query;
+		let pathDisplay: string;
+		if (!filePath) {
+			pathDisplay = theme.fg("toolOutput", theme.format.ellipsis);
+		} else if (options.header) {
+			// Headers keep the plain subject color.
+			pathDisplay = filePath;
+		} else if (isUrl) {
+			// Body rows show URLs whole in the file-name color.
+			pathDisplay = theme.fg(FILE_NAME_COLOR, filePath);
+		} else {
+			pathDisplay = formatStyledPath(filePath, theme);
+		}
 		if (filePath && options.linkPath) {
 			const linkOptions = options.line !== undefined ? { line: options.line } : undefined;
 			pathDisplay = fileHyperlink(options.linkPath, pathDisplay, linkOptions);
@@ -1210,13 +1226,13 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	#formatConflictBadge(conflictCount: number | undefined): string {
 		if (!conflictCount || conflictCount <= 0) return "";
-		const n = conflictCount;
-		return ` ${formatBadge(`${n} conflict${n === 1 ? "" : "s"}`, "warning", theme)}`;
+		return ` ${formatBadge(formatCount("conflict", conflictCount), "warning", theme)}`;
 	}
 
 	/**
 	 * Add a code-cell (or Markdown-cell) content preview below the entry summary.
-	 * When collapsed: shows first COLLAPSED_PREVIEW_LINES lines with a "… N more lines ⟨<key>: Expand⟩" hint.
+	 * When collapsed: shows the first COLLAPSED_PREVIEW_LINES lines; the cell's
+	 * bottom border carries the line count and the hidden-lines expand marker.
 	 * When expanded: shows full content.
 	 */
 	#addContentPreview(entry: ReadEntry): void {
@@ -1237,8 +1253,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			title: "Read",
 			description: pathDisplay || undefined,
 		};
-		const lineCount = (entry.contentText ?? "").split("\n").length;
-		const lineCountMeta = `${lineCount} line${lineCount === 1 ? "" : "s"}`;
+		const lineCountMeta = formatCount("line", (entry.contentText ?? "").split("\n").length);
 		let cachedWidth: number | undefined;
 		let cachedLines: string[] | undefined;
 		const dropCache = () => {
@@ -1287,22 +1302,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	#addPreviewUsage(entry: ReadEntry): void {
 		const usageRow = this.#usageRows.get(entry.toolCallId);
 		if (!usageRow) return;
-		this.addChild(
-			new Text(
-				theme.fg(
-					"dim",
-					formatUsageRow(
-						usageRow.usage,
-						usageRow.durationMs,
-						usageRow.ttftMs,
-						usageRow.timestamp,
-						usageRow.turnElapsedMs,
-					),
-				),
-				3,
-				0,
-			),
-		);
+		this.addChild(new Text(theme.fg("dim", formatReadUsage(usageRow)), 3, 0));
 	}
 
 	#shouldRenderPreview(entry: ReadEntry): boolean {

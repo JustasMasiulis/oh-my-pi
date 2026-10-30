@@ -60,9 +60,8 @@ import {
 } from "./search-approval-targets";
 import { type LineRange, parseLineRanges, selectorLineRanges } from "@oh-my-pi/pi-tui/tools/line-ranges";
 import { isReadableUrlPath, splitPathAndSel } from "@oh-my-pi/pi-tui/tools/read";
-import { toPathList } from "@oh-my-pi/pi-tui/render/render-utils";
 import { isRawSelector } from "./read-selector";
-import { CODE_FRAME_GUTTER, formatCodeFrameLine } from "@oh-my-pi/pi-tui/render/render-utils";
+import { CODE_FRAME_GUTTER, formatCodeFrameLine, toPathList } from "@oh-my-pi/pi-tui/render/render-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { toolResult } from "./tool-result";
 

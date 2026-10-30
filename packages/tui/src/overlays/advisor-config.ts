@@ -514,7 +514,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 			sections.push({
 				id: "warnings",
 				title: "Config problems",
-				rows: sanitizeDisplayWarnings(doc.warnings).map((warning, i) => ({
+				rows: sanitizeDisplayWarnings(doc.warnings, theme).map((warning, i) => ({
 					id: `warning:${i}`,
 					label: "Dropped while loading",
 					warning,
@@ -932,7 +932,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 					{ tone: "warning" },
 					[
 						text([span("⚠ Config problems — dropped while loading:", "warning")]),
-						...sanitizeDisplayWarnings(this.#doc.warnings).map(warning =>
+						...sanitizeDisplayWarnings(this.#doc.warnings, theme).map(warning =>
 							text([span(warning, "warning")], { wrap: "word" }),
 						),
 					],
@@ -1082,7 +1082,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const warnings = this.#doc.warnings?.length
 			? [
 					theme.fg("warning", "⚠ Config problems — dropped while loading:"),
-					...sanitizeDisplayWarnings(this.#doc.warnings).flatMap(warning =>
+					...sanitizeDisplayWarnings(this.#doc.warnings, theme).flatMap(warning =>
 						wrap(warning, bodyWidth).map(line => theme.fg("warning", line)),
 					),
 					"",
@@ -1275,7 +1275,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 			// the initial scope's warnings when the overlay opens, so only switches
 			// report here — no double-showing the opening file.
 			if (doc.warnings?.length) {
-				const message = `WATCHDOG.yml: ${sanitizeDisplayWarnings(doc.warnings).join("; ")}`;
+				const message = `WATCHDOG.yml: ${sanitizeDisplayWarnings(doc.warnings, theme).join("; ")}`;
 				if (this.#cb.warn) this.#cb.warn(message);
 				else this.#cb.notify(message);
 			}

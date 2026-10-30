@@ -66,7 +66,7 @@ export const dryBalanceHelp = {
 
 export const galleryHelp = {
 	description:
-		"Preview tool, transcript message, composer, and status-line renderers in a deterministic visual gallery",
+		"Preview tool, transcript message, live-window widget, composer, and status-line renderers in a deterministic visual gallery",
 } satisfies CommandMetadata;
 
 export const gcHelp = { description: "Run storage garbage collection" } satisfies CommandMetadata;

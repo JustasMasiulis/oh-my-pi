@@ -328,7 +328,6 @@ describe("formatDiagnostics", () => {
 
 		const formatted = formatDiagnostics(
 			{
-				errored: true,
 				summary: "1\terror(s)",
 				messages: [
 					"src/example.go:183:41 [error] [compiler] too many\targuments in call (WrongArgCount)",
@@ -535,19 +534,18 @@ describe("formatExpandHint / expandKeyHint", () => {
 		setKeybindings(KeybindingsManager.inMemory());
 		expect(expandKeyHint()).toBe("Ctrl+O");
 		// Single bracket pair from the theme, no double-wrapping around the key.
-		expect(formatExpandHint(plainTheme, false, true)).toBe("[Ctrl+O: Expand]");
+		expect(formatExpandHint(plainTheme)).toBe("[Ctrl+O: Expand]");
 	});
 
 	it("tracks a user remap of the expand binding", () => {
 		setKeybindings(KeybindingsManager.inMemory({ "app.tools.expand": "alt+e" }));
 		expect(expandKeyHint()).toBe("Alt+E");
-		expect(formatExpandHint(plainTheme, false, true)).toBe("[Alt+E: Expand]");
+		expect(formatExpandHint(plainTheme)).toBe("[Alt+E: Expand]");
 	});
 
-	it("renders nothing when expanded or there is no more content", () => {
+	it("renders nothing when expanded", () => {
 		setKeybindings(KeybindingsManager.inMemory());
-		expect(formatExpandHint(plainTheme, true, true)).toBe("");
-		expect(formatExpandHint(plainTheme, false, false)).toBe("");
+		expect(formatExpandHint(plainTheme, true)).toBe("");
 	});
 });
 
@@ -644,16 +642,18 @@ describe("shortenToolArgumentPaths", () => {
 });
 
 describe("sanitizeDisplayWarnings", () => {
-	it("caps warning count and reports omitted warnings", () => {
+	it("caps warning count and reports omitted warnings", async () => {
+		const theme = await getThemeByName("dark");
 		const warnings = Array.from({ length: PREVIEW_LIMITS.COLLAPSED_ITEMS + 2 }, (_, index) => `warning-${index}`);
-		const displayed = sanitizeDisplayWarnings(warnings);
+		const displayed = sanitizeDisplayWarnings(warnings, theme!);
 
 		expect(displayed).toHaveLength(PREVIEW_LIMITS.COLLAPSED_ITEMS + 1);
-		expect(displayed.at(-1)).toBe("… 2 more warnings");
+		expect(displayed.at(-1)).toBe(`${theme!.format.ellipsis} 2 more warnings`);
 	});
 
-	it("truncates each warning before display", () => {
-		const displayed = sanitizeDisplayWarnings(["warning ".repeat(TRUNCATE_LENGTHS.LONG)]);
+	it("truncates each warning before display", async () => {
+		const theme = await getThemeByName("dark");
+		const displayed = sanitizeDisplayWarnings(["warning ".repeat(TRUNCATE_LENGTHS.LONG)], theme!);
 
 		expect(Bun.stringWidth(displayed[0])).toBeLessThanOrEqual(TRUNCATE_LENGTHS.LONG);
 	});

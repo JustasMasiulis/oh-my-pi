@@ -30,6 +30,7 @@ export * from "./composer";
 export * from "./messages";
 export * from "./segments";
 export * from "./types";
+export * from "./widgets";
 
 export const galleryFixtures = {
 	...interactionFixtures,

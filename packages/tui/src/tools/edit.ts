@@ -32,10 +32,11 @@ import {
 	formatCount,
 	formatDiagnostics,
 	formatErrorText,
-	formatExpandHint,
 	formatMoreItems,
+	formatMoreRow,
 	getDiffStats,
 	invalidateRenderedStringCache,
+	pluralize,
 	PREVIEW_LIMITS,
 	previewWindowRows,
 	releaseRenderedStringCache,
@@ -343,7 +344,7 @@ function framedHeaderBudget(width: number, uiTheme: Theme): number {
 }
 
 /** Error body rows: the first line through `formatErrorText`, continuation lines (code frames) kept verbatim. */
-export function formatErrorRows(message: string, uiTheme: Theme): string[] {
+function formatErrorRows(message: string, uiTheme: Theme): string[] {
 	const [first, ...rest] = message.trimEnd().split("\n");
 	return [formatErrorText(first, uiTheme), ...rest.map(line => uiTheme.fg("error", replaceTabs(line)))];
 }
@@ -488,9 +489,8 @@ function formatStreamingDiff(
 		const tail = sliceStreamingDiffTail(diff, innerWidth, budget);
 		const rendered = renderDiffColored(tail.content, { filePath: rawPath, theme: uiTheme });
 		if (tail.hiddenLines === 0) return rendered;
-		const marker = uiTheme.fg("dim", formatMoreItems(tail.hiddenLines, "line", uiTheme, "earlier"));
-		const hint = widens ? formatExpandHint(uiTheme) : "";
-		return `${hint ? `${marker} ${hint}` : marker}\n${rendered}`;
+		const marker = formatMoreRow(tail.hiddenLines, "line", uiTheme, { expanded: !widens, position: "earlier" });
+		return `${marker}\n${rendered}`;
 	});
 	return text.split("\n");
 }
@@ -900,9 +900,9 @@ function renderDiffSection(
 	const visible = sliceCollapsedDiffRows(renderedDiff, innerWidth, PREVIEW_LIMITS.DIFF_COLLAPSED_LINES);
 	const hiddenLines = logicallyHiddenLines + visible.hiddenLines;
 	if (hiddenLines === 0 && hiddenHunks === 0) return { lines: visible.rows };
-	const more =
-		hiddenLines > 0 ? formatMoreItems(hiddenLines, "line", uiTheme) : formatMoreItems(hiddenHunks, "hunk", uiTheme);
-	return { lines: visible.rows, marker: `${more} ${formatExpandHint(uiTheme)}` };
+	const marker =
+		hiddenLines > 0 ? formatMoreRow(hiddenLines, "line", uiTheme) : formatMoreRow(hiddenHunks, "hunk", uiTheme);
+	return { lines: visible.rows, marker };
 }
 
 function wrapEditRendererLine(line: string, width: number): string[] {
@@ -1390,17 +1390,15 @@ function renderSingleFileResult(
 	// No diff to frame: a flush status line over the error, the no-op note, or nothing.
 	if (!diff) {
 		const message = isError ? errorText : previewError;
+		let body: string[] | undefined;
+		if (message !== undefined) body = formatErrorRows(message, uiTheme);
+		else if (noOp) body = [uiTheme.fg("dim", "No changes were made.")];
 		return plainToolCard(uiTheme, ({ width }) => {
 			const diag = diagnosticsCardSection(diagnostics, options.expanded, uiTheme);
 			return {
 				status: editStatus(header, width, uiTheme),
 				phase,
-				body:
-					message !== undefined
-						? formatErrorRows(message, uiTheme)
-						: noOp
-							? [uiTheme.fg("dim", "No changes were made.")]
-							: undefined,
+				body,
 				sections: diag ? [flushDiagnosticsSection(diag)] : undefined,
 			};
 		});
@@ -1446,10 +1444,7 @@ function renderSingleFileResult(
 				status: editStatus(header, framedHeaderBudget(width, uiTheme), uiTheme),
 				phase,
 				footerMeta: joinFooterMeta([stats, diag ? diag.marker : marker], uiTheme),
-				sections: [
-					{ content: diag && marker ? [...lines, uiTheme.fg("dim", marker)] : lines },
-					...(diag ? [diag.section] : []),
-				],
+				sections: [{ content: diag && marker ? [...lines, marker] : lines }, ...(diag ? [diag.section] : [])],
 			};
 		},
 		{
@@ -1612,7 +1607,7 @@ function renderMultiFileResult(
 						icon: "running",
 						spinnerFrame: options.spinnerFrame,
 						title: "Edit",
-						description: `${remaining} more ${remaining > 1 ? "files" : "file"} pending`,
+						description: `${remaining} more ${pluralize("file", remaining)} pending`,
 					},
 					uiTheme,
 				)

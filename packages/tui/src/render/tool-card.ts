@@ -10,7 +10,6 @@ import { wrapGuidedLine, wrapPrefixedLine } from "./hanging-wrap";
 import {
 	CachedOutputBlock,
 	describeOutputBlock,
-	markFramedBlockComponent,
 	type NativeOutputBlockSection,
 	outputBlockContentWidth,
 	outputBlockHeaderWidth,
@@ -74,6 +73,35 @@ export interface ToolCardOptions {
 	 */
 	onReleaseRenderCaches?: () => void;
 	onDispose?: () => void;
+}
+
+/**
+ * A card body's rows, rebuilt only when the width or expansion changes.
+ * Pass {@link cardOptions} to the card so invalidation and cache release drop
+ * the stored rows.
+ */
+export class CardRowsMemo {
+	#width = 0;
+	#expanded = false;
+	#rows: readonly string[] | undefined;
+
+	readonly cardOptions = {
+		onInvalidate: () => this.clear(),
+		onReleaseRenderCaches: () => this.clear(),
+	} satisfies Partial<ToolCardOptions>;
+
+	rows(width: number, expanded: boolean, build: () => readonly string[]): readonly string[] {
+		if (this.#rows === undefined || this.#width !== width || this.#expanded !== expanded) {
+			this.#rows = build();
+			this.#width = width;
+			this.#expanded = expanded;
+		}
+		return this.#rows;
+	}
+
+	clear(): void {
+		this.#rows = undefined;
+	}
 }
 
 /** Map transcript lifecycle terminology onto the output frame's visual states. */
@@ -147,7 +175,6 @@ export class ToolCard implements Component {
 		this.#build = build;
 		this.#plainText = new Text("", 0, 0);
 		this.#plainText.setIgnoreTight(options.ignoreTight ?? true);
-		if (options.variant === "framed") markFramedBlockComponent(this);
 	}
 
 	render(width: number): readonly string[] {
@@ -195,24 +222,15 @@ export class ToolCard implements Component {
 		}
 		this.#renderedChildren = nextChildren;
 
-		const state = toolCardState(snapshot.phase);
-		// Framed headers never animate: native-scrollback commits are prefix-only,
-		// so a spinner in the top border would pin the commit boundary above the body.
-		// Either way the header keeps to one row: the top border, or the flush row
-		// (which `layoutFlushCard` wraps at the body indent) beside any footer facts.
-		const header =
-			this.#options.variant === "framed"
-				? renderFittedStatusLine(
-						{ ...snapshot.status, spinnerFrame: undefined },
-						this.#theme,
-						outputBlockHeaderWidth(width, this.#theme),
-					)
-				: renderFittedStatusLine(
-						snapshot.status,
-						this.#theme,
-						width - FLUSH_BODY_INDENT - (snapshot.footerMeta ? visibleWidth(snapshot.footerMeta) + 1 : 0),
-					);
 		if (this.#options.variant === "framed") {
+			// Framed headers never animate: native-scrollback commits are prefix-only,
+			// so a spinner in the top border would pin the commit boundary above the body.
+			const header = renderFittedStatusLine(
+				{ ...snapshot.status, spinnerFrame: undefined },
+				this.#theme,
+				outputBlockHeaderWidth(width, this.#theme),
+			);
+			const state = toolCardState(snapshot.phase);
 			const previousOptions = this.#lastBlockOptions;
 			const previousSections = previousOptions?.sections;
 			const sectionsStable =
@@ -248,17 +266,17 @@ export class ToolCard implements Component {
 			return this.#block.render(blockOptions, this.#theme);
 		}
 
+		// The flush header keeps to one row beside any footer facts;
+		// `layoutFlushCard` hangs it at the body indent if it still overflows.
+		const footerMeta = snapshot.footerMeta ? ` ${this.#theme.fg("dim", snapshot.footerMeta)}` : "";
+		const headerWidth = width - FLUSH_BODY_INDENT - visibleWidth(footerMeta);
+		const header = `${renderFittedStatusLine(snapshot.status, this.#theme, headerWidth)}${footerMeta}`;
 		const rows: string[] = [];
 		for (const section of sections) {
 			if (section.label) rows.push(this.#theme.fg("dim", section.label));
 			rows.push(...section.lines);
 		}
-		const text = layoutFlushCard(
-			snapshot.footerMeta ? `${header} ${this.#theme.fg("dim", snapshot.footerMeta)}` : header,
-			rows,
-			width,
-			this.#theme,
-		).join("\n");
+		const text = layoutFlushCard(header, rows, width, this.#theme).join("\n");
 		const key = `${width}:${text.length}:${Bun.hash(text).toString(36)}`;
 		if (key !== this.#plainKey) {
 			this.#plainKey = key;
@@ -269,7 +287,7 @@ export class ToolCard implements Component {
 
 	/**
 	 * A `card` (flat `inset` for plain cards) with the state's tone and status
-	 * chip, head from the header/status line, and body slots: components as
+	 * chip, head from the status line, and body slots: components as
 	 * children, pre-rendered rows as unwrapped text, labelled sections as
 	 * `section`s. The builder gets the surface width as its only width.
 	 */
@@ -402,7 +420,7 @@ export function framedToolCard(
 	return new ToolCard(theme, { ...options, variant: "framed" }, build);
 }
 
-/** Construct a lazy inline tool card, optionally state-tinted. */
+/** Construct a lazy flush tool card: a header row over indented body rows. */
 export function plainToolCard(
 	theme: Theme,
 	build: (context: ToolCardBuildContext) => ToolCardSnapshot,

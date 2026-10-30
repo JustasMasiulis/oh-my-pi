@@ -1,14 +1,14 @@
 import type { Component } from "../tui";
-import { renderStatusLine, renderTreeList, truncateToWidth } from "../render";
+import { FLUSH_BODY_INDENT, renderTreeList, type StatusLineOptions, truncateToWidth } from "../render";
 import {
 	cappedHeadLines,
 	formatBadge,
+	formatCount,
 	formatDuration,
 	formatErrorText,
 	formatMoreItems,
 	formatStatusIcon,
 	PREVIEW_LIMITS,
-	pluralize,
 	TRUNCATE_LENGTHS,
 	type ToolUIStatus,
 } from "../render/render-utils";
@@ -21,7 +21,6 @@ import { errorText, noteText, toolHead } from "./native-view";
 import {
 	type AgentActivitySnapshot,
 	type CoordinationDetails,
-	fitFlushRows,
 	jobRowFacts,
 	jobStatusIcon,
 	type JobSnapshot,
@@ -49,7 +48,7 @@ export type ProcWriteDetails =
 export type ProcWriteAction = "stdin" | "mode" | "kill";
 
 /** Body indent for flush proc cards. */
-const INDENT = "  ";
+const INDENT = " ".repeat(FLUSH_BODY_INDENT);
 
 function preview(body: string, expanded: boolean, theme: Theme, tone: "dim" | "toolOutput" = "dim"): string[] {
 	if (!body.trim()) return [];
@@ -68,6 +67,13 @@ function preview(body: string, expanded: boolean, theme: Theme, tone: "dim" | "t
 /** A receipt's outcome as a status; its word rides beside it as a gray badge. */
 function receiptStatus(outcome: IrcDeliveryReceipt["outcome"]): "success" | "warning" | "error" {
 	return outcome === "failed" ? "error" : outcome === "revived" ? "warning" : "success";
+}
+
+/** `<icon> <recipient> [outcome] - <error>`: one delivery receipt of a multi-recipient write. */
+function receiptRow(receipt: IrcDeliveryReceipt, theme: Theme): string {
+	const icon = formatStatusIcon(receiptStatus(receipt.outcome), theme);
+	const row = `${icon} ${theme.fg("accent", safe(receipt.to))} ${formatBadge(receipt.outcome, "muted", theme)}`;
+	return receipt.error ? `${row}${theme.sep.dot}${theme.fg("error", safe(receipt.error))}` : row;
 }
 
 /** Status of a call whose result has not landed: queued, or executing once started. */
@@ -101,7 +107,7 @@ export function renderAgentWrite(
 	options: RenderResultOptions,
 	theme: Theme,
 ): Component {
-	return card((width, expanded) => {
+	return card((_width, expanded) => {
 		const recipient = safe(details?.to || to || theme.format.ellipsis);
 		const receipts = details?.receipts ?? [];
 		const delivered = receipts.filter(receipt => receipt.outcome !== "failed").length;
@@ -112,25 +118,23 @@ export function renderAgentWrite(
 			if (delivered) meta.push(`${delivered} delivered`);
 			if (failed) meta.push(`${failed} failed`);
 		}
-		const header = renderStatusLine(
-			{
-				icon: agentWriteStatus(result, details, options),
-				title: "IRC",
-				description: `${theme.format.arrowRight} ${recipient}`,
-				badge: single ? { label: single.outcome, color: "muted" } : undefined,
-				meta,
-			},
-			theme,
-		);
-		const lines = [header];
+		const header: StatusLineOptions = {
+			icon: agentWriteStatus(result, details, options),
+			title: "IRC",
+			description: `${theme.format.arrowRight} ${recipient}`,
+			badge: single ? { label: single.outcome, color: "muted" } : undefined,
+			meta,
+		};
 		if (result?.isError && receipts.length === 0) {
-			lines.push(`${INDENT}${formatErrorText(firstText(result) || "Message delivery failed.", theme)}`);
-			return fitFlushRows(lines, width);
+			return [header, ...errorRows(firstText(result) || "Message delivery failed.", theme)];
 		}
-		if (single?.error) lines.push(`${INDENT}${formatErrorText(single.error, theme)}`);
+		const lines: string[] = [];
+		if (single?.error) lines.push(...errorRows(single.error, theme));
 		lines.push(...preview(body, expanded, theme, "toolOutput"));
-		if (result && receipts.length === 0)
-			lines.push(`${INDENT}${theme.fg("muted", firstText(result) || "No live peers to broadcast to.")}`);
+		if (result && receipts.length === 0) {
+			const note = firstText(result) || "No live peers to broadcast to.";
+			lines.push(...note.split("\n").map(line => `${INDENT}${theme.fg("muted", line)}`));
+		}
 		if (receipts.length > 1) {
 			const rows = renderTreeList(
 				{
@@ -139,32 +143,35 @@ export function renderAgentWrite(
 					expanded,
 					maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
 					itemType: "recipient",
-					renderItem: receipt =>
-						`${formatStatusIcon(receiptStatus(receipt.outcome), theme)} ${theme.fg("accent", safe(receipt.to))} ${formatBadge(receipt.outcome, "muted", theme)}${receipt.error ? `${theme.sep.dot}${theme.fg("error", safe(receipt.error))}` : ""}`,
+					renderItem: receipt => receiptRow(receipt, theme),
 				},
 				theme,
 			);
 			lines.push(...rows.map(row => `${INDENT}${row}`));
 		}
-		return fitFlushRows(lines, width);
+		return [header, ...lines];
 	}, options);
 }
 
+/** A service's lifecycle state as a status: ready/running succeed, failed errors, anything else warns. */
+function daemonStatus(state: DaemonSnapshot["state"]): "success" | "error" | "warning" {
+	if (state === "ready" || state === "running") return "success";
+	return state === "failed" ? "error" : "warning";
+}
+
+/** Service facts after its state: pid, uptime (run time once exited), lifetime mode. */
+function daemonFacts(daemon: DaemonSnapshot): string[] {
+	const facts: string[] = [];
+	if (daemon.pid !== undefined) facts.push(`pid ${daemon.pid}`);
+	const lifetime = formatDuration(Math.max(0, (daemon.exitedAt ?? Date.now()) - daemon.startedAt));
+	facts.push(`${daemon.exitedAt === undefined ? "up" : "ran"} ${lifetime}`);
+	if (daemon.detached) facts.push("detached");
+	else if (daemon.persist) facts.push("persistent");
+	return facts;
+}
+
 function daemonMeta(daemon: DaemonSnapshot, theme: Theme): string[] {
-	const stateColor =
-		daemon.state === "ready" || daemon.state === "running"
-			? "success"
-			: daemon.state === "failed"
-				? "error"
-				: "warning";
-	const meta = [theme.fg(stateColor, daemon.state)];
-	if (daemon.pid !== undefined) meta.push(`pid ${daemon.pid}`);
-	meta.push(
-		`${daemon.exitedAt === undefined ? "up" : "ran"} ${formatDuration(Math.max(0, (daemon.exitedAt ?? Date.now()) - daemon.startedAt))}`,
-	);
-	if (daemon.detached) meta.push("detached");
-	else if (daemon.persist) meta.push("persistent");
-	return meta;
+	return [theme.fg(daemonStatus(daemon.state), daemon.state), ...daemonFacts(daemon)];
 }
 
 /** `<icon> <id> - <facts> - <label>`: the job row grammar wait cards share, plus an optional outcome fact. */
@@ -182,24 +189,28 @@ function itemRow(status: ToolUIStatus, id: string, facts: readonly string[], the
 }
 
 function serviceRow(service: DaemonSnapshot, theme: Theme): string {
-	const status: ToolUIStatus =
-		service.state === "failed"
-			? "error"
-			: service.state === "ready" || service.state === "running"
-				? "success"
-				: "warning";
 	const facts = ["service", ...daemonMeta(service, theme)].map(fact => theme.fg("dim", fact));
-	return itemRow(status, service.name, facts, theme);
+	return itemRow(daemonStatus(service.state), service.name, facts, theme);
 }
 
-function errorRows(header: string, message: string, theme: Theme): string[] {
-	return [header, ...message.split("\n").map(line => `${INDENT}${formatErrorText(line, theme)}`)];
+/** Error body rows: every line of the message, sanitized and indented under the header. */
+function errorRows(message: string, theme: Theme): string[] {
+	return formatErrorText(message, theme)
+		.split("\n")
+		.map(line => `${INDENT}${line}`);
 }
 
-function writeSubject(action: ProcWriteAction, id: string, content: string | undefined, theme: Theme): string {
-	const target = safe(id) || theme.format.ellipsis;
+/** Write subject: the action and its target, plus the requested mode for a mode change. */
+function writeSubject(action: ProcWriteAction, target: string, content: string | undefined): string {
 	if (action === "mode" && content?.trim()) return `mode ${target} ${safe(content.trim())}`;
 	return `${action} ${target}`;
+}
+
+/** Process table counts: jobs and services always, agents when any are live. */
+function procCounts(jobs: number, services: number, agents: number): string[] {
+	const counts = [formatCount("job", jobs), formatCount("service", services)];
+	if (agents > 0) counts.push(formatCount("agent", agents));
+	return counts;
 }
 
 /** Render live and completed process writes with the URL-selected operation. */
@@ -214,17 +225,14 @@ export function renderProcWrite(
 ): Component {
 	return card((_width, expanded) => {
 		const daemon = details && "daemon" in details ? details.daemon : undefined;
-		const header = renderStatusLine(
-			{
-				icon: result === undefined ? inFlightStatus(options) : result.isError ? "error" : "success",
-				title: "Proc",
-				description: writeSubject(action, id, content, theme),
-				meta: daemon ? daemonMeta(daemon, theme) : [],
-			},
-			theme,
-		);
-		if (result?.isError) return errorRows(header, firstText(result) || "Process operation failed.", theme);
-		const lines = [header];
+		const header: StatusLineOptions = {
+			icon: result === undefined ? inFlightStatus(options) : result.isError ? "error" : "success",
+			title: "Proc",
+			description: writeSubject(action, safe(id) || theme.format.ellipsis, content),
+			meta: daemon ? daemonMeta(daemon, theme) : [],
+		};
+		if (result?.isError) return [header, ...errorRows(firstText(result) || "Process operation failed.", theme)];
+		const lines: string[] = [];
 		if (content && action === "stdin") lines.push(...preview(content, expanded, theme));
 		if (details && "op" in details && details.op === "cancel") {
 			const jobs = details.jobs ?? [];
@@ -248,7 +256,7 @@ export function renderProcWrite(
 				).map(line => `${INDENT}${line}`),
 			);
 		}
-		return lines;
+		return [header, ...lines];
 	}, options);
 }
 
@@ -262,10 +270,14 @@ export function renderProcRead(
 	return card((_width, expanded) => {
 		const description = id ? safe(id) : "jobs & services";
 		const daemon = details?.daemon;
-		const headerFor = (icon: ToolUIStatus, meta: string[] = []) =>
-			renderStatusLine({ icon, title: "Proc", description, meta }, theme);
+		const headerFor = (icon: ToolUIStatus, meta: string[] = []): StatusLineOptions => ({
+			icon,
+			title: "Proc",
+			description,
+			meta,
+		});
 		if (!result) return [headerFor(inFlightStatus(options))];
-		if (result.isError) return errorRows(headerFor("error"), firstText(result) || "Process read failed.", theme);
+		if (result.isError) return [headerFor("error"), ...errorRows(firstText(result) || "Process read failed.", theme)];
 		if (details?.job)
 			return [
 				headerFor("success"),
@@ -280,12 +292,13 @@ export function renderProcRead(
 		if (daemon) {
 			const output = details.terminalRows ?? (details.log ?? "").split("\n").filter(Boolean);
 			const limit = expanded ? PREVIEW_LIMITS.EXPANDED_LINES : PREVIEW_LIMITS.COLLAPSED_LINES;
-			const visible = output
-				.slice(-limit)
-				.map(
-					line =>
-						`${INDENT}${styleTerminalRow(truncateToWidth(safe(line), TRUNCATE_LENGTHS.LINE), theme.fg("toolOutput", ""))}`,
+			const visible = output.slice(-limit).map(line => {
+				const row = styleTerminalRow(
+					truncateToWidth(safe(line), TRUNCATE_LENGTHS.LINE),
+					theme.fg("toolOutput", ""),
 				);
+				return `${INDENT}${row}`;
+			});
 			if (output.length > limit)
 				visible.unshift(
 					`${INDENT}${theme.fg("dim", formatMoreItems(output.length - limit, "line", theme, "earlier"))}`,
@@ -298,11 +311,7 @@ export function renderProcRead(
 		const jobs = details?.jobs ?? [];
 		const services = details?.daemons ?? [];
 		const agents = details?.agents ?? [];
-		const meta = [
-			`${jobs.length} ${pluralize("job", jobs.length)}`,
-			`${services.length} ${pluralize("service", services.length)}`,
-		];
-		if (agents.length) meta.push(`${agents.length} ${pluralize("agent", agents.length)}`);
+		const meta = procCounts(jobs.length, services.length, agents.length);
 		const items = [
 			...jobs.map(job => jobRow(job, theme)),
 			...services.map(service => serviceRow(service, theme)),
@@ -337,14 +346,7 @@ export function renderProcRead(
 // =============================================================================
 
 function daemonMetaText(daemon: DaemonSnapshot): string {
-	const meta: string[] = [daemon.state];
-	if (daemon.pid !== undefined) meta.push(`pid ${daemon.pid}`);
-	meta.push(
-		`${daemon.exitedAt === undefined ? "up" : "ran"} ${formatDuration(Math.max(0, (daemon.exitedAt ?? Date.now()) - daemon.startedAt))}`,
-	);
-	if (daemon.detached) meta.push("detached");
-	else if (daemon.persist) meta.push("persistent");
-	return meta.join(" · ");
+	return [daemon.state, ...daemonFacts(daemon)].join(" · ");
 }
 
 function jobTone(status: JobSnapshot["status"]): TspTone {
@@ -442,10 +444,7 @@ export function describeProcWrite(
 	const daemon = details && "daemon" in details ? details.daemon : undefined;
 	const head = toolHead(
 		"Proc",
-		span(
-			action === "mode" && content?.trim() ? `mode ${safe(id)} ${safe(content.trim())}` : `${action} ${safe(id)}`,
-			"accent",
-		),
+		span(writeSubject(action, safe(id), content), "accent"),
 		daemon ? daemonMetaText(daemon) : undefined,
 	);
 	if (result?.isError) {
@@ -520,12 +519,7 @@ export function describeProcRead(
 				{
 					label: [span("service", "accent"), span(" "), span(safe(service.name), "toolOutput")],
 					detail: [span(daemonMetaText(service), "muted")],
-					tone:
-						service.state === "failed"
-							? "error"
-							: service.state === "ready" || service.state === "running"
-								? "success"
-								: "warning",
+					tone: daemonStatus(service.state),
 				},
 				undefined,
 				`service:${service.name}`,
@@ -543,11 +537,7 @@ export function describeProcRead(
 			),
 		),
 	];
-	const counts = [
-		`${jobs.length} ${pluralize("job", jobs.length)}`,
-		`${services.length} ${pluralize("service", services.length)}`,
-	];
-	if (agents.length) counts.push(`${agents.length} ${pluralize("agent", agents.length)}`);
+	const counts = procCounts(jobs.length, services.length, agents.length);
 	return {
 		head: toolHead("Proc", subject, counts.join(" · ")),
 		body: [node("list", { empty: "No background jobs or services.", role: "omp.tool.proc.table" }, items)],

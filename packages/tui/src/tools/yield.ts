@@ -11,7 +11,7 @@ import type { NativeChild } from "../native/node";
 import { formatOutputPaneLines, styleToolOutputLine } from "../render/output-pane";
 import { clipCollapsed, formatExpandHint, sanitizeDisplayLines } from "../render/render-utils";
 import type { StatusLineOptions } from "../render/status-line";
-import { plainToolCard, type ToolCardPhase } from "../render/tool-card";
+import { CardRowsMemo, plainToolCard, type ToolCardPhase } from "../render/tool-card";
 import type { Theme } from "../theme/theme";
 import type { Component } from "../tui";
 import {
@@ -151,14 +151,13 @@ function dataLines(data: unknown, expanded: boolean, width: number, theme: Theme
 		sanitizeText,
 		hiddenRootKeys: [],
 	});
-	if (tree.truncated)
-		tree.lines.push(expanded ? theme.fg("dim", theme.format.ellipsis) : formatExpandHint(theme, false, true));
+	if (tree.truncated) tree.lines.push(expanded ? theme.fg("dim", theme.format.ellipsis) : formatExpandHint(theme));
 	return tree.lines;
 }
 
 function renderSubmission(s: Submission, options: RenderResultOptions, theme: Theme): Component {
 	// The body is spinner-invariant; rebuild it only on expansion or width change.
-	let memo: { expanded: boolean; width: number; lines: readonly string[] } | undefined;
+	const memo = new CardRowsMemo();
 	return plainToolCard(
 		theme,
 		({ contentWidth }) => {
@@ -174,7 +173,7 @@ function renderSubmission(s: Submission, options: RenderResultOptions, theme: Th
 				meta: size ? [size] : undefined,
 			};
 			const phase: ToolCardPhase = !s.settled ? (running ? "running" : "partial") : failed ? "error" : "success";
-			if (memo === undefined || memo.expanded !== options.expanded || memo.width !== contentWidth) {
+			const body = memo.rows(contentWidth, options.expanded, () => {
 				const lines: string[] = [];
 				// Wrapped in full: a schema rejection names every offending field.
 				if (s.error !== undefined) {
@@ -182,11 +181,11 @@ function renderSubmission(s: Submission, options: RenderResultOptions, theme: Th
 				}
 				lines.push(...dataLines(s.data, options.expanded, contentWidth, theme));
 				if (s.note) lines.push(theme.fg("dim", s.note));
-				memo = { expanded: options.expanded, width: contentWidth, lines };
-			}
-			return { status, phase, body: memo.lines };
+				return lines;
+			});
+			return { status, phase, body };
 		},
-		{ ignoreTight: true, onInvalidate: () => (memo = undefined) },
+		{ ignoreTight: true, ...memo.cardOptions },
 	);
 }
 

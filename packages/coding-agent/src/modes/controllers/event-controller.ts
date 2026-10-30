@@ -77,6 +77,7 @@ import {
 	splitAssistantMessageToolTimeline,
 } from "@oh-my-pi/pi-tui/chat/transcript-render-helpers";
 import { isWarpCliAgentProtocolActive } from "../warp-events";
+import { formatAsyncWaitLabel } from "../working-row";
 import { ComposerPredictionController } from "./composer-prediction-controller";
 import { StreamingRevealController } from "./streaming-reveal";
 import { streamingStringKeysForTool, ToolArgsRevealController } from "./tool-args-reveal";
@@ -174,18 +175,6 @@ function normalizeIntent(intent: unknown): string | undefined {
 			.replace(/\s*\.+$/, "")
 			.trim() || undefined
 	);
-}
-
-/** Job ids the async-wait working row lists before collapsing the rest to `+N`. */
-const ASYNC_WAIT_LISTED_JOBS = 3;
-
-/** Working-row text while the run only waits on background jobs; short enough for a narrow terminal. */
-function formatAsyncWaitLabel(jobIds: readonly string[]): string {
-	if (jobIds.length === 0) return "Waiting for background work";
-	if (jobIds.length === 1) return `Waiting for background job ${jobIds[0]}`;
-	const listed = jobIds.slice(0, ASYNC_WAIT_LISTED_JOBS).join(", ");
-	const more = jobIds.length > ASYNC_WAIT_LISTED_JOBS ? ` +${jobIds.length - ASYNC_WAIT_LISTED_JOBS}` : "";
-	return `Waiting for ${jobIds.length} background jobs: ${listed}${more}`;
 }
 
 /** Render args for a live card: the harness strips `i` from executed args, but the stored block keeps it. */

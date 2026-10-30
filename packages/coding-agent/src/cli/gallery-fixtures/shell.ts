@@ -1,4 +1,5 @@
 /** Gallery fixtures for shell and supervised-service tools. */
+import { NO_OUTPUT_NOTICE } from "@oh-my-pi/pi-tui/tools/output-meta";
 import type { GalleryFixture } from "./types";
 
 const GALLERY_DEPS = {
@@ -8,6 +9,17 @@ const GALLERY_DEPS = {
 };
 const GALLERY_DEPS_TEXT =
 	"{'@ai-sdk/anthropic': '^1.2.0', '@oh-my-pi/pi-ai': 'workspace:*', '@oh-my-pi/pi-tui': 'workspace:*'}";
+
+/** A JS eval cell; a template literal so the cell's own `${…}` stays literal text. */
+const COUNT_SOURCES_JS = `const files = await glob("src/**/*.ts");
+print(\`\${files.length} files\`);`;
+
+const LARGEST_FILE_PY = [
+	"import glob, os",
+	'files = glob.glob("src/**/*.ts", recursive=True)',
+	"biggest = max(files, key=os.path.getsize)",
+	"print(biggest, os.path.getsize(biggest))",
+].join("\n");
 
 export const shellFixtures: Record<string, GalleryFixture> = {
 	bash: {
@@ -70,11 +82,11 @@ export const shellFixtures: Record<string, GalleryFixture> = {
 		streamingArgs: { command: "mkdir -p dist/gall" },
 		args: { command: "mkdir -p dist/gallery && test -f dist/cli.js", timeout: 30 },
 		result: {
-			content: [{ type: "text", text: "(no output)" }],
+			content: [{ type: "text", text: NO_OUTPUT_NOTICE }],
 			details: { exitCode: 0, wallTimeMs: 12, timeoutSeconds: 30 },
 		},
 		errorResult: {
-			content: [{ type: "text", text: "(no output)\n\nCommand exited with code 1" }],
+			content: [{ type: "text", text: `${NO_OUTPUT_NOTICE}\n\nCommand exited with code 1` }],
 			isError: true,
 			details: { exitCode: 1, wallTimeMs: 9, timeoutSeconds: 30 },
 		},
@@ -214,12 +226,12 @@ export const shellFixtures: Record<string, GalleryFixture> = {
 				{
 					language: "js",
 					title: "count sources",
-					code: 'const files = await glob("src/**/*.ts");\nprint(`${files.length} files`);',
+					code: COUNT_SOURCES_JS,
 				},
 				{
 					language: "py",
 					title: "largest file",
-					code: 'import glob, os\nfiles = glob.glob("src/**/*.ts", recursive=True)\nbiggest = max(files, key=os.path.getsize)\nprint(biggest, os.path.getsize(biggest))',
+					code: LARGEST_FILE_PY,
 				},
 			],
 		},
@@ -233,7 +245,7 @@ export const shellFixtures: Record<string, GalleryFixture> = {
 						index: 0,
 						title: "count sources",
 						language: "js",
-						code: 'const files = await glob("src/**/*.ts");\nprint(`${files.length} files`);',
+						code: COUNT_SOURCES_JS,
 						output: "412 files",
 						status: "complete",
 						durationMs: 212,
@@ -243,7 +255,7 @@ export const shellFixtures: Record<string, GalleryFixture> = {
 						index: 1,
 						title: "largest file",
 						language: "python",
-						code: 'import glob, os\nfiles = glob.glob("src/**/*.ts", recursive=True)\nbiggest = max(files, key=os.path.getsize)\nprint(biggest, os.path.getsize(biggest))',
+						code: LARGEST_FILE_PY,
 						output: "src/session/agent-session.ts 498112",
 						status: "complete",
 						durationMs: 18,
@@ -269,7 +281,7 @@ export const shellFixtures: Record<string, GalleryFixture> = {
 						index: 0,
 						title: "count sources",
 						language: "js",
-						code: 'const files = await glob("src/**/*.ts");\nprint(`${files.length} files`);',
+						code: COUNT_SOURCES_JS,
 						output: "412 files",
 						status: "complete",
 						durationMs: 212,
@@ -279,7 +291,7 @@ export const shellFixtures: Record<string, GalleryFixture> = {
 						index: 1,
 						title: "largest file",
 						language: "python",
-						code: 'import glob, os\nfiles = glob.glob("src/**/*.ts", recursive=True)\nbiggest = max(files, key=os.path.getsize)\nprint(biggest, os.path.getsize(biggest))',
+						code: LARGEST_FILE_PY,
 						output: [
 							"Traceback (most recent call last):",
 							'  File "<cell 1>", line 3, in <module>',

@@ -10,7 +10,15 @@ import { renderTreeList } from "../render";
 import type { StatusLineOptions } from "../render/status-line";
 import { plainToolCard } from "../render/tool-card";
 
-import { formatErrorText, formatMoreItems, PREVIEW_LIMITS, pluralize, replaceTabs } from "../render/render-utils";
+import {
+	formatCount,
+	formatErrorText,
+	formatMoreItems,
+	PREVIEW_LIMITS,
+	pluralize,
+	replaceTabs,
+	sanitizeDisplayLines,
+} from "../render/render-utils";
 import type { TspChecklistItem, TspChecklistPhase } from "@oh-my-pi/pi-wire";
 import { node } from "../native/describe";
 import { OwnerMemo } from "../native/memo";
@@ -462,7 +470,7 @@ function todoSubject(args: TodoRenderArgs | undefined, fallbackOp: string | unde
 /** Items an `append` call adds, as header meta. */
 function todoCallMeta(args: TodoRenderArgs | undefined): string[] | undefined {
 	const count = normalizeTodoArg(args).reduce((sum, e) => sum + (Array.isArray(e.items) ? e.items.length : 0), 0);
-	return count > 0 ? [`${count} ${pluralize("item", count)}`] : undefined;
+	return count > 0 ? [formatCount("item", count)] : undefined;
 }
 
 /**
@@ -603,7 +611,7 @@ export const todoToolRenderer = {
 			keys.add(task.content);
 		}
 		const allTasks = phases.flatMap(phase => phase.tasks);
-		const meta = [`${allTasks.length} ${pluralize("task", allTasks.length)}`];
+		const meta = [formatCount("task", allTasks.length)];
 		if (allTasks.length === 0) {
 			// Provider text on the Cursor path (the todo summary or a refusal note),
 			// so sanitize like every other label.
@@ -611,7 +619,7 @@ export const todoToolRenderer = {
 			return plainToolCard(uiTheme, () => ({
 				status: { icon: "warning", title: "Todo", description, meta },
 				phase: "warning",
-				body: text ? [uiTheme.fg("dim", forDisplay(text))] : undefined,
+				body: text ? sanitizeDisplayLines(text).map(line => uiTheme.fg("dim", line)) : undefined,
 			}));
 		}
 
@@ -694,39 +702,30 @@ export const todoToolRenderer = {
 				// Collapsed: walking viewport — the last closed task leads, then
 				// active work (in-progress / subagent-matched), then following
 				// pending tasks (#5873). Expanded: every task in order.
-				const treeLines = expanded
-					? renderTreeList(
-							{
-								items: phase.tasks,
-								expanded,
-								itemType: "todo",
-								renderItem: todo =>
-									formatTodoLine(todo, labelFor(todo), uiTheme, "", completionKeys, spinnerFrame),
-							},
-							uiTheme,
-						)
-					: (() => {
-							const selection = selectCollapsedTodos(phase.tasks, isMatched, PREVIEW_LIMITS.COLLAPSED_ITEMS);
-							return renderTreeList(
-								{
-									items: selection.items,
-									itemType: "todo",
-									trailingSummary: selection.summary,
-									renderItem: todo =>
-										formatTodoLine(
-											todo,
-											labelFor(todo),
-											uiTheme,
-											"",
-											completionKeys,
-											spinnerFrame,
-											isMatched(todo),
-										),
-								},
-								uiTheme,
-							);
-						})();
-				bodyLines.push(...treeLines);
+				const selection = expanded
+					? undefined
+					: selectCollapsedTodos(phase.tasks, isMatched, PREVIEW_LIMITS.COLLAPSED_ITEMS);
+				bodyLines.push(
+					...renderTreeList(
+						{
+							items: selection?.items ?? phase.tasks,
+							expanded,
+							itemType: "todo",
+							trailingSummary: selection?.summary,
+							renderItem: todo =>
+								formatTodoLine(
+									todo,
+									labelFor(todo),
+									uiTheme,
+									"",
+									completionKeys,
+									spinnerFrame,
+									isMatched(todo),
+								),
+						},
+						uiTheme,
+					),
+				);
 			}
 			return {
 				status: { icon: "success", title: "Todo", description, meta },

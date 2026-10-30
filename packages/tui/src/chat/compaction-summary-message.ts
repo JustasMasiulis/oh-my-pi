@@ -1,8 +1,9 @@
 import { Box } from "../components/box";
 import { Disclosure } from "../components/disclosure";
 import { type Component } from "../tui";
+import { visibleWidth } from "../utils";
 import { Markdown } from "../components/markdown";
-import { formatNumber } from "@oh-my-pi/pi-utils";
+import { formatCount, formatNumber } from "@oh-my-pi/pi-utils";
 import { getMarkdownTheme, getThemeEpoch, theme } from "../theme";
 import { formatExpandHint } from "../render/render-utils";
 import type { BranchSummaryMessage, CompactionSummaryMessage, CustomMessage } from "./messages";
@@ -74,9 +75,9 @@ class DividerSummary implements Component {
 	#divider(width: number, expanded: boolean): string {
 		const rule = theme.tree.horizontal;
 		const label = this.#label();
-		const hint = formatExpandHint(theme, expanded, true);
+		const hint = formatExpandHint(theme, expanded);
 		const content = hint ? `${theme.fg("muted", label)} ${hint}` : theme.fg("muted", label);
-		const plainWidth = Bun.stringWidth(content, { countAnsiEscapeCodes: false });
+		const plainWidth = visibleWidth(content);
 		// ` label hint ` framed by rules on both sides.
 		const remaining = width - plainWidth - 2;
 		if (remaining < 4) {
@@ -236,7 +237,7 @@ function compactionNativeDetail(message: CompactionSummaryMessage): NativeChild[
 	const frames = message.images?.length ?? 0;
 	const caption =
 		frames > 0
-			? `Summary · ${frames} snapcompact frame${frames === 1 ? "" : "s"} attached`
+			? `Summary · ${formatCount("snapcompact frame", frames)} attached`
 			: "Summary of the earlier conversation";
 	const detail: NativeChild[] = [text([span(caption, "dim")], { role: "omp.compaction.caption", key: "caption" })];
 	if (message.warning) detail.push(noticeRow("warning", message.warning, { key: "warning" }));
@@ -263,8 +264,7 @@ function compactionDetailMarkdown(message: CompactionSummaryMessage): string {
 				? `Compacted to ${message.tokensAfter.toLocaleString()} tokens`
 				: "Compacted context";
 	const frameCount = message.images?.length ?? 0;
-	const frameNote =
-		frameCount > 0 ? `\n\n_${frameCount} snapcompact frame${frameCount === 1 ? "" : "s"} attached_` : "";
+	const frameNote = frameCount > 0 ? `\n\n_${formatCount("snapcompact frame", frameCount)} attached_` : "";
 	const warningNote = message.warning ? `\n\n${theme.icon.warning} **Warning:** ${message.warning}` : "";
 	return `**${tokenLine}**${warningNote}\n\n${message.summary}${frameNote}`;
 }

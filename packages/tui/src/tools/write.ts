@@ -15,8 +15,7 @@ import {
 	createRenderedStringCache,
 	formatCount,
 	formatErrorText,
-	formatExpandHint,
-	formatMoreItems,
+	formatMoreRow,
 	PREVIEW_LIMITS,
 	type RenderedStringCache,
 	replaceTabs,
@@ -203,11 +202,14 @@ function writeStatus(
 	uiTheme: Theme,
 ): StatusLineOptions {
 	const filePath = sanitizeText(shortenPath(rawPath));
-	return {
-		icon,
-		title: "Write",
-		description: filePath && linkTarget ? fileHyperlink(linkTarget, filePath) : filePath || uiTheme.format.ellipsis,
-	};
+	let description = filePath || uiTheme.format.ellipsis;
+	if (filePath && linkTarget) description = fileHyperlink(linkTarget, filePath);
+	return { icon, title: "Write", description };
+}
+
+/** Dim right-aligned line-number gutter of a preview row. */
+function formatLineGutter(lineNumber: number, lineNumberWidth: number, uiTheme: Theme): string {
+	return uiTheme.fg("dim", `${String(lineNumber).padStart(lineNumberWidth, " ")} `);
 }
 
 function normalizeDisplayText(text: unknown): string {
@@ -384,13 +386,9 @@ function formatStreamingContent(
 		}
 		const lineNumberWidth = Math.max(WRITE_GUTTER_MIN_WIDTH, String(totalLines).length);
 		const rows: string[] = [];
-		if (startIndex > 0) {
-			const marker = uiTheme.fg("dim", formatMoreItems(startIndex, "line", uiTheme, "earlier"));
-			const hint = formatExpandHint(uiTheme, expanded, true);
-			rows.push(hint ? `${marker} ${hint}` : marker);
-		}
+		if (startIndex > 0) rows.push(formatMoreRow(startIndex, "line", uiTheme, { expanded, position: "earlier" }));
 		for (let i = 0; i < visibleLines.length; i++) {
-			const gutter = uiTheme.fg("dim", `${String(startIndex + i + 1).padStart(lineNumberWidth, " ")} `);
+			const gutter = formatLineGutter(startIndex + i + 1, lineNumberWidth, uiTheme);
 			rows.push(`${gutter}${replaceTabs(visibleLines[i] ?? "")}`);
 		}
 		return rows.join("\n");
@@ -422,9 +420,7 @@ function renderContentPreview(
 		const highlighted = highlightCode(rawLines.slice(0, shown).join("\n"), language);
 		const lineNumberWidth = Math.max(WRITE_GUTTER_MIN_WIDTH, String(rawLines.length).length);
 		return highlighted
-			.map(
-				(line, i) => `${uiTheme.fg("dim", `${String(i + 1).padStart(lineNumberWidth, " ")} `)}${replaceTabs(line)}`,
-			)
+			.map((line, i) => `${formatLineGutter(i + 1, lineNumberWidth, uiTheme)}${replaceTabs(line)}`)
 			.join("\n");
 	});
 	return { lines: text.split("\n"), hidden: rawLines.length - shown };
@@ -576,7 +572,7 @@ function writeToolHead(
 		target: rawPath ? sanitizeText(displayPath(rawPath)) : undefined,
 		targetKind: "path",
 		href: fileHref(details?.resolvedPath),
-		meta: lineCount > 0 ? [`${lineCount} line${lineCount === 1 ? "" : "s"}`] : undefined,
+		meta: lineCount > 0 ? [formatCount("line", lineCount)] : undefined,
 		badges: badges.length > 0 ? badges : undefined,
 	};
 }
@@ -752,15 +748,12 @@ export const writeToolRenderer = {
 			({ contentWidth }) => {
 				const { expanded } = options;
 				const preview = renderContentPreview(fileContent, rawLines, expanded, lang, uiTheme, previewCache);
-				const marker =
-					preview.hidden > 0
-						? `${formatMoreItems(preview.hidden, "line", uiTheme)} ${formatExpandHint(uiTheme)}`
-						: undefined;
+				const marker = preview.hidden > 0 ? formatMoreRow(preview.hidden, "line", uiTheme) : undefined;
 				const diag = diagnosticsCardSection(diagnostics, expanded, uiTheme);
 				const lines = wrapWritePreviewRows(preview.lines, contentWidth);
 				if (progressRow) lines.unshift(progressRow);
 				// The last section's marker rides the bottom border; the preview's stays in place above diagnostics.
-				if (diag && marker) lines.push(uiTheme.fg("dim", marker));
+				if (diag && marker) lines.push(marker);
 				return {
 					status,
 					phase: isPartial ? "partial" : "success",

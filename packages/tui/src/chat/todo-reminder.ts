@@ -1,6 +1,7 @@
 import { Text } from "../components/text";
 import { Container } from "../tui";
 import { MessageNoticeComponent } from "../chrome/message-notice";
+import { pluralize } from "@oh-my-pi/pi-utils";
 import { theme } from "../theme";
 import { type TodoItem, todoChecklistPhases } from "../tools/todo";
 import { node, span, withHidden } from "../native/describe";
@@ -23,7 +24,7 @@ export class TodoReminderComponent extends Container {
 		this.#todos = todos;
 		this.#note = `reminder ${attempt}/${maxAttempts}`;
 		const count = todos.length;
-		const header = `${count} incomplete ${count === 1 ? "todo" : "todos"} - reminder ${attempt}/${maxAttempts}`;
+		const header = `${count} incomplete ${pluralize("todo", count)} - reminder ${attempt}/${maxAttempts}`;
 		this.#notice = new MessageNoticeComponent({
 			presentation: () => {
 				const todoList = todos.map(todo => `  ${theme.checkbox.unchecked} ${todo.content}`).join("\n");

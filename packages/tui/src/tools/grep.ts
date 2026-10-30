@@ -1,5 +1,4 @@
 import * as path from "node:path";
-import { Ellipsis } from "@oh-my-pi/pi-natives";
 import { isRecord, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Component } from "../tui";
 import type {
@@ -17,26 +16,25 @@ import type { OutputMeta } from "./output-meta";
 import type { TruncationResult } from "./streaming-output";
 import { fileHyperlink, uriHyperlink } from "../render";
 import type { StatusLineOptions } from "../render/status-line";
-import { plainToolCard } from "../render/tool-card";
+import { CardRowsMemo, plainToolCard } from "../render/tool-card";
 import {
+	clipRows,
 	formatCount,
 	formatErrorText,
-	formatExpandHint,
 	formatMissingPathRows,
-	formatMoreItems,
-	formatScopedSubject,
+	formatMoreRow,
 	PREVIEW_LIMITS,
 	replaceTabs,
 	toDisplayPathList,
 	type ToolUIStatus,
 } from "../render/render-utils";
-import { truncateToWidth } from "../utils";
 import {
 	classifyGroupedLines,
 	describeGroupedOutput,
 	formatGroupedFileHeader,
 	groupLineIndicesByBlank,
 	renderSearchPreviewRows,
+	searchSubject,
 	themeCodeFrameGutter,
 } from "./grouped-file-output";
 
@@ -98,16 +96,6 @@ const EXPANDED_TEXT_LIMIT = PREVIEW_LIMITS.EXPANDED_LINES * 2;
 const NATIVE_COLLAPSED_FILES = 2;
 
 const SEARCH_CODE_FRAME_LINE_RE = /^\s*\*?(\d+)│/;
-
-/**
- * `pattern in scope`, the same in the call and the result. A result names the
- * tool's display scope, linked to the searched path.
- */
-function grepSubject(args: GrepRenderArgs | undefined, theme: Theme, scope?: string): string | undefined {
-	if (!args?.pattern) return undefined;
-	const paths = toDisplayPathList(args.path ?? args.paths);
-	return formatScopedSubject(args.pattern, scope ?? (paths.length > 0 ? paths.join(", ") : undefined), theme);
-}
 
 function isStringArray(value: unknown): value is string[] {
 	return Array.isArray(value) && value.every((item: unknown) => typeof item === "string");
@@ -181,15 +169,6 @@ function grepLinkTargets(details: GrepToolDetails | undefined, rawDetails: unkno
 	};
 }
 
-function linkUrlLikeSearchHeader(
-	raw: string,
-	styled: string,
-	resolvedPath?: string,
-): { line: string; absPath?: string } {
-	if (resolvedPath) return { line: fileHyperlink(resolvedPath, styled), absPath: resolvedPath };
-	return { line: uriHyperlink(raw, styled) };
-}
-
 function parseSearchDisplayLineNumber(line: string): number | undefined {
 	const match = SEARCH_CODE_FRAME_LINE_RE.exec(line);
 	if (!match) return undefined;
@@ -248,10 +227,11 @@ function createSearchLineStyler(
 		if (ctx.kind === "file") {
 			const header = formatGroupedFileHeader(ctx, uiTheme);
 			const raw = urlRaw[index];
-			if (raw !== undefined) {
-				styled = linkUrlLikeSearchHeader(raw, header, displayTargets?.[raw]).line;
-			} else {
+			if (raw === undefined) {
 				styled = ctx.headerPath ? fileHyperlink(target(ctx.headerPath), header) : header;
+			} else {
+				const resolved = displayTargets?.[raw];
+				styled = resolved ? fileHyperlink(resolved, header) : uriHyperlink(raw, header);
 			}
 		} else {
 			const tinted = uiTheme.fg("toolOutput", themeCodeFrameGutter(line, uiTheme));
@@ -264,21 +244,26 @@ function createSearchLineStyler(
 	};
 }
 
+/** Non-default flag arguments: `case:insensitive`, `gitignore:false`, `skip:N`. */
+function grepFlagMeta(args: GrepRenderArgs): string[] {
+	const meta: string[] = [];
+	if (args.case === false) meta.push("case:insensitive");
+	if (args.gitignore === false) meta.push("gitignore:false");
+	if (args.skip !== undefined && args.skip > 0) meta.push(`skip:${args.skip}`);
+	return meta;
+}
+
 /** Render grep calls and results in the transcript. */
 export const grepToolRenderer = {
 	inline: true,
 	renderCall(args: GrepRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
-		const meta: string[] = [];
-		if (args.case === false) meta.push("case:insensitive");
-		if (args.gitignore === false) meta.push("gitignore:false");
-		if (args.skip !== undefined && args.skip > 0) meta.push(`skip:${args.skip}`);
-
+		const meta = grepFlagMeta(args);
 		return plainToolCard(uiTheme, () => ({
 			status: {
 				icon: options.executionStarted ? "running" : "pending",
 				spinnerFrame: options.spinnerFrame,
 				title: "Grep",
-				description: grepSubject(args, uiTheme),
+				description: searchSubject(args.pattern, args.path ?? args.paths, uiTheme),
 				meta,
 			},
 		}));
@@ -292,15 +277,12 @@ export const grepToolRenderer = {
 	): Component {
 		const details = result.details;
 		const linkTargets = grepLinkTargets(details, options.renderContext?.rawDetails);
-		const scope = details?.scopePath
-			? linkTargets.searchPath
-				? fileHyperlink(linkTargets.searchPath, details.scopePath)
-				: details.scopePath
-			: undefined;
+		let scope = details?.scopePath || undefined;
+		if (scope && linkTargets.searchPath) scope = fileHyperlink(linkTargets.searchPath, scope);
 		const status = (icon: ToolUIStatus, meta?: string[]): StatusLineOptions => ({
 			icon,
 			title: "Grep",
-			description: grepSubject(args, uiTheme, scope),
+			description: searchSubject(args?.pattern, args?.path ?? args?.paths, uiTheme, scope),
 			meta,
 		});
 
@@ -327,16 +309,10 @@ export const grepToolRenderer = {
 		}
 
 		// Rows are clipped, never wrapped; recomputed only when width or expansion changes.
-		let memo: { width: number; expanded: boolean; rows: readonly string[] } | undefined;
-		const cachedRows = (width: number, build: (expanded: boolean) => string[]): readonly string[] => {
-			const expanded = options.expanded;
-			if (memo?.width !== width || memo.expanded !== expanded) {
-				const rows = build(expanded).map(row => truncateToWidth(row, width, Ellipsis.Omit));
-				memo = { width, expanded, rows };
-			}
-			return memo.rows;
-		};
-		const cardOptions = { onInvalidate: () => (memo = undefined), onReleaseRenderCaches: () => (memo = undefined) };
+		const memo = new CardRowsMemo();
+		const cachedRows = (width: number, build: (expanded: boolean) => string[]): readonly string[] =>
+			memo.rows(width, options.expanded, () => clipRows(build(options.expanded), width));
+		const cardOptions = memo.cardOptions;
 
 		if (!hasDetailedData) {
 			const lines = textContent.split("\n").filter(line => line.trim() !== "");
@@ -350,10 +326,7 @@ export const grepToolRenderer = {
 							const limit =
 								expanded || lines.length <= COLLAPSED_TEXT_LIMIT ? lines.length : COLLAPSED_TEXT_LIMIT - 1;
 							const rows = lines.slice(0, limit).map(line => uiTheme.fg("toolOutput", replaceTabs(line)));
-							if (limit < lines.length) {
-								const more = uiTheme.fg("dim", formatMoreItems(lines.length - limit, "item", uiTheme));
-								rows.push(`${more} ${formatExpandHint(uiTheme)}`);
-							}
+							if (limit < lines.length) rows.push(formatMoreRow(lines.length - limit, "item", uiTheme));
 							return rows;
 						}),
 				}),
@@ -478,9 +451,7 @@ function grepNativeHead(args: GrepRenderArgs | undefined, meta?: readonly string
 	if (!meta && args) {
 		const paths = toDisplayPathList(args.path ?? args.paths);
 		if (paths.length) parts.push(`in ${paths.join(", ")}`);
-		if (args.case === false) parts.push("case:insensitive");
-		if (args.gitignore === false) parts.push("gitignore:false");
-		if (args.skip !== undefined && args.skip > 0) parts.push(`skip:${args.skip}`);
+		parts.push(...grepFlagMeta(args));
 	}
 	return { title: "Grep", target: args?.pattern || "?", targetKind: "pattern", meta: parts };
 }

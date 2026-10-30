@@ -5,13 +5,13 @@ import type { AdvisorMessageDetails, AdvisorNote, AdvisorSeverity } from "./mess
 import { chatTranscriptDisplayPreferences } from "./display-preferences";
 import {
 	formatBadge,
-	formatExpandHint,
-	formatMoreItems,
+	formatCount,
+	formatMoreRow,
 	replaceTabs,
 	type ToolUIColor,
+	truncateToWidth,
 	wrapTextWithAnsi,
 } from "../render/render-utils";
-import { truncateToWidth } from "../render";
 import type { Theme } from "../theme";
 import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import { card, node, span, text } from "../native/describe";
@@ -107,10 +107,8 @@ class AdvisorNotes implements Component {
 		const lines: string[] = [];
 		for (const entry of this.#entries) lines.push(...renderAdvisorNote(entry, width, this.#uiTheme));
 		if (this.#hidden > 0) {
-			const uiTheme = this.#uiTheme;
-			const rail = uiTheme.fg("dim", uiTheme.symbol("advisor.rail"));
-			const more = uiTheme.fg("dim", formatMoreItems(this.#hidden, "note", uiTheme));
-			lines.push(`  ${rail} ${more} ${formatExpandHint(uiTheme)}`);
+			const rail = this.#uiTheme.fg("dim", this.#uiTheme.symbol("advisor.rail"));
+			lines.push(`  ${rail} ${formatMoreRow(this.#hidden, "note", this.#uiTheme)}`);
 		}
 		const rendered = lines.map(line => truncateToWidth(line, width));
 		this.#cache = { width, lines: rendered };
@@ -184,7 +182,7 @@ function tallySpans(notes: readonly AdvisorNote[]): TspSpan[] {
 		const count = notes.filter(entry => rankOf(entry) === rank).length;
 		if (count === 0) continue;
 		if (spans.length > 0) spans.push(span(" · ", "dim"));
-		spans.push(span(`${count} ${rank}${count === 1 ? "" : "s"}`, RANK_LOOK[rank].style));
+		spans.push(span(formatCount(rank, count), RANK_LOOK[rank].style));
 	}
 	return spans;
 }
@@ -223,8 +221,8 @@ export function createAdvisorMessageCard(
 ): AdvisorMessageCard {
 	const notes = details?.notes ?? [];
 	const blockers = notes.filter(note => note.severity === "blocker").length;
-	const meta: string[] = [`${notes.length} ${notes.length === 1 ? "note" : "notes"}`];
-	if (blockers > 0) meta.push(uiTheme.fg("error", `${blockers} blocker${blockers === 1 ? "" : "s"}`));
+	const meta: string[] = [formatCount("note", notes.length)];
+	if (blockers > 0) meta.push(uiTheme.fg("error", formatCount("blocker", blockers)));
 	let override: boolean | undefined;
 	let lastGlobal = getExpanded();
 	const expanded = (): boolean => {
@@ -280,7 +278,6 @@ export function createAdvisorMessageCard(
 		collapsedBody: () => new AdvisorNotes(shown, notes.length - shown.length, uiTheme),
 		body: () => new AdvisorNotes(notes, 0, uiTheme),
 		expanded: getExpanded(),
-		paddingX: 0,
 		maxCollapsedRows: chatTranscriptDisplayPreferences.advisorCollapsedLines || undefined,
 	});
 	// The tool-output toggle owns expansion state; synchronize the controlled

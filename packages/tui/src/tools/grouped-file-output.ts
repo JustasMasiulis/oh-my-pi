@@ -1,16 +1,24 @@
 import * as path from "node:path";
 
-import { buildPathTree, isUrlLikePath, type PathTreeInput, walkPathTree } from "@oh-my-pi/pi-utils";
+import {
+	buildPathTree,
+	isRecord,
+	isUrlLikePath,
+	type PathTreeInput,
+	sanitizeText,
+	walkPathTree,
+} from "@oh-my-pi/pi-utils";
 import type { TspTone } from "@oh-my-pi/pi-wire";
 import { code, col, keyed, span, text } from "../native/describe";
 import type { NativeNode } from "../native/node";
 import {
 	CODE_FRAME_GUTTER,
 	FILE_NAME_COLOR,
-	formatExpandHint,
-	formatMoreItems,
+	formatMoreRow,
+	formatScopedSubject,
 	formatStyledPath,
 	replaceTabs,
+	toDisplayPathList,
 } from "../render/render-utils";
 import type { Theme } from "../theme/theme";
 import { formatHashlineHeader } from "./hashline-format";
@@ -159,7 +167,7 @@ const GROUPED_HEADER_RE = /^(#+)\s+(.*)$/;
 const HEADER_SUFFIX_RE = /\s+\([^)]*\)\s*$/;
 const HEADER_HASH_TAG_RE = /#[0-9a-f]+$/i;
 
-/** Per-line classification of grouped output, used by renderers for hyperlinks. */
+/** Per-line classification of grouped output, used by renderers for header display and hyperlinks. */
 export interface GroupedLineContext {
 	/** Directory header, file header, or any non-header body/content line. */
 	kind: "dir" | "file" | "content";
@@ -189,7 +197,7 @@ function resolveGroupedPath(parent: string | undefined, name: string): string | 
 }
 
 /** `# dir/`: a directory header row of grouped output. */
-export function isGroupedDirHeader(line: string): boolean {
+function isGroupedDirHeader(line: string): boolean {
 	const match = GROUPED_HEADER_RE.exec(line);
 	if (!match) return false;
 	const rest = match[2]!.trimEnd();
@@ -261,8 +269,9 @@ export function classifyGroupedLines(
 			.slice(0, depth - 1)
 			.filter(Boolean)
 			.join("/");
+		const displayPath = prefix ? `${prefix}/${name}` : name;
 		currentFile = abs;
-		result.push({ kind: "file", depth, headerPath: abs, displayPath: prefix ? `${prefix}/${name}` : name, suffix });
+		result.push({ kind: "file", depth, headerPath: abs, displayPath, suffix });
 	}
 
 	return result;
@@ -274,9 +283,38 @@ export function classifyGroupedLines(
  */
 export function formatGroupedFileHeader(ctx: GroupedLineContext, theme: Theme): string {
 	const display = replaceTabs(ctx.displayPath ?? "");
-	const path = ctx.isUrl ? theme.fg(FILE_NAME_COLOR, display) : formatStyledPath(display, theme);
+	const styledPath = ctx.isUrl ? theme.fg(FILE_NAME_COLOR, display) : formatStyledPath(display, theme);
 	const suffix = ctx.suffix ? ` ${theme.fg("dim", replaceTabs(ctx.suffix))}` : "";
-	return `${path}${suffix}`;
+	return `${styledPath}${suffix}`;
+}
+
+/**
+ * OSC 8 targets for the header rows of sanitized grouped output. Destinations
+ * must keep the original path bytes, so when the raw `displayContent` still
+ * aligns line-for-line with the sanitized `displayText`, a header links to its
+ * raw classification's path. Raw text never creates links the sanitized
+ * output lacks.
+ */
+export function groupedHeaderLinkTargets(
+	contexts: readonly GroupedLineContext[],
+	displayText: string,
+	rawDetails: unknown,
+): (index: number) => string | undefined {
+	const raw: Record<string, unknown> = isRecord(rawDetails) ? rawDetails : {};
+	const rawContent = typeof raw.displayContent === "string" ? raw.displayContent : undefined;
+	const rawLines = rawContent?.split("\n");
+	const rawCwd = typeof raw.cwd === "string" ? raw.cwd : undefined;
+	const rawSearchPath = typeof raw.searchPath === "string" ? raw.searchPath : undefined;
+	const rawContexts =
+		rawContent !== undefined && rawLines?.length === contexts.length && sanitizeText(rawContent) === displayText
+			? classifyGroupedLines(rawLines, rawCwd ?? rawSearchPath, rawSearchPath)
+			: undefined;
+	return index => {
+		const ctx = contexts[index]!;
+		const rawContext = rawContexts?.[index];
+		if (!ctx.headerPath || rawContext?.kind !== ctx.kind || rawContext.depth !== ctx.depth) return ctx.headerPath;
+		return rawContext.headerPath ?? ctx.headerPath;
+	};
 }
 
 /**
@@ -414,14 +452,29 @@ export function renderSearchPreviewRows(
 	const hiddenMatches = Math.max(totalMatches - visibleMatches, 0);
 	const hiddenLines = Math.max(totalLines - visible.length, 0);
 	if (needsSummary && (hiddenMatches > 0 || hiddenLines > 0)) {
-		const hidden =
+		out.push(
 			hiddenMatches > 0
-				? formatMoreItems(hiddenMatches, "match", theme)
-				: formatMoreItems(hiddenLines, "line", theme);
-		const hint = formatExpandHint(theme, expanded);
-		out.push(hint ? `${theme.fg("dim", hidden)} ${hint}` : theme.fg("dim", hidden));
+				? formatMoreRow(hiddenMatches, "match", theme, { expanded })
+				: formatMoreRow(hiddenLines, "line", theme, { expanded }),
+		);
 	}
 	return out;
+}
+
+/**
+ * Search header subject, `pattern in scope`, the same in the call and the
+ * result. A result names the tool's display scope; a call falls back to the
+ * requested paths.
+ */
+export function searchSubject(
+	pattern: string | undefined,
+	pathArg: string | string[] | undefined,
+	theme: Theme,
+	scope?: string,
+): string | undefined {
+	if (!pattern) return undefined;
+	const paths = toDisplayPathList(pathArg);
+	return formatScopedSubject(pattern, scope ?? (paths.length > 0 ? paths.join(", ") : undefined), theme);
 }
 
 // =============================================================================

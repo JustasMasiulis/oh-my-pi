@@ -1,15 +1,14 @@
 import type { Component } from "../tui";
 import { getProjectDir, jsonContainerEnd } from "@oh-my-pi/pi-utils";
 import { highlightCode, type Theme } from "../theme/theme";
-import { type StatusLineOptions } from "../render/status-line";
+import type { StatusLineOptions } from "../render/status-line";
 import { framedToolCard, plainToolCard, type ToolCardSection, type ToolCardSnapshot } from "../render/tool-card";
 import { formatOutputPaneLines } from "../render/output-pane";
 import {
 	capPreviewLines,
 	DEFAULT_TERMINAL_PREVIEW_LINES,
 	formatDuration,
-	formatExpandHint,
-	formatMoreItems,
+	formatMoreRow,
 	formatToolWorkingDirectory,
 	previewWindowRows,
 	replaceTabs,
@@ -618,9 +617,9 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 						footerParts.unshift(uiTheme.fg("toolTitle", "No output"));
 					}
 					if (formatted.hiddenCount > 0) {
-						const hint = formatExpandHint(uiTheme, expanded, true);
-						const marker = formatMoreItems(formatted.hiddenCount, "line", uiTheme, "earlier");
-						footerParts.push(uiTheme.fg("dim", hint ? `${marker} ${hint}` : marker));
+						footerParts.push(
+							formatMoreRow(formatted.hiddenCount, "line", uiTheme, { expanded, position: "earlier" }),
+						);
 					}
 					const truncationNotice =
 						details?.meta?.artifactError || (details?.meta?.truncation && !showingFullOutput)

@@ -9,11 +9,11 @@ import { type CustomMessage, LIVE_DELEGATION_MESSAGE_TYPE } from "./messages";
 export class CustomMessageComponent extends FramedMessageComponent<CustomMessage<unknown>> {
 	constructor(message: CustomMessage<unknown>, customRenderer?: MessageRenderer) {
 		const isLiveDelegation = message.customType === LIVE_DELEGATION_MESSAGE_TYPE;
+		// The transcript dispatch routes both `custom` and legacy `hookMessage` roles here.
 		const isHook = String(message.role) === "hookMessage";
 		super({
 			message,
 			role: isHook ? "omp.hook" : isLiveDelegation ? "omp.custom.delegation" : "omp.custom",
-			// The transcript dispatch routes both `custom` and legacy `hookMessage` roles here.
 			hideHeader: isLiveDelegation,
 			borderColor: isLiveDelegation ? "borderAccent" : undefined,
 			customRenderer,

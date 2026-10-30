@@ -41,11 +41,6 @@ export function formatAgentStats(stats: AgentStats, theme: Theme): string[] {
 	return parts;
 }
 
-/** Join row meta parts after a single space, separated by the theme's dot separator. */
-export function formatAgentRowMeta(parts: readonly string[], theme: Theme): string {
-	return parts.length > 0 ? ` ${parts.join(theme.fg("dim", theme.sep.dot))}` : "";
-}
-
 /** Map an agent lifecycle state onto the shared tool status icon vocabulary. */
 export function agentStatusIcon(status: AgentTreeRowOptions["status"], theme: Theme, spinnerFrame?: number): string {
 	switch (status) {
@@ -62,7 +57,8 @@ export function agentStatusIcon(status: AgentTreeRowOptions["status"], theme: Th
 
 /** Tool-specific presentation layered onto a bounded agent progress row. */
 export interface AgentTreeRowOptions {
-	status: "pending" | "running" | "completed" | "failed" | "aborted";
+	/** Lifecycle state; `warning` marks a settled agent whose result needs attention. */
+	status: "pending" | "running" | "completed" | "failed" | "aborted" | "warning";
 	presentation: "task" | "eval";
 	prefix: string;
 	id: string;
@@ -91,6 +87,7 @@ export function renderAgentTreeRow(
 	const task = options.presentation === "task";
 	const live = status === "pending" || status === "running";
 	const nameColor = live && options.frozen ? "dim" : "accent";
+	const descriptionColor = live && options.frozen ? "dim" : "text";
 	// Task rows sit inside a framed card whose committed rows must not repaint, so they never animate.
 	const animate = !task && live && !options.frozen;
 	const icon = agentStatusIcon(status, theme, animate ? options.spinnerFrame : undefined);
@@ -124,7 +121,7 @@ export function renderAgentTreeRow(
 	);
 	const name = theme.fg(nameColor, theme.bold(id));
 	const title = descriptionShown
-		? `${name}${theme.fg(nameColor, ":")} ${theme.fg(live && options.frozen ? "dim" : "text", description!)}`
+		? `${name}${theme.fg(nameColor, ":")} ${theme.fg(descriptionColor, description!)}`
 		: name;
 	let line = `${lead}${modelLead}${title}${badges}`;
 	if (options.preview) line += options.preview;
@@ -136,6 +133,6 @@ export function renderAgentTreeRow(
 	if (options.durationMs !== undefined && options.durationMs > 0) {
 		meta.push(theme.fg("dim", formatDuration(options.durationMs)));
 	}
-	line += formatAgentRowMeta(meta, theme);
+	if (meta.length > 0) line += ` ${meta.join(theme.fg("dim", theme.sep.dot))}`;
 	return { line: Number.isFinite(width) ? truncateToWidth(line, width, "") : line, descriptionShown };
 }

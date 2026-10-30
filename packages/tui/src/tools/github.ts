@@ -8,15 +8,17 @@ import { plainText } from "../native/spans";
 import { errorView, noteText, toolHead } from "./native-view";
 import type { RenderResultOptions } from "./renderer";
 import type { Theme } from "../theme/theme";
-import type { StatusLineOptions } from "../render";
+import { nestRows, type StatusLineOptions } from "../render";
 import { framedToolCard, plainToolCard, type ToolCardPhase, type ToolCardSection } from "../render/tool-card";
 
 import { formatShortSha, pushLine } from "./gh-format";
+import type { OutputMeta } from "./output-meta";
+import type { IsoBackendKind } from "@oh-my-pi/pi-natives";
 import {
 	formatCount,
 	formatErrorText,
 	formatExpandHint,
-	formatMoreItems,
+	formatMoreRow,
 	formatStatusIcon,
 	PREVIEW_LIMITS,
 	replaceTabs,
@@ -192,21 +194,18 @@ function workflowStatus(entry: { status?: string; conclusion?: string }): ToolUI
 
 /** One run row (`<icon> <workflow> <branch> · #id`) with its jobs as tree children. */
 function renderRunRows(run: GhRunWatchRunDetails, theme: Theme): string[] {
+	const icon = formatStatusIcon(workflowStatus(run), theme);
 	const runMeta = theme.fg("dim", getRunMeta(run).join(theme.sep.dot));
-	const lines = [`${formatStatusIcon(workflowStatus(run), theme)} ${theme.fg("accent", getRunLabel(run))} ${runMeta}`];
+	const head = `${icon} ${theme.fg("accent", getRunLabel(run))} ${runMeta}`;
 	if (run.jobs.length === 0) {
-		lines.push(
-			`${theme.fg("dim", theme.tree.last)} ${theme.fg("dim", `waiting for workflow jobs${theme.format.ellipsis}`)}`,
-		);
-		return lines;
+		return [head, ...nestRows([theme.fg("dim", `waiting for workflow jobs${theme.format.ellipsis}`)], theme)];
 	}
-	run.jobs.forEach((job, index) => {
-		const branch = theme.fg("dim", index === run.jobs.length - 1 ? theme.tree.last : theme.tree.branch);
+	const jobRows = run.jobs.map(job => {
 		const duration = job.durationSeconds !== undefined ? ` ${theme.fg("dim", `${job.durationSeconds}s`)}` : "";
 		const name = theme.fg("toolOutput", replaceTabs(job.name));
-		lines.push(`${branch} ${formatStatusIcon(workflowStatus(job), theme)} ${name}${duration}`);
+		return `${formatStatusIcon(workflowStatus(job), theme)} ${name}${duration}`;
 	});
-	return lines;
+	return [head, ...nestRows(jobRows, theme)];
 }
 
 function formatUnavailableLog(entry: GhRunWatchFailedLogDetails): string {
@@ -245,9 +244,8 @@ function renderFailedLogs(
 		const context = entry.workflowName
 			? `${entry.workflowName}${theme.sep.dot}#${entry.runId}`
 			: `run #${entry.runId}`;
-		lines.push(
-			`${formatStatusIcon("error", theme)} ${theme.fg("toolOutput", replaceTabs(entry.jobName))} ${theme.fg("dim", context)}`,
-		);
+		const jobName = theme.fg("toolOutput", replaceTabs(entry.jobName));
+		lines.push(`${formatStatusIcon("error", theme)} ${jobName} ${theme.fg("dim", context)}`);
 		if (!entry.available || !entry.tail) {
 			lines.push(theme.fg("dim", truncateVisualWidth(formatUnavailableLog(entry), Math.max(8, width))));
 			return;
@@ -258,10 +256,8 @@ function renderFailedLogs(
 		const shown = expanded ? tailLines : tailLines.slice(-PREVIEW_LIMITS.OUTPUT_COLLAPSED);
 		const hidden = tailLines.length - shown.length;
 		const entryMarker =
-			hidden > 0
-				? `${formatMoreItems(hidden, "log line", theme, "earlier")} ${formatExpandHint(theme, expanded, true)}`
-				: undefined;
-		if (entryMarker && index < failedLogs.length - 1) lines.push(theme.fg("dim", entryMarker));
+			hidden > 0 ? formatMoreRow(hidden, "log line", theme, { expanded, position: "earlier" }) : undefined;
+		if (entryMarker && index < failedLogs.length - 1) lines.push(entryMarker);
 		else marker = entryMarker;
 		for (const line of shown) {
 			lines.push(theme.fg("toolOutput", expanded ? line : truncateVisualWidth(line, Math.max(8, width))));
@@ -345,11 +341,12 @@ function renderSearchResults(
 	theme: Theme,
 	args: GithubToolRenderArgs,
 ): Component {
+	const meta = [formatCount("result", search.total)];
 	if (search.items.length === 0) {
-		const status = githubStatus(args, "warning", theme, { meta: [formatCount("result", search.total)] });
+		const status = githubStatus(args, "warning", theme, { meta });
 		return plainToolCard(theme, () => ({ status, phase: "warning" }));
 	}
-	const status = githubStatus(args, "success", theme, { meta: [formatCount("result", search.total)] });
+	const status = githubStatus(args, "success", theme, { meta });
 	const summaryFields = SEARCH_SUMMARY_FIELDS[args.op ?? ""] ?? [];
 	return plainToolCard(theme, ({ contentWidth }) => {
 		const { expanded } = options;
@@ -359,11 +356,14 @@ function renderSearchResults(
 			const title = theme.fg("toolOutput", replaceTabs(item.title));
 			if (expanded) {
 				body.push(title);
-				const fields = [...item.fields];
-				fields.forEach(([key, value], index) => {
-					const branch = theme.fg("dim", index === fields.length - 1 ? theme.tree.last : theme.tree.branch);
-					body.push(`${branch} ${theme.fg("dim", `${key}:`)} ${theme.fg("muted", displayField(value))}`);
-				});
+				body.push(
+					...nestRows(
+						[...item.fields].map(
+							([key, value]) => `${theme.fg("dim", `${key}:`)} ${theme.fg("muted", displayField(value))}`,
+						),
+						theme,
+					),
+				);
 				continue;
 			}
 			const facts = summaryFields.flatMap(key => {
@@ -375,9 +375,7 @@ function renderSearchResults(
 		}
 		const remaining = search.items.length - shown.length;
 		if (remaining > 0) {
-			body.push(
-				`${theme.fg("dim", formatMoreItems(remaining, "result", theme))} ${formatExpandHint(theme, expanded, true)}`,
-			);
+			body.push(formatMoreRow(remaining, "result", theme, { expanded }));
 		} else if (!expanded && shown.some(item => [...item.fields.keys()].some(key => !summaryFields.includes(key)))) {
 			// Every result fits, but Ctrl+O still reveals the fields the summary row leaves out.
 			body.push(formatExpandHint(theme));
@@ -413,11 +411,7 @@ function renderFallbackComponent(
 		const shown = expanded ? rows : rows.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS);
 		const body = shown.map(row => theme.fg("toolOutput", expanded ? row : truncateVisualWidth(row, contentWidth)));
 		const remaining = rows.length - shown.length;
-		if (remaining > 0) {
-			body.push(
-				`${theme.fg("dim", formatMoreItems(remaining, "line", theme))} ${formatExpandHint(theme, expanded, true)}`,
-			);
-		}
+		if (remaining > 0) body.push(formatMoreRow(remaining, "line", theme, { expanded }));
 		return { status, phase: "success", body };
 	});
 }
@@ -435,15 +429,14 @@ function renderWatchResult(
 	args: GithubToolRenderArgs,
 ): Component {
 	const isError = result.isError === true;
-	const statusFor = (): StatusLineOptions => {
-		// A partial result only arrives once the watch is executing.
-		const icon: ToolUIStatus = options.isPartial ? "running" : isError ? "error" : "success";
-		return githubStatus({ ...args, op: "run_watch" }, icon, theme, {
+	// A partial result only arrives once the watch is executing.
+	const settledIcon = isError ? "error" : "success";
+	const statusFor = (): StatusLineOptions =>
+		githubStatus({ ...args, op: "run_watch" }, options.isPartial ? "running" : settledIcon, theme, {
 			spinnerFrame: options.spinnerFrame,
 			meta: watchMeta(watch),
 		});
-	};
-	const phaseFor = (): ToolCardPhase => (options.isPartial ? "partial" : isError ? "error" : "success");
+	const phaseFor = (): ToolCardPhase => (options.isPartial ? "partial" : settledIcon);
 	const watchRows = renderWatchRows(watch, theme);
 	const failedLogs = watch.failedLogs ?? [];
 
@@ -459,7 +452,7 @@ function renderWatchResult(
 			phase: phaseFor(),
 			body: watchRows.length > 0 ? watchRows : undefined,
 			sections,
-			footerMeta: marker ? theme.fg("dim", marker) : undefined,
+			footerMeta: marker,
 		};
 	});
 }
@@ -580,8 +573,6 @@ export const githubToolRenderer = {
 	mergeCallAndResult: true,
 } satisfies ToolRenderer<GithubToolRenderArgs, GhToolDetails>;
 
-import type { OutputMeta } from "./output-meta";
-import type { IsoBackendKind } from "@oh-my-pi/pi-natives";
 /** Display metadata for GitHub operations. */
 export interface GhToolDetails {
 	meta?: OutputMeta;

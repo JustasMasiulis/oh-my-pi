@@ -85,6 +85,11 @@ export function getTreeBranch(isLast: boolean, theme: Theme): string {
 	return isLast ? theme.tree.last : theme.tree.branch;
 }
 
+/** Rows nested under a parent, each behind a dim tree connector; the last closes the branch. */
+export function nestRows(rows: readonly string[], theme: Theme): string[] {
+	return rows.map((row, index) => `${theme.fg("dim", getTreeBranch(index === rows.length - 1, theme))} ${row}`);
+}
+
 /** Return the continuation prefix for subsequent lines of a tree item. */
 export function getTreeContinuePrefix(isLast: boolean, theme: Theme): string {
 	return isLast ? "   " : `${theme.tree.vertical}  `;

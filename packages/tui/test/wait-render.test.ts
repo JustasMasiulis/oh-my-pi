@@ -387,7 +387,7 @@ describe("job renderer task-result preview", () => {
 			const component = waitToolRenderer.renderResult(result, { expanded: false, isPartial: false }, theme);
 			const lines = (component.render(100) as readonly string[]).map(line => Bun.stripANSI(line));
 			expect(lines[1]).toContain(`${Bun.stripANSI(formatStatusIcon("error", theme))} bg_11`);
-			expect(lines.at(-1)!.trim()).toBe(formatMoreItems(12 - PREVIEW_LIMITS.COLLAPSED_ITEMS, "job", theme));
+			expect(lines.at(-1)!.trim()).toBe(formatMoreItems(jobs.length - PREVIEW_LIMITS.COLLAPSED_ITEMS, "job", theme));
 		});
 
 		it("caps live widget tiles on the collapsed card and counts the rest", () => {
@@ -404,7 +404,7 @@ describe("job renderer task-result preview", () => {
 			const text = (component.render(100) as readonly string[]).map(line => Bun.stripANSI(line)).join("\n");
 			expect(text).toContain(`bg_${PREVIEW_LIMITS.COLLAPSED_ITEMS - 1}`);
 			expect(text).not.toContain(`bg_${PREVIEW_LIMITS.COLLAPSED_ITEMS}`);
-			expect(text).toContain(formatMoreItems(10 - PREVIEW_LIMITS.COLLAPSED_ITEMS, "job", theme));
+			expect(text).toContain(formatMoreItems(jobs.length - PREVIEW_LIMITS.COLLAPSED_ITEMS, "job", theme));
 		});
 
 		it("renders agent rows for running agents outside job control", () => {

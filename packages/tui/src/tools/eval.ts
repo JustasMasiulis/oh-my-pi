@@ -15,7 +15,7 @@ import { plainText } from "../native/spans";
 import { resultText, runBox, runFoot, type RunFootInput, runInput, runOutput, type RunState } from "./native-view";
 import { renderAgentTreeRow } from "./agent-tree";
 import { getMarkdownTheme, type Theme } from "../theme/theme";
-import { markFramedBlockComponent, outputBlockContentWidth, renderCodeCell } from "../render/index";
+import { outputBlockContentWidth, renderCodeCell } from "../render/index";
 import type { StatusLineOptions } from "../render/status-line";
 import { framedToolCard, plainToolCard } from "../render/tool-card";
 import { formatOutputPaneLines } from "../render/output-pane";
@@ -38,7 +38,7 @@ import {
 	PREVIEW_LIMITS,
 	cappedHeadLines,
 	formatDuration,
-	formatExpandHint,
+	formatMoreRow,
 	formatMoreItems,
 	previewLine,
 	previewWindowRows,
@@ -238,9 +238,7 @@ function renderEvalCell(frame: EvalCellFrame, layout: EvalCellLayout, theme: The
 	const facts: string[] = [languageForHighlighter(frame.language)];
 	if (frame.durationMs !== undefined) facts.push(formatDuration(frame.durationMs));
 	if (frame.hiddenOutput && frame.hiddenOutput > 0) {
-		const marker = formatMoreItems(frame.hiddenOutput, "line", theme, "earlier");
-		const hint = formatExpandHint(theme, layout.expanded, true);
-		facts.push(hint ? `${marker} ${hint}` : marker);
+		facts.push(formatMoreRow(frame.hiddenOutput, "line", theme, { expanded: layout.expanded, position: "earlier" }));
 	}
 	if (frame.footerExtra) facts.push(...frame.footerExtra);
 	// `No output` takes the Output label's color; the facts stay dim.
@@ -983,7 +981,7 @@ export const evalToolRenderer = {
 
 		// Framed headers never animate, so a spinner tick changes nothing here.
 		let cached: { key: string; lines: string[] } | undefined;
-		return markFramedBlockComponent({
+		return {
 			render: (width: number): readonly string[] => {
 				const icon = options.executionStarted ? "running" : "pending";
 				const codeMaxLines = previewWindowRows();
@@ -1002,7 +1000,7 @@ export const evalToolRenderer = {
 			invalidate: () => {
 				cached = undefined;
 			},
-		});
+		};
 	},
 
 	renderResult(
@@ -1048,7 +1046,7 @@ export const evalToolRenderer = {
 			);
 			let cached: { key: string; lines: string[] } | undefined;
 
-			return markFramedBlockComponent({
+			return {
 				render: (width: number): readonly string[] => {
 					const spinnerFrame = options.spinnerFrame;
 					const expanded = options.renderContext?.expanded ?? options.expanded;
@@ -1099,7 +1097,7 @@ export const evalToolRenderer = {
 				invalidate: () => {
 					cached = undefined;
 				},
-			});
+			};
 		}
 
 		// No per-cell results (older details): the call's cells, the whole output under the last.
@@ -1147,11 +1145,7 @@ export const evalToolRenderer = {
 				const expanded = options.renderContext?.expanded ?? options.expanded;
 				const { lines, hidden } = renderOutput(width, expanded);
 				const footer = [...callFacts];
-				if (hidden > 0) {
-					const hint = formatExpandHint(uiTheme, expanded, true);
-					const marker = formatMoreItems(hidden, "line", uiTheme, "earlier");
-					footer.unshift(hint ? `${marker} ${hint}` : marker);
-				}
+				if (hidden > 0) footer.unshift(formatMoreRow(hidden, "line", uiTheme, { expanded, position: "earlier" }));
 				const icon = resultIcon();
 				return {
 					status: evalStatus(icon),
@@ -1163,7 +1157,7 @@ export const evalToolRenderer = {
 		}
 
 		let cached: { key: string; lines: string[] } | undefined;
-		return markFramedBlockComponent({
+		return {
 			render: (width: number): readonly string[] => {
 				const expanded = options.renderContext?.expanded ?? options.expanded;
 				const codeMaxLines = previewWindowRows();
@@ -1187,7 +1181,7 @@ export const evalToolRenderer = {
 			invalidate: () => {
 				cached = undefined;
 			},
-		});
+		};
 	},
 
 	describeCall(args: EvalRenderArgs, options: RenderResultOptions): NativeToolView {

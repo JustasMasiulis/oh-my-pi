@@ -14,14 +14,14 @@ import { getPaddingX } from "../utils";
  * to roughly a third of a wide terminal. This defers formatting to
  * `render(width)`: it computes the same content width the inner `Text` uses
  * (mirroring its tight-layout flag so the budget can't desync), hands that to
- * the formatter, and delegates margins/background/vertical padding to the inner
+ * the formatter, and delegates margins and vertical padding to the inner
  * `Text`. Lines the formatter caps at `contentWidth` fit exactly and so never
  * wrap.
  */
 export class WidthAwareText implements Component {
-	#format: (contentWidth: number) => string;
+	readonly #format: (contentWidth: number) => string;
 	readonly #paddingX: number;
-	#inner: Text;
+	readonly #inner: Text;
 	#cachedContentWidth = -1;
 	#cachedText: string | undefined;
 	#ignoreTight = false;
@@ -31,10 +31,6 @@ export class WidthAwareText implements Component {
 		this.#format = format;
 		this.#paddingX = paddingX;
 		this.#inner = new Text("", paddingX, paddingY);
-	}
-
-	setCustomBgFn(customBgFn?: (text: string) => string): void {
-		this.#inner.setCustomBgFn(customBgFn);
 	}
 
 	setIgnoreTight(ignore: boolean): this {
@@ -72,24 +68,22 @@ export class WidthAwareText implements Component {
 	describe(cx: DescribeContext): NativeNode {
 		// Native describe emits no padding, so the formatter gets the full
 		// column budget — the same width a native Text.describe() would use.
-		const contentWidth = Math.max(1, cx.cols);
-		if (this.#cachedText === undefined || contentWidth !== this.#cachedContentWidth) {
-			this.#cachedContentWidth = contentWidth;
-			this.#cachedText = this.#format(contentWidth);
-			this.#inner.setText(this.#cachedText);
-		}
+		this.#formatAt(Math.max(1, cx.cols));
 		this.#native ??= col([this.#inner]);
 		return this.#native;
 	}
 
 	render(width: number): readonly string[] {
 		const paddingX = this.#ignoreTight ? this.#paddingX : getPaddingX(this.#paddingX);
-		const contentWidth = Math.max(1, width - paddingX * 2);
-		if (this.#cachedText === undefined || contentWidth !== this.#cachedContentWidth) {
-			this.#cachedContentWidth = contentWidth;
-			this.#cachedText = this.#format(contentWidth);
-			this.#inner.setText(this.#cachedText);
-		}
+		this.#formatAt(Math.max(1, width - paddingX * 2));
 		return this.#inner.render(width);
+	}
+
+	/** Feed the inner `Text` the formatter's output for `contentWidth`, once per width or `reformat()`. */
+	#formatAt(contentWidth: number): void {
+		if (this.#cachedText !== undefined && contentWidth === this.#cachedContentWidth) return;
+		this.#cachedContentWidth = contentWidth;
+		this.#cachedText = this.#format(contentWidth);
+		this.#inner.setText(this.#cachedText);
 	}
 }

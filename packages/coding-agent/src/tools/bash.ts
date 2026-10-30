@@ -687,7 +687,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 	 * Throw for outcomes that are *not* a completed command: user aborts and a
 	 * missing exit status. Timeouts are handled separately by
 	 * #buildCompletedResult, which returns a non-throwing error result with
-	 * details.timedOut=true so the renderer can show a warning border. The
+	 * details.timedOut=true so the renderer can show a warning status. The
 	 * foreground and bridge callers plus the async job manager rely on these
 	 * throwing so cancellations surface as aborts and jobs are recorded as
 	 * failed. A definite non-zero exit is a completed command that failed;
@@ -753,7 +753,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 
 		// Timeouts are not failures — the command ran its course. Return an error
 		// result (isError=true for the model) but flag timedOut so the renderer
-		// uses a warning border instead of error red. Both interactive and
+		// shows a warning status instead of an error. Both interactive and
 		// non-interactive results carry an explicit `timedOut` field from the
 		// executor/PTY layer.
 		const isTimeout = result.timedOut === true;
@@ -1695,7 +1695,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			// A cancelled result is either a timeout (the command's deadline fired)
 			// or a user/system abort. Timeouts are handled by #buildCompletedResult
 			// which returns a non-throwing error result with details.timedOut=true
-			// so the renderer can show a warning border instead of error red.
+			// so the renderer can show a warning status instead of an error.
 			// Both interactive and non-interactive results carry an explicit
 			// `timedOut` field from the executor/PTY layer.
 			const isTimeout = result.timedOut === true;

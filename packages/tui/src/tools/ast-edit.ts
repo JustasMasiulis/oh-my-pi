@@ -1,4 +1,3 @@
-import { isRecord, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Component } from "../tui";
 import { replaceTabs } from "../utils";
 import type { Theme } from "../theme/theme";
@@ -8,13 +7,19 @@ import { framedToolCard, plainToolCard } from "../render/tool-card";
 import {
 	formatCount,
 	formatErrorText,
-	formatExpandHint,
 	formatMoreItems,
+	formatMoreRow,
 	formatParseErrorsCountLabel,
 	formatScopedSubject,
 	PREVIEW_LIMITS,
 } from "../render/render-utils";
-import { classifyGroupedLines, formatGroupedFileHeader, groupLineIndicesByBlank } from "./grouped-file-output";
+import {
+	classifyGroupedLines,
+	formatGroupedFileHeader,
+	groupedHeaderLinkTargets,
+	groupLineIndicesByBlank,
+	walkGroupedOutput,
+} from "./grouped-file-output";
 import type { OutputMeta } from "./output-meta";
 import type {
 	NativeToolHead,
@@ -94,17 +99,20 @@ function patternPreview(pat: string | undefined): string | undefined {
 	return collapsed || undefined;
 }
 
-/** Header subject, identical across the call and result: `pattern in scope` (or `N rewrites in scope`). */
-function astEditSubject(args: AstEditRenderArgs | undefined, theme: Theme, scopePath?: string): string | undefined {
+/** The single rewrite's pattern preview, or `N rewrites` for several. */
+function rewriteLabel(args: AstEditRenderArgs | undefined): string | undefined {
 	const rewriteCount = args?.ops?.length ?? 0;
-	const pattern =
-		rewriteCount === 1 ? patternPreview(args?.ops?.[0]?.pat) : rewriteCount ? `${rewriteCount} rewrites` : undefined;
-	return formatScopedSubject(pattern, args?.paths?.length ? args.paths.join(", ") : scopePath, theme);
+	if (rewriteCount === 1) return patternPreview(args?.ops?.[0]?.pat);
+	return rewriteCount > 1 ? `${rewriteCount} rewrites` : undefined;
 }
 
-const AST_EDIT_HEADER_RE = /^(#+)\s+(.*)$/;
+/** Header subject, identical across the call and result: `pattern in scope` (or `N rewrites in scope`). */
+function astEditSubject(args: AstEditRenderArgs | undefined, theme: Theme, scopePath?: string): string | undefined {
+	const scope = args?.paths?.length ? args.paths.join(", ") : scopePath;
+	return formatScopedSubject(rewriteLabel(args), scope, theme);
+}
+
 const AST_EDIT_CHANGE_LINE_RE = /^([+\- ])\s*(\d+)(?:│|[:|])(.*)$/;
-const AST_EDIT_HEADER_SUFFIX_RE = /\s+\([^)]*\)\s*$/;
 
 /** One file's proposed rewrite: its unified diff text and change counts. */
 interface AstEditFileDiff {
@@ -121,29 +129,19 @@ interface AstEditFileDiff {
  */
 function parseAstEditChanges(lines: readonly string[]): AstEditFileDiff[] {
 	const files: AstEditFileDiff[] = [];
-	const dirs: string[] = [];
 	let file: AstEditFileDiff | undefined;
 	const flush = () => {
 		if (file && file.lines.length > 0) files.push(file);
 		file = undefined;
 	};
-	for (const line of lines) {
-		const header = AST_EDIT_HEADER_RE.exec(line);
-		if (header) {
+	for (const event of walkGroupedOutput(lines)) {
+		if (event.kind !== "line") {
 			flush();
-			const depth = header[1]!.length;
-			const rest = header[2]!.trimEnd().replace(AST_EDIT_HEADER_SUFFIX_RE, "");
-			dirs.length = depth - 1;
-			if (rest.endsWith("/")) {
-				dirs[depth - 1] = rest.slice(0, -1);
-				continue;
-			}
-			const prefix = dirs.filter(Boolean).join("/");
-			file = { path: prefix ? `${prefix}/${rest}` : rest, lines: [], added: 0, removed: 0 };
+			if (event.kind === "file") file = { path: event.path, lines: [], added: 0, removed: 0 };
 			continue;
 		}
-		if (!file || line.trim().length === 0) continue;
-		const change = AST_EDIT_CHANGE_LINE_RE.exec(line);
+		if (!file) continue;
+		const change = AST_EDIT_CHANGE_LINE_RE.exec(event.text);
 		if (!change) continue;
 		const lineNumber = Number.parseInt(change[2]!, 10);
 		if (file.lastOld === undefined || lineNumber > file.lastOld + 1 || lineNumber < file.lastOld) {
@@ -229,8 +227,9 @@ export const astEditToolRenderer = {
 			// The count rides on the status line; only parse errors are worth a body.
 			const hiddenParseErrors = (details?.parseErrorsTotal ?? parseErrors.length) - parseErrors.length;
 			const parseRows = parseErrors.map(error => uiTheme.fg("warning", replaceTabs(error)));
-			if (hiddenParseErrors > 0)
+			if (hiddenParseErrors > 0) {
 				parseRows.push(uiTheme.fg("dim", formatMoreItems(hiddenParseErrors, "parse issue", uiTheme)));
+			}
 			return plainToolCard(uiTheme, () => ({
 				status: { icon: "warning", title: "AST Edit", description, meta },
 				phase: "warning",
@@ -245,21 +244,9 @@ export const astEditToolRenderer = {
 		const textContent = result.details?.displayContent ?? result.content?.find(c => c.type === "text")?.text ?? "";
 		const allLines = textContent.split("\n");
 		// Resolve hyperlinks over the whole output so nested directory headers
-		// reconstruct across the blank-line groups the tree list collapses by.
+		// reconstruct across blank-line groups.
 		const contexts = classifyGroupedLines(allLines, details?.cwd ?? details?.searchPath, details?.searchPath);
-		// The display lines are sanitized; reconstruct link targets from the original
-		// grouped headers only when they still align with those display lines.
-		const rawDetails = options.renderContext?.rawDetails;
-		const rawContent =
-			isRecord(rawDetails) && typeof rawDetails.displayContent === "string" ? rawDetails.displayContent : undefined;
-		const rawLines = rawContent?.split("\n");
-		const rawCwd = isRecord(rawDetails) && typeof rawDetails.cwd === "string" ? rawDetails.cwd : undefined;
-		const rawSearchPath =
-			isRecord(rawDetails) && typeof rawDetails.searchPath === "string" ? rawDetails.searchPath : undefined;
-		const rawContexts =
-			rawContent !== undefined && rawLines?.length === allLines.length && sanitizeText(rawContent) === textContent
-				? classifyGroupedLines(rawLines, rawCwd ?? rawSearchPath, rawSearchPath)
-				: undefined;
+		const linkTarget = groupedHeaderLinkTargets(contexts, textContent, options.renderContext?.rawDetails);
 		// Style lazily: collapsed bodies show only the first groups.
 		const styledLines: (string | undefined)[] = Array.from({ length: allLines.length }, () => undefined);
 		const styleLine = (index: number): string => {
@@ -270,15 +257,12 @@ export const astEditToolRenderer = {
 			// second vertical bar inside the frame border.
 			const display = replaceTabs(allLines[index]!.replace("│", " "));
 			let styled: string;
-			const linkPath =
-				ctx.headerPath && rawContexts?.[index]?.kind === ctx.kind && rawContexts[index]?.depth === ctx.depth
-					? (rawContexts[index]?.headerPath ?? ctx.headerPath)
-					: ctx.headerPath;
 			// Directory header rows never reach here: the change groups drop them,
 			// since file headers carry the full path.
 			if (ctx.kind === "file") {
 				const header = formatGroupedFileHeader(ctx, uiTheme);
-				styled = linkPath ? fileHyperlink(linkPath, header) : header;
+				const target = linkTarget(index);
+				styled = target ? fileHyperlink(target, header) : header;
 			} else if (display.startsWith("+")) {
 				styled = uiTheme.fg("toolDiffAdded", display);
 			} else if (display.startsWith("-")) {
@@ -320,22 +304,20 @@ export const astEditToolRenderer = {
 				const expanded = Boolean(options.expanded);
 				if (bodyMemo === undefined || bodyMemo.expanded !== expanded || bodyMemo.width !== contentWidth) {
 					const changes = buildChangeBody(changeGroups, styleLine, expanded, COLLAPSED_CHANGE_LIMIT);
-					const more =
-						changes.remaining > 0
-							? `${formatMoreItems(changes.remaining, "change", uiTheme)} ${formatExpandHint(uiTheme)}`
-							: undefined;
+					const more = changes.remaining > 0 ? formatMoreRow(changes.remaining, "change", uiTheme) : undefined;
 					// The truncation marker rides the bottom border unless trailing notes follow it.
-					const inPlace = more && extraLines.length > 0 ? [uiTheme.fg("dim", more)] : [];
+					const inPlace = more && extraLines.length > 0 ? [more] : [];
 					const lines = [...changes.lines, ...inPlace, ...extraLines].map(l =>
 						truncateToWidth(l, contentWidth, Ellipsis.Omit),
 					);
 					while (lines.length > 0 && lines[0].trim() === "") lines.shift();
 					bodyMemo = { expanded, width: contentWidth, lines, marker: inPlace.length > 0 ? undefined : more };
 				}
+				const footer = [...summaryParts, bodyMemo.marker].filter(Boolean).join(uiTheme.sep.dot);
 				return {
 					status,
 					phase: icon === "running" ? "partial" : icon,
-					footerMeta: uiTheme.fg("dim", [...summaryParts, bodyMemo.marker].filter(Boolean).join(uiTheme.sep.dot)),
+					footerMeta: uiTheme.fg("dim", footer),
 					sections: [{ content: bodyMemo.lines }],
 				};
 			},

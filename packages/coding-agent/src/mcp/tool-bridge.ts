@@ -29,7 +29,13 @@ import { ToolAbortError, throwIfAborted } from "../tools/tool-errors";
 import { schemaDeclaresIntentField } from "../utils/tool-schema";
 import { callTool } from "./client";
 import { formatMCPToolFailure, MCPTransportError } from "./errors";
-import { describeMCPCall, describeMCPResult, renderMCPCall, renderMCPResult } from "@oh-my-pi/pi-tui/tools/mcp";
+import {
+	describeMCPCall,
+	describeMCPResult,
+	type MCPContent,
+	renderMCPCall,
+	renderMCPResult,
+} from "@oh-my-pi/pi-tui/tools/mcp";
 import type {
 	MCPAuthChallenge,
 	MCPRequestOptions,
@@ -38,7 +44,6 @@ import type {
 	MCPToolCallResult,
 	MCPToolDefinition,
 } from "./types";
-import type { MCPContent } from "@oh-my-pi/pi-tui/tools/mcp";
 
 /** Reconnect callback: tears down a stale connection, optionally authorizing first. */
 export type MCPReconnect = (options?: { authChallenge?: MCPAuthChallenge }) => Promise<MCPServerConnection | null>;

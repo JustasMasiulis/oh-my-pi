@@ -1,4 +1,5 @@
 import { Text } from "../components/text";
+import { formatCount } from "@oh-my-pi/pi-utils";
 import { theme } from "../theme";
 import { span, text } from "../native/describe";
 import type { NativeNode } from "../native/node";
@@ -14,7 +15,7 @@ export class StrippedToolCallsPlaceholder extends Text {
 	#native: NativeNode | undefined;
 
 	constructor(strippedToolCalls: number, toolActivityVisible: boolean) {
-		const label = `${strippedToolCalls} tool call${strippedToolCalls === 1 ? "" : "s"} elided — no result on this branch`;
+		const label = `${formatCount("tool call", strippedToolCalls)} elided — no result on this branch`;
 		super(theme.fg("dim", theme.italic(label)), 1, 0);
 		this.#label = label;
 		this.#toolActivityVisible = toolActivityVisible;

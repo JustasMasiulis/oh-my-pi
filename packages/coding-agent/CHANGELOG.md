@@ -8,13 +8,16 @@
 - Added opt-in `title.refreshAfterPrompts`: every N operator prompts, the judge model checks whether a generated session title still fits the conversation and regenerates it when it does not; user-set titles are never replaced ([#17443](https://github.com/can1357/oh-my-pi/pull/17443) by [@wolfiesch](https://github.com/wolfiesch))
 - Gateway rows discovered from `/v1/models` now keep the `reasoning_effort_map` and `reasoning_required` facts they advertise: a route that serves only low/high/max routes `medium` to `high` instead of the nearest lower tier, and a thinking-off request still sends a tier the route accepts ([#17395](https://github.com/can1357/oh-my-pi/pull/17395) by [@Maziar123](https://github.com/Maziar123))
 - Computer-use scripts can wait for a window opened by an action and read it in the same call with a window filter's optional `wait` ([#17391](https://github.com/can1357/oh-my-pi/pull/17391) by [@will-bogusz](https://github.com/will-bogusz))
-- `omp gallery` renders transcript messages too: user prompts, assistant replies, a full agent turn, `!`/`$` runs, compaction, IRC, background-job, advisor, skill and extension messages, and transcript notices. Pick one with `--message <kind>` or all with `--surface message`.
+- `omp gallery` renders every transcript message kind too, from user prompts, assistant replies and full agent turns to compaction, IRC, background-job and advisor messages and transcript notices. Pick one with `--message <kind>` or all with `--surface message`.
+- `omp gallery` renders the live window around the composer too: the working row, subagent and todo HUDs, queued messages, running `!`/`$` commands, progress rows, the pinned error, side panels and the dialogs that take the composer's place (tool approval, ask, extension prompts, plan review, pause). Pick one with `--widget <name>` or all with `--surface widget`.
+- `omp gallery` adds fixtures for `bash` without output (`bash_silent`), `find`, multi-cell `eval` and the `vibe_*` tools.
 
 ### Changed
 
 - `read` of a web page keeps the title, description, author and dates of its `<meta>` tags and lists the others by name only, so pages cost about 6% fewer tokens ([#17393](https://github.com/can1357/oh-my-pi/pull/17393) by [@will-bogusz](https://github.com/will-bogusz))
 - Tool calls in the transcript share a single header and list layout across every tool and symbol preset. The ASCII preset no longer mixes frame styles or status glyphs, and errors keep the tool's title.
-- `omp gallery` draws its section chrome with the active symbol preset and adds fixtures for `find`, multi-cell `eval` and the `vibe_*` tools.
+- `omp gallery` draws its section chrome with the active symbol preset.
+- The subagent HUD marks running agents with the running status glyph instead of a dot, its toggle reads `… N more agents · expand`, and multi-line descriptions are joined with `·`.
 
 ### Fixed
 

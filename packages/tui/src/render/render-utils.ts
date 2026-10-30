@@ -15,8 +15,8 @@ import { formatKeyHint, type KeyId } from "../app-keybindings";
 import { getKeybindings } from "../keybindings";
 import type { Theme, ThemeColor } from "../theme/theme";
 import type { Component } from "../tui";
-import { replaceTabs, sliceByColumn, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
-import { getTreeBranch, Hasher } from "./utils";
+import { replaceTabs, sliceByColumn, truncateToWidth, visibleWidth } from "../utils";
+import { Hasher, nestRows } from "./utils";
 
 export { Ellipsis } from "@oh-my-pi/pi-natives";
 export { replaceTabs, truncateToWidth, wrapTextWithAnsi } from "../utils";
@@ -219,7 +219,9 @@ export function truncateMiddleToWidth(text: string, maxWidth: number, ellipsis =
 	if (maxWidth <= ellipsisWidth) return sliceByColumn(ellipsis, 0, Math.max(0, maxWidth), true);
 	const tailWidth = Math.ceil((maxWidth - ellipsisWidth) / 2);
 	const headWidth = maxWidth - ellipsisWidth - tailWidth;
-	return `${sliceByColumn(text, 0, headWidth, true)}${ellipsis}${sliceByColumn(text, width - tailWidth, tailWidth, true)}`;
+	const head = sliceByColumn(text, 0, headWidth, true);
+	const tail = sliceByColumn(text, width - tailWidth, tailWidth, true);
+	return `${head}${ellipsis}${tail}`;
 }
 
 /** Select a leading line window and count the lines hidden after it. */
@@ -323,13 +325,9 @@ export function expandHintLabel(theme: Theme): string {
 	return wrapBrackets(`${expandKeyHint()}: Expand`, theme);
 }
 
-/**
- * Format the expand hint with proper theming.
- * Returns empty string if already expanded or there is nothing more to show.
- */
-export function formatExpandHint(theme: Theme, expanded?: boolean, hasMore?: boolean): string {
+/** Format the dim expand hint; empty once expanded. */
+export function formatExpandHint(theme: Theme, expanded?: boolean): string {
 	if (expanded) return "";
-	if (hasMore === false) return "";
 	return theme.fg("dim", expandHintLabel(theme));
 }
 
@@ -354,6 +352,26 @@ export function formatMoreItems(
 ): string {
 	const safeRemaining = Number.isFinite(remaining) ? remaining : 0;
 	return `${theme.format.ellipsis} ${safeRemaining} ${position} ${pluralize(itemType, safeRemaining)}`;
+}
+
+/**
+ * A truncated list's closing row: the dim `… N more items` (or `… N earlier
+ * items`) and, while collapsed, the expand hint.
+ */
+export function formatMoreRow(
+	remaining: number,
+	itemType: string,
+	theme: Theme,
+	options: { expanded?: boolean; position?: "more" | "earlier" } = {},
+): string {
+	const more = theme.fg("dim", formatMoreItems(remaining, itemType, theme, options.position));
+	const hint = formatExpandHint(theme, options.expanded);
+	return hint ? `${more} ${hint}` : more;
+}
+
+/** Rows cut to `width` without an ellipsis: flush card bodies clip rather than wrap. */
+export function clipRows(rows: readonly string[], width: number): string[] {
+	return rows.map(row => truncateToWidth(row, width, Ellipsis.Omit));
 }
 
 /**
@@ -397,14 +415,9 @@ export function capPreviewLines(
 	if (lines.length <= max) return lines;
 	const visible = max <= 1 ? [] : lines.slice(lines.length - (max - 1));
 	const hidden = lines.length - visible.length;
-	const hint = options.expandHint === false ? "" : formatExpandHint(theme, false, true);
-	const marker = `${formatMoreItems(hidden, "line", theme, "earlier")}${hint ? ` ${hint}` : ""}`;
-	return [`${options.prefix ?? ""}${theme.fg("dim", marker)}`, ...visible];
-}
-
-/** Join metadata with the theme separator and muted styling. */
-export function formatMeta(meta: string[], theme: Theme): string {
-	return meta.length > 0 ? ` ${theme.fg("muted", meta.join(theme.sep.dot))}` : "";
+	// `expanded` only drops the hint here: callers capping inside an expanded view opt out.
+	const marker = formatMoreRow(hidden, "line", theme, { position: "earlier", expanded: options.expandHint === false });
+	return [`${options.prefix ?? ""}${marker}`, ...visible];
 }
 
 /**
@@ -455,7 +468,8 @@ export function formatStyledPath(filePath: string, theme: Theme): string {
 	const end = filePath.replace(/[/\\]+$/, "").length;
 	const slash = Math.max(filePath.lastIndexOf("/", end - 1), filePath.lastIndexOf("\\", end - 1));
 	if (end === 0 || slash < 0) return theme.fg(FILE_NAME_COLOR, filePath);
-	return `${theme.fg("dim", filePath.slice(0, slash + 1))}${theme.fg(FILE_NAME_COLOR, filePath.slice(slash + 1))}`;
+	const dir = theme.fg("dim", filePath.slice(0, slash + 1));
+	return `${dir}${theme.fg(FILE_NAME_COLOR, filePath.slice(slash + 1))}`;
 }
 
 /**
@@ -585,7 +599,7 @@ const COLLAPSED_DIAGNOSTICS = 5;
  * section label; standalone callers print it as is.
  */
 export function formatDiagnostics(
-	diag: { errored: boolean; summary: string; messages: string[] },
+	diag: { summary: string; messages: string[] },
 	expanded: boolean,
 	theme: Theme,
 	getLangIcon: (filePath: string) => string,
@@ -616,7 +630,8 @@ export function formatDiagnostics(
 	}
 
 	const summary = sanitizeDiagnosticDisplayText(diag.summary);
-	const label = `${theme.fg("toolTitle", options?.title ?? "Diagnostics")}${summary ? ` ${theme.fg("dim", `(${summary})`)}` : ""}`;
+	const summaryTag = summary ? ` ${theme.fg("dim", `(${summary})`)}` : "";
+	const label = `${theme.fg("toolTitle", options?.title ?? "Diagnostics")}${summaryTag}`;
 	const rows = [label];
 
 	const maxDiags = expanded ? diag.messages.length : COLLAPSED_DIAGNOSTICS;
@@ -625,13 +640,12 @@ export function formatDiagnostics(
 		if (shown >= maxDiags) break;
 		rows.push(`${theme.fg("muted", getLangIcon(filePath))} ${formatStyledPath(filePath, theme)}`);
 		const visible = diagnostics.slice(0, maxDiags - shown);
-		for (let index = 0; index < visible.length; index++) {
-			const d = visible[index]!;
-			const branch = theme.fg("dim", getTreeBranch(index === visible.length - 1, theme));
+		const nested = visible.map(d => {
 			const location = theme.fg("muted", ` :${d.line}:${d.col}`);
 			const codeTag = d.code ? theme.fg("dim", ` (${d.code})`) : "";
-			rows.push(`${branch} ${formatSeverityMessage(d.severity, d.message, theme)}${location}${codeTag}`);
-		}
+			return `${formatSeverityMessage(d.severity, d.message, theme)}${location}${codeTag}`;
+		});
+		rows.push(...nestRows(nested, theme));
 		shown += visible.length;
 	}
 	for (const msg of unparsed) {
@@ -642,9 +656,7 @@ export function formatDiagnostics(
 	}
 
 	const remaining = diag.messages.length - shown;
-	if (remaining > 0) {
-		rows.push(theme.fg("dim", `${formatMoreItems(remaining, "diagnostic", theme)} ${formatExpandHint(theme)}`));
-	}
+	if (remaining > 0) rows.push(formatMoreRow(remaining, "diagnostic", theme));
 	return rows.join("\n");
 }
 
@@ -1035,12 +1047,12 @@ export function sanitizeDisplayWarning(text: string): string {
 }
 
 /** Sanitize and bound warning text before showing it in TUI. */
-export function sanitizeDisplayWarnings(warnings: readonly string[]): string[] {
+export function sanitizeDisplayWarnings(warnings: readonly string[], theme: Theme): string[] {
 	const visible = warnings
 		.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS)
 		.map(warning => truncateToWidth(sanitizeDisplayWarning(warning), TRUNCATE_LENGTHS.LONG));
 	const hidden = warnings.length - visible.length;
-	if (hidden > 0) visible.push(`… ${hidden} more ${pluralize("warning", hidden)}`);
+	if (hidden > 0) visible.push(formatMoreItems(hidden, "warning", theme));
 	return visible;
 }
 
@@ -1146,15 +1158,6 @@ export function createCachedComponent(
 }
 
 /**
- * Fit a status header plus body rows to `width` for search-style results. The
- * header soft-wraps so its trailing summary meta (counts, `truncated`) stays
- * visible behind a long pattern; body rows keep single-row truncation.
- */
-export function fitHeaderedRows(header: string, rows: readonly string[], width: number): string[] {
-	return [...wrapTextWithAnsi(header, width), ...rows.map(row => truncateToWidth(row, width, Ellipsis.Omit))];
-}
-
-/**
  * Single-slot memo for an expensive rendered string (syntax highlighting, diff
  * coloring) keyed by the exact inputs that shape the bytes: theme instance,
  * expanded state, a caller-chosen salt (path/language), and the source content.
@@ -1238,7 +1241,7 @@ export function appendParseErrorsBulletList(
 		lines.push(theme.fg("warning", `  - ${err}`));
 	}
 	if (fullCount > capped.length) {
-		lines.push(theme.fg("dim", `  … ${fullCount - capped.length} more`));
+		lines.push(`  ${theme.fg("dim", formatMoreItems(fullCount - capped.length, "parse issue", theme))}`);
 	}
 }
 

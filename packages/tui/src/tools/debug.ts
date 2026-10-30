@@ -5,8 +5,7 @@ import { framedToolCard, plainToolCard, type ToolCardSection } from "../render/t
 import {
 	clipCollapsed,
 	formatErrorText,
-	formatExpandHint,
-	formatMoreItems,
+	formatMoreRow,
 	PREVIEW_LIMITS,
 	replaceTabs,
 	TRUNCATE_LENGTHS,
@@ -237,8 +236,6 @@ export const debugToolRenderer = {
 				.slice(0, previewLimit)
 				.map(line => clipCollapsed(line, TRUNCATE_LENGTHS.LINE, options.expanded));
 			const remaining = outputLines.length - displayedLines.length;
-			const hint = formatExpandHint(theme, options.expanded, remaining > 0);
-			const marker = formatMoreItems(remaining, "line", theme);
 			// Session facts open the frame unlabelled; the output follows under its own bar.
 			const sections: ToolCardSection[] = [];
 			if (sessionLines.length > 0) sections.push({ content: sessionLines });
@@ -251,7 +248,8 @@ export const debugToolRenderer = {
 			return {
 				status: debugStatus(callArgs, partial ? "running" : "success"),
 				phase: partial ? "partial" : "success",
-				footerMeta: remaining > 0 ? theme.fg("dim", hint ? `${marker} ${hint}` : marker) : undefined,
+				footerMeta:
+					remaining > 0 ? formatMoreRow(remaining, "line", theme, { expanded: options.expanded }) : undefined,
 				sections,
 			};
 		});

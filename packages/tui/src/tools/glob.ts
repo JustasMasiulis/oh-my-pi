@@ -16,7 +16,7 @@ import * as path from "node:path";
 import { fileHyperlink, renderFileList } from "../render";
 import type { FileEntry } from "../render/file-list";
 import type { StatusLineOptions } from "../render/status-line";
-import { plainToolCard } from "../render/tool-card";
+import { CardRowsMemo, plainToolCard } from "../render/tool-card";
 import {
 	formatCount,
 	formatErrorText,
@@ -78,8 +78,9 @@ function renderGlobFileRows(files: FileEntry[], expanded: boolean, theme: Theme)
 		theme,
 	);
 	// renderFileList appends its `… N more files` row exactly when collapsed past the cap.
-	if (!expanded && files.length > PREVIEW_LIMITS.COLLAPSED_ITEMS)
+	if (!expanded && files.length > PREVIEW_LIMITS.COLLAPSED_ITEMS) {
 		rows[rows.length - 1] += ` ${formatExpandHint(theme)}`;
+	}
 	return rows;
 }
 
@@ -192,14 +193,11 @@ export const globToolRenderer = {
 
 		const missingRows = formatMissingPathRows(details?.missingPaths ?? [], uiTheme);
 
-		// File rows wrap in the flush card; recomputed only when expansion changes.
-		let memo: { expanded: boolean; rows: readonly string[] } | undefined;
-		const cachedRows = (build: (expanded: boolean) => string[]): readonly string[] => {
-			const expanded = options.expanded;
-			if (memo?.expanded !== expanded) memo = { expanded, rows: build(expanded) };
-			return memo.rows;
-		};
-		const cardOptions = { onInvalidate: () => (memo = undefined), onReleaseRenderCaches: () => (memo = undefined) };
+		// File rows wrap in the flush card; recomputed only when expansion changes (width 0: any width).
+		const memo = new CardRowsMemo();
+		const cachedRows = (build: (expanded: boolean) => string[]): readonly string[] =>
+			memo.rows(0, options.expanded, () => build(options.expanded));
+		const cardOptions = memo.cardOptions;
 
 		if (details?.fileCount === undefined) {
 			const textContent = result.content?.find(c => c.type === "text")?.text;

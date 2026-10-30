@@ -129,7 +129,7 @@ describe("MCP inspector runtime join", () => {
 		expect(collapsed).toContain("title");
 		expect(collapsed).toContain("Issue title");
 		expect(collapsed).not.toContain("1 arg");
-		expect(collapsed).not.toMatch(/args \(.* to expand\)/);
+		expect(collapsed).not.toMatch(/args .*: Expand/);
 
 		const long = connectedSource();
 		const conn = long.getConnection("github")!;
@@ -155,7 +155,7 @@ describe("MCP inspector runtime join", () => {
 		longPanel.setExtension(mcpExtension());
 		const longCollapsed = Bun.stripANSI(longPanel.render(72).join("\n"));
 		expect(longCollapsed).toContain("5 args");
-		expect(longCollapsed).toMatch(/args \(.* to expand\)/);
+		expect(longCollapsed).toMatch(/args .*: Expand/);
 		expect(longCollapsed).not.toMatch(/query\s+string/);
 
 		longPanel.toggleExpanded();
@@ -224,7 +224,7 @@ describe("MCP inspector runtime join", () => {
 		expect(collapsed).not.toContain("resource_19");
 		expect(collapsed).toContain("prompt_0");
 		expect(collapsed).not.toContain("prompt_11");
-		expect(collapsed).toMatch(/more \(.* to expand\)/);
+		expect(collapsed).toMatch(/more .*: Expand/);
 
 		panel.toggleExpanded();
 		const expanded = Bun.stripANSI(panel.render(72).join("\n"));
@@ -303,7 +303,7 @@ describe("MCP inspector runtime join", () => {
 		const other = Bun.stripANSI(panel.render(72).join("\n"));
 		expect(other).toContain("issue_0");
 		expect(other).not.toContain("issue_19");
-		expect(other).toMatch(/more \(.* to expand\)/);
+		expect(other).toMatch(/more .*: Expand/);
 
 		panel.setExtension({ ...mcpExtension() });
 		const back = Bun.stripANSI(panel.render(72).join("\n"));

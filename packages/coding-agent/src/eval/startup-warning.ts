@@ -1,4 +1,5 @@
 import { sanitizeDisplayWarnings } from "@oh-my-pi/pi-tui/render/render-utils";
+import { theme } from "@oh-my-pi/pi-tui/theme";
 import type { Args } from "../cli/args";
 import type { Settings } from "../config/settings";
 import { checkPythonKernelAvailability } from "./py/kernel";
@@ -25,7 +26,7 @@ export async function resolvePythonEvalWarning({
 	const availability = await checkPythonKernelAvailability(cwd, interpreter, { signal });
 	if (availability.ok || signal?.aborted) return undefined;
 	// The reason embeds interpreter paths and spawn errors: shorten home, strip controls, bound length.
-	const [reason] = sanitizeDisplayWarnings([availability.reason ?? "no working Python interpreter"]);
+	const [reason] = sanitizeDisplayWarnings([availability.reason ?? "no working Python interpreter"], theme);
 	return cfgEvalJs.get(settings)
 		? `Python eval unavailable (${reason}); eval will run JavaScript only. ${PYTHON_FIX_HINT}`
 		: `Eval tool unavailable: ${reason}, and JavaScript eval is disabled. ${PYTHON_FIX_HINT}`;

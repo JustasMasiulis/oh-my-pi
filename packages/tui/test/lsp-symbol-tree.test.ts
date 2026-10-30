@@ -10,7 +10,7 @@ beforeAll(async () => {
 });
 
 describe("LSP symbols expanded tree", () => {
-	it("keeps top-level symbols flush and draws branches and rails for nested siblings, including a sibling after a deeper child", () => {
+	it("keeps top-level symbols flush and rails nested siblings, including one after a deeper child", () => {
 		const text = [
 			"Symbols in src/a.ts:",
 			"class Alpha @ line 1",

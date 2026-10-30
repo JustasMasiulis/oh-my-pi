@@ -10,7 +10,7 @@
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage, Usage, UserMessage } from "@oh-my-pi/pi-ai";
-import type { Component, TUI } from "@oh-my-pi/pi-tui";
+import type { Component } from "@oh-my-pi/pi-tui";
 import { ChatTranscriptBuilder } from "@oh-my-pi/pi-tui/chat/chat-transcript-builder";
 import {
 	type AdvisorMessageDetails,
@@ -38,7 +38,7 @@ import { TranscriptNotice } from "@oh-my-pi/pi-tui/chrome/transcript-notice";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import type { DaemonSnapshot } from "@oh-my-pi/pi-tui/tools/daemon";
 import { getProjectDir } from "@oh-my-pi/pi-utils";
-import type { GalleryPreviewEntry } from "./types";
+import { GALLERY_UI, type GalleryPreviewEntry } from "./types";
 
 /**
  * One sample: persisted messages replayed through the transcript builder, or
@@ -53,13 +53,6 @@ interface MessageGallerySpec {
 	label: string;
 	samples: readonly MessageSample[];
 }
-
-/**
- * The builder and its components only call `requestRender`/`requestComponentRender`
- * during a static render; `imageBudget` is read solely when images render, which
- * no sample carries. A cast avoids constructing a real terminal.
- */
-const GALLERY_UI = { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
 
 /** Fixed wall-clock base, so usage rows print the same time on every run. */
 const BASE_TIME = new Date(2026, 6, 28, 21, 4, 0).getTime();
@@ -361,7 +354,14 @@ function messageSpecs(): readonly MessageGallerySpec[] {
 						toolResult(
 							"turn-bash",
 							"bash",
-							"test/terminal-appearance.test.ts:\n(fail) ProcessTerminal > reports its size [5001.42ms]\n  ^ this test timed out after 5000ms.\n\n 0 pass\n 1 fail",
+							[
+								"test/terminal-appearance.test.ts:",
+								"(fail) ProcessTerminal > reports its size [5001.42ms]",
+								"  ^ this test timed out after 5000ms.",
+								"",
+								" 0 pass",
+								" 1 fail",
+							].join("\n"),
 							17,
 							{ exitCode: 1, wallTimeMs: 5_620, timeoutSeconds: 300 },
 						),
@@ -420,7 +420,11 @@ function messageSpecs(): readonly MessageGallerySpec[] {
 					messages: [
 						evalRun(
 							"ratio = hits / total",
-							'Traceback (most recent call last):\n  File "<cell 0>", line 1, in <module>\nZeroDivisionError: division by zero',
+							[
+								"Traceback (most recent call last):",
+								'  File "<cell 0>", line 1, in <module>',
+								"ZeroDivisionError: division by zero",
+							].join("\n"),
 							1,
 						),
 					],

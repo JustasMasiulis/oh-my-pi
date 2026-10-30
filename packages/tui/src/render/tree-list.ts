@@ -93,7 +93,7 @@ export function renderTreeList<T>(options: TreeListOptions<T>, theme: Theme): st
 			roots.push(toItemRow(i));
 		}
 		if (summary !== "") {
-			roots.push({ kind: "summary", text: theme.fg("muted", summary) });
+			roots.push({ kind: "summary", text: theme.fg("dim", summary) });
 		}
 		return renderTreeListRows(roots, theme, options.flush);
 	}

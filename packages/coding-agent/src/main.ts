@@ -94,7 +94,7 @@ import {
 	stopPendingStartupComposer,
 	takeStartupComposerLease,
 } from "./modes/startup-composer";
-import { ensureTheme, initTheme, stopThemeWatcher } from "@oh-my-pi/pi-tui/theme";
+import { ensureTheme, initTheme, stopThemeWatcher, theme } from "@oh-my-pi/pi-tui/theme";
 import type { SubmittedUserInput } from "./modes/types";
 import { createWarpEventBridgeExtension } from "./modes/warp-events";
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
@@ -747,7 +747,7 @@ async function runInteractiveMode(
 		if (advisorConfigWarnings.length > 0) {
 			// Pulled here, not pushed from SessionAdvisors: the constructor-time
 			// `emitNotice` fired before the UI subscribed and was silently lost.
-			mode.showWarning(`WATCHDOG.yml: ${sanitizeDisplayWarnings(advisorConfigWarnings).join("; ")}`);
+			mode.showWarning(`WATCHDOG.yml: ${sanitizeDisplayWarnings(advisorConfigWarnings, theme).join("; ")}`);
 		}
 
 		for (const notify of notifs) {
@@ -2623,7 +2623,7 @@ export async function runRootCommand(
 				createdSession = await createSession({ ...sessionOptions, ...startupContext });
 				notifs.push({
 					kind: "warn",
-					message: `Auto resume skipped: ${sanitizeDisplayWarnings([error.message])[0]}. Started a new session without the saved history.`,
+					message: `Auto resume skipped: ${sanitizeDisplayWarnings([error.message], theme)[0]}. Started a new session without the saved history.`,
 				});
 			}
 			const {

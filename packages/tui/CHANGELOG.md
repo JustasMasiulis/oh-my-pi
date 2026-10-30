@@ -11,10 +11,12 @@
 - Removed `formatAgentStatRun`; use `formatAgentStats`. `ShellRendererConfig` takes a fixed `title` plus `resolveSubject`/`resolveBadge` instead of `resolveTitle`/`showHeader`, the LSP `renderCall` returns a `Component`, and `formatErrorText` keeps every line of the message instead of truncating it.
 - `buildFileMentionBlock` drops its `indent` argument and `FramedMessageOptions` drops `icon`. `buildExecutionFrame` also returns its `bottomBorder`, and `buildStatusFooter` no longer takes `status`/`exitCode`.
 - Divider tees in rounded cards and overlays read the new `boxRound.teeRight`/`boxRound.teeLeft` symbol keys; theme overrides of `boxSharp.teeRight`/`boxSharp.teeLeft` now affect only sharp boxes and tables.
+- Removed `formatMeta`, `fitHeaderedRows`, `markFramedBlockComponent`, `isFramedBlockComponent`, `formatAgentRowMeta` and `setCustomBgFn` on `Text`/`WidthAwareText`, along with the output block's `headerMeta`/`borderColor`/native `tone` options and the output pane's `formatHidden`. `formatExpandHint` drops its `hasMore` argument, `sanitizeDisplayWarnings` requires the theme, `renderNestedTaskResults` takes `(details, expanded, theme)`, and result-card builders return their header as `StatusLineOptions`.
 
 ### Added
 
 - Added a `maxRows` callback to `FigureMarkdown`, `SvgFigure` and `TableChartFigure` so surfaces shorter than the screen can fit their figures; zero hides a figure without delaying transcript completion ([#15661](https://github.com/can1357/oh-my-pi/issues/15661), [#15853](https://github.com/can1357/oh-my-pi/pull/15853) by [@KunoLu](https://github.com/KunoLu))
+- Added `formatMoreRow`, `clipRows`, `nestRows` and `CardRowsMemo` for renderers: a dim `… N more` row with the expand hint, clipped flush rows, tree-nested rows and a width/expansion row memo.
 
 ### Changed
 
@@ -31,19 +33,22 @@
 - Compaction, branch and handoff dividers show the `[Ctrl+O: Expand]` hint until expanded, the expanded summary no longer leaves two blank rows under the divider, and collapsed provider errors end with the shared `… N more lines` row.
 - IRC message cards name the recipient with an arrow (`IRC: → Reviewer`), like incoming and relayed messages, and their delivery badges (`injected`, `revived`, `failed`) are gray.
 - Tool cards and skill prompts that hide detail while collapsed always say so with the `Ctrl+O: Expand` hint: GitHub search results whose rows omit fields, Find's search accounting, Wait's job output, Task results with clipped output, the earlier lines of a streaming Write or Edit (Edit only when expanding widens its tail), the clipped arguments of tools without their own renderer, and a skill message's folded SKILL.md prompt.
-- Tool headers stay on one row: a subject too long for the terminal is cut in its middle, keeping the title, badge and result counts visible instead of wrapping them under the body.
+- Tool headers stay on one row, including compact tool rows, grouped Read headers and `cfg://`/process result cards: a subject too long for the terminal is cut in its middle, keeping the title, badge and result counts visible instead of wrapping them under the body.
 - Glob, Grep and AST Grep headers list `;`-separated search paths as `a, b`, and Glob and Grep give each skipped missing path its own warning row.
 - Grep, AST Grep and AST Edit results label each file with its full path instead of the model-facing `# dir/` and `## file#tag` headers.
 - File paths in tool output share one style: a dim directory and the file name in the custom-message label color (bronze in titanium), with line locations and selectors (`:1-175`, `148:8`, `?q=`) muted. This covers Grep, AST Grep, AST Edit, Glob, Find, LSP, diagnostics, grouped Reads and file mentions; file-type icons are muted, and paths in tool headers stay in the plain subject color.
 - Grouped Read cards show their count as header meta (`Read 4 files`).
 - Search headers dim the `in` between the pattern and its scope (`useState in src`).
 - `… N more` rows and card footers are dim everywhere, like the expand hint; only facts the tool colors itself, such as `+2 -1` or `No output`, stand out.
+- The extension inspector and collapsed synthetic prompts use the shared `[Ctrl+O: Expand]` hint, and the inspector's `… N more` rows name what they hide.
 - A color applied over already-styled text now holds after the inner styling ends, so a footer such as `+2 -1 · … 3 more lines` stays dim past the colored counts.
 
 ### Fixed
 
 - Fixed IME composition text in the BTW history `Follow up:` input appearing at the left edge instead of at the caret when the hardware cursor is enabled ([#17427](https://github.com/can1357/oh-my-pi/issues/17427))
 - Fixed session tree rows overlapping when messages, tool arguments, or labels contain carriage returns or Unicode line/paragraph separators (`U+2028`, `U+2029`), while keeping multiline formatting in the selected entry preview ([#17430](https://github.com/can1357/oh-my-pi/pull/17430) by [@lincicomb](https://github.com/lincicomb)).
+- Fixed MCP tool cards showing pending instead of running on frames without a spinner, and grouped Read rows holding a running and a pending read showing pending.
+- Fixed multi-line Resolve reasons, Goal reports, todo fallback text and process errors running together in one row, and tabs breaking the alignment of IRC cards and Goal objectives.
 
 ## [18.14.0] - 2026-10-29
 

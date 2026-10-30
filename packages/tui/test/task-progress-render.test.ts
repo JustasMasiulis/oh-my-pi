@@ -1,6 +1,5 @@
 import * as os from "node:os";
 import { setFeedModelBadgeEnabled } from "../src/render/render-utils";
-import { setShimmerMode } from "../src/theme/shimmer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { type RenderResultOptions, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
@@ -66,13 +65,11 @@ function findRow(component: { render: (w: number) => readonly string[] }, needle
 describe("task progress rendering", () => {
 	beforeEach(async () => {
 		setFeedModelBadgeEnabled(false);
-		setShimmerMode("classic");
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
 		setFeedModelBadgeEnabled(false);
-		setShimmerMode("classic");
 	});
 
 	it("shortens current and recent path arguments without rewriting search patterns", async () => {
@@ -815,13 +812,11 @@ describe("task progress rendering", () => {
 describe("task result detail-less state", () => {
 	beforeEach(async () => {
 		setFeedModelBadgeEnabled(false);
-		setShimmerMode("classic");
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
 		setFeedModelBadgeEnabled(false);
-		setShimmerMode("classic");
 	});
 
 	it("renders a validation failure with the error glyph, not a success bullet", async () => {

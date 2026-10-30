@@ -77,6 +77,20 @@ export function renderMCPCall(
 	});
 }
 
+/** Header status and card phase of an MCP result, read at render time (the partial flag is live). */
+function mcpResultStatus(
+	result: { details?: MCPToolDetails; isError?: boolean },
+	options: RenderResultOptions,
+): { status: StatusLineOptions; phase: ToolCardPhase } {
+	const isError = result.isError ?? result.details?.isError ?? false;
+	const title = result.details ? `${result.details.serverName}/${result.details.mcpToolName}` : "MCP";
+	let icon: StatusLineOptions["icon"];
+	if (options.isPartial) icon = options.executionStarted ? "running" : "pending";
+	else icon = isError ? "error" : "success";
+	const phase: ToolCardPhase = options.isPartial ? "partial" : isError ? "error" : "success";
+	return { status: { icon, spinnerFrame: options.spinnerFrame, title }, phase };
+}
+
 /** Render an MCP status/args prefix followed by Markdown-aware text output. */
 function renderMarkdownMCPResult(
 	result: { details?: MCPToolDetails; isError?: boolean },
@@ -95,8 +109,6 @@ function renderMarkdownMCPResult(
 	return plainToolCard(
 		theme,
 		({ contentWidth }) => {
-			const isError = result.isError ?? result.details?.isError ?? false;
-			const title = result.details ? `${result.details.serverName}/${result.details.mcpToolName}` : "MCP";
 			if (bodyMemo === undefined || bodyMemo.expanded !== options.expanded || bodyMemo.width !== contentWidth) {
 				bodyMemo = {
 					expanded: options.expanded,
@@ -104,20 +116,7 @@ function renderMarkdownMCPResult(
 					lines: buildMarkdownMcpBody(markdown, truncationWarning, options.expanded, contentWidth, theme, args),
 				};
 			}
-			const body = bodyMemo.lines;
-			const status: StatusLineOptions = {
-				icon: options.isPartial
-					? options.spinnerFrame !== undefined
-						? "running"
-						: "pending"
-					: isError
-						? "error"
-						: "success",
-				spinnerFrame: options.spinnerFrame,
-				title,
-			};
-			const phase: ToolCardPhase = options.isPartial ? "partial" : isError ? "error" : "success";
-			return { status, phase, body };
+			return { ...mcpResultStatus(result, options), body: bodyMemo.lines };
 		},
 		{
 			onInvalidate: () => (bodyMemo = undefined),
@@ -195,24 +194,10 @@ export function renderMCPResult(
 	return plainToolCard(
 		theme,
 		({ contentWidth }) => {
-			const isError = result.isError ?? result.details?.isError ?? false;
-			const title = result.details ? `${result.details.serverName}/${result.details.mcpToolName}` : "MCP";
-			const status: StatusLineOptions = {
-				icon: options.isPartial
-					? options.spinnerFrame !== undefined
-						? "running"
-						: "pending"
-					: isError
-						? "error"
-						: "success",
-				spinnerFrame: options.spinnerFrame,
-				title,
-			};
-			const phase: ToolCardPhase = options.isPartial ? "partial" : isError ? "error" : "success";
 			if (bodyMemo === undefined || bodyMemo.width !== contentWidth) {
 				bodyMemo = { width: contentWidth, lines: buildMcpResultBody(contentWidth) };
 			}
-			return { status, phase, body: bodyMemo.lines };
+			return { ...mcpResultStatus(result, options), body: bodyMemo.lines };
 		},
 		{
 			onInvalidate: () => (bodyMemo = undefined),
@@ -246,7 +231,7 @@ export function renderMCPResult(
 			if (tree.lines.length > 0) {
 				body.push(...tree.lines);
 				if (!expanded) {
-					body.push(formatExpandHint(theme, expanded, true));
+					body.push(formatExpandHint(theme));
 				} else if (tree.truncated) {
 					body.push(theme.fg("dim", theme.format.ellipsis));
 				}

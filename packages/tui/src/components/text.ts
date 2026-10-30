@@ -86,14 +86,6 @@ export class Text implements Component {
 		return true;
 	}
 
-	setCustomBgFn(customBgFn?: (text: string) => string): void {
-		this.#customBgFn = customBgFn;
-		this.#cachedText = undefined;
-		this.#cachedWidth = undefined;
-		this.#cachedWidthConfigEpoch = undefined;
-		this.#cachedLines = undefined;
-	}
-
 	/**
 	 * Supply a foreground styler applied to the text at render time (e.g. a
 	 * theme color resolver). Unlike baking the color into `text`, the styler

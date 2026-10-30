@@ -1,6 +1,12 @@
 import type { Component } from "../tui";
 import type { Theme, ThemeColor } from "../theme/theme";
-import { formatDuration, formatErrorText, formatNumber } from "../render/render-utils";
+import {
+	formatDuration,
+	formatErrorText,
+	formatNumber,
+	replaceTabs,
+	sanitizeDisplayLines,
+} from "../render/render-utils";
 import { truncateToWidth } from "../utils";
 import type { StatusLineOptions } from "../render/status-line";
 import { plainToolCard } from "../render/tool-card";
@@ -64,7 +70,21 @@ function goalBadgeColor(status: GoalStatus): ThemeColor {
 
 /** The goal objective as one muted row: truncated collapsed, whole (the flush card wraps it) expanded. */
 function objectiveRow(uiTheme: Theme, objective: string, width: number, expanded: boolean): string {
-	return uiTheme.fg("muted", expanded ? objective : truncateToWidth(objective, width));
+	const text = replaceTabs(objective);
+	return uiTheme.fg("muted", expanded ? text : truncateToWidth(text, width));
+}
+
+/** Goal usage facts: tokens spent (against the budget, when set), then elapsed time. */
+function goalUsageParts(goal: Goal): string[] {
+	const used = formatNumber(goal.tokensUsed);
+	let tokens = `${used} tokens`;
+	if (goal.tokenBudget !== undefined) {
+		const left = formatNumber(Math.max(0, goal.tokenBudget - goal.tokensUsed));
+		tokens = `${used} / ${formatNumber(goal.tokenBudget)} tokens (${left} left)`;
+	}
+	const parts = [tokens];
+	if (goal.timeUsedSeconds > 0) parts.push(`${formatDuration(goal.timeUsedSeconds * 1000)} elapsed`);
+	return parts;
 }
 
 interface GoalRenderArgs {
@@ -85,14 +105,7 @@ function describeGoalResult(result: ToolRenderResult<GoalToolDetails>, args?: Go
 		span(" "),
 		span(goal.status, `${goalBadgeColor(goal.status)} strong`),
 	];
-	const used = formatNumber(goal.tokensUsed);
-	const left = goal.tokenBudget !== undefined ? Math.max(0, goal.tokenBudget - goal.tokensUsed) : 0;
-	const tokens =
-		goal.tokenBudget !== undefined
-			? `${used} / ${formatNumber(goal.tokenBudget)} tokens (${formatNumber(left)} left)`
-			: `${used} tokens`;
-	const meta = [tokens];
-	if (goal.timeUsedSeconds > 0) meta.push(`${formatDuration(goal.timeUsedSeconds * 1000)} elapsed`);
+	const meta = goalUsageParts(goal);
 	const report = details?.completionBudgetReport;
 	return {
 		head,
@@ -159,14 +172,7 @@ export const goalToolRenderer = {
 			description,
 			badge: { label: goal.status, color: goalBadgeColor(goal.status) },
 		};
-		const used = formatNumber(goal.tokensUsed);
-		const budgetParts = [
-			goal.tokenBudget !== undefined
-				? `${used} / ${formatNumber(goal.tokenBudget)} tokens (${formatNumber(Math.max(0, goal.tokenBudget - goal.tokensUsed))} left)`
-				: `${used} tokens`,
-		];
-		if (goal.timeUsedSeconds > 0) budgetParts.push(`${formatDuration(goal.timeUsedSeconds * 1000)} elapsed`);
-		const budgetLine = uiTheme.fg("dim", budgetParts.join(uiTheme.sep.dot));
+		const budgetLine = uiTheme.fg("dim", goalUsageParts(goal).join(uiTheme.sep.dot));
 		const report = details?.completionBudgetReport;
 
 		return plainToolCard(uiTheme, ({ contentWidth }) => ({
@@ -174,7 +180,7 @@ export const goalToolRenderer = {
 			phase: "success",
 			body: [objectiveRow(uiTheme, goal.objective.trim(), contentWidth, options.expanded), budgetLine],
 			sections: report
-				? [{ label: "Report", content: report.split("\n").map(line => uiTheme.fg("muted", line)) }]
+				? [{ label: "Report", content: sanitizeDisplayLines(report).map(line => uiTheme.fg("muted", line)) }]
 				: undefined,
 		}));
 	},

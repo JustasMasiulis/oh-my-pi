@@ -1,7 +1,7 @@
 import * as os from "node:os";
 import { replaceTabs, truncateToWidth, wrapTextWithAnsi } from "../utils";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
-import { formatExpandHint, formatMoreItems, shortenEmbeddedPaths, TRUNCATE_LENGTHS } from "../render/render-utils";
+import { formatMoreRow, shortenEmbeddedPaths, TRUNCATE_LENGTHS } from "../render/render-utils";
 import { theme } from "../theme/index";
 /** Indent for every row after the first, so continuations hang under the prefix. */
 const CONTINUATION_INDENT = "  ";
@@ -52,9 +52,7 @@ export function formatErrorBlock(
 	if (rows.length > maxRows) {
 		const hidden = rows.length - maxRows;
 		rows.length = maxRows;
-		rows.push(
-			`${CONTINUATION_INDENT}${theme.fg("dim", formatMoreItems(hidden, "line", theme))} ${formatExpandHint(theme)}`,
-		);
+		rows.push(`${CONTINUATION_INDENT}${formatMoreRow(hidden, "line", theme)}`);
 	}
 	return rows.join("\n");
 }

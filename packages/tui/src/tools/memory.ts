@@ -16,7 +16,7 @@ import { Ellipsis, plainToolCard, type StatusLineOptions, truncateToWidth } from
 import {
 	formatErrorText,
 	formatExpandHint,
-	formatMoreItems,
+	formatMoreRow,
 	PREVIEW_LIMITS,
 	replaceTabs,
 	type ToolUIStatus,
@@ -47,9 +47,10 @@ function retainContents(args: RetainRenderArgs | undefined): string[] {
 	return contents;
 }
 
-/** `pending` before execution starts, `running` (spinner) while it executes. */
-function callIcon(options: RenderResultOptions): ToolUIStatus {
-	return options.executionStarted ? "running" : "pending";
+/** Call header: `pending` before execution starts, `running` (spinner) while it executes. */
+function callStatus(title: string, query: string | undefined, options: RenderResultOptions): StatusLineOptions {
+	const icon = options.executionStarted ? "running" : "pending";
+	return memoryStatus(title, query, icon, { spinnerFrame: options.spinnerFrame });
 }
 
 /** Status line for a memory tool: the fixed title and, for recall/reflect, the query as subject. */
@@ -69,15 +70,22 @@ function memoryStatus(
 	};
 }
 
+/** Rows a memory card shows under its header, and the truncation row after them. */
+interface MemoryRows {
+	rows: readonly string[];
+	more?: string;
+}
+
 /** Flush card: the status line, then `rows` clipped to one line each while collapsed, then a truncation row. */
 function memoryCard(
 	theme: Theme,
 	status: StatusLineOptions,
 	options: RenderResultOptions,
-	buildRows: (expanded: boolean) => { rows: string[]; more?: string },
+	buildRows?: (expanded: boolean) => MemoryRows,
 ): Component {
 	return plainToolCard(theme, ({ contentWidth }) => {
 		const { expanded } = options;
+		if (!buildRows) return { status };
 		const { rows, more } = buildRows(expanded);
 		const body = expanded ? [...rows] : rows.map(row => truncateToWidth(row, contentWidth));
 		if (more) body.push(more);
@@ -90,19 +98,38 @@ function memoryErrorCard(theme: Theme, status: StatusLineOptions, message: strin
 	return plainToolCard(theme, () => ({ status, phase: "error", body: [formatErrorText(message, theme)] }));
 }
 
+/** The first `limit` rows, then a dim `… N more <itemType>` row with the expand hint when any are cut. */
+function cappedRows(
+	rows: readonly string[],
+	limit: number,
+	itemType: string,
+	theme: Theme,
+	expanded: boolean,
+): MemoryRows {
+	const shown = rows.slice(0, limit);
+	const remaining = rows.length - shown.length;
+	if (remaining <= 0) return { rows: shown };
+	return { rows: shown, more: formatMoreRow(remaining, itemType, theme, { expanded }) };
+}
+
 /** Stored memories as plain rows (no bullet: it reads as a status glyph in ASCII), clamped while collapsed. */
-function retainRows(contents: string[], theme: Theme): (expanded: boolean) => { rows: string[]; more?: string } {
-	return expanded => {
-		const shown = expanded ? contents : contents.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS);
-		const remaining = contents.length - shown.length;
-		return {
-			rows: shown.map(content => theme.fg("toolOutput", content)),
-			more:
-				remaining > 0
-					? `${theme.fg("dim", formatMoreItems(remaining, "memory", theme))} ${formatExpandHint(theme, expanded, true)}`
-					: undefined,
-		};
-	};
+function retainRows(contents: string[], theme: Theme): (expanded: boolean) => MemoryRows {
+	const rows = contents.map(content => theme.fg("toolOutput", content));
+	return expanded =>
+		cappedRows(rows, expanded ? rows.length : PREVIEW_LIMITS.COLLAPSED_ITEMS, "memory", theme, expanded);
+}
+
+/** Count from recall's `Found N relevant …` summary line; 0 when absent. */
+function recallFoundCount(output: string): number {
+	return Number(output.match(/^Found (\d+) relevant/)?.[1] ?? 0);
+}
+
+/** Recalled memory lines: the output after its summary line, capped at the expanded preview. */
+function recalledMemoryLines(output: string): string[] {
+	return output
+		.replace(/^[^\n]*\n+/, "")
+		.split("\n")
+		.slice(0, PREVIEW_LIMITS.OUTPUT_EXPANDED);
 }
 
 /** Retained memories as a list, clamped to the collapsed item budget. */
@@ -128,9 +155,7 @@ export const retainToolRenderer = {
 	inline: true,
 	mergeCallAndResult: true,
 	renderCall(args: RetainRenderArgs, options: RenderResultOptions, theme: Theme): Component {
-		const status = memoryStatus("Retain", undefined, callIcon(options), {
-			spinnerFrame: options.spinnerFrame,
-		});
+		const status = callStatus("Retain", undefined, options);
 		return memoryCard(theme, status, options, retainRows(retainContents(args), theme));
 	},
 	renderResult(
@@ -171,10 +196,8 @@ export const recallToolRenderer = {
 	inline: true,
 	mergeCallAndResult: true,
 	renderCall(args: QueryRenderArgs, options: RenderResultOptions, theme: Theme): Component {
-		const status = memoryStatus("Recall", args.query, callIcon(options), {
-			spinnerFrame: options.spinnerFrame,
-		});
-		return memoryCard(theme, status, options, () => ({ rows: [] }));
+		const status = callStatus("Recall", args.query, options);
+		return memoryCard(theme, status, options);
 	},
 	renderResult(
 		result: { content: Array<{ type: string; text?: string }>; isError?: boolean },
@@ -187,20 +210,16 @@ export const recallToolRenderer = {
 			return memoryErrorCard(theme, status, resultText(result).trim() || "Recall failed");
 		}
 		const text = resultText(result).trim();
-		const found = Number(text.match(/^Found (\d+) relevant/)?.[1] ?? 0);
+		const found = recallFoundCount(text);
 		const status = memoryStatus("Recall", args?.query, found > 0 ? "success" : "warning", {
 			meta: [`${found} found`],
 		});
-		if (found === 0) return memoryCard(theme, status, options, () => ({ rows: [] }));
+		if (found === 0) return memoryCard(theme, status, options);
 		// Collapsed view is the header and the expand hint; expanding reveals the
 		// recalled memories without dumping the whole block into the transcript.
-		const memoryLines = text
-			.replace(/^[^\n]*\n+/, "")
-			.split("\n")
-			.slice(0, PREVIEW_LIMITS.OUTPUT_EXPANDED)
-			.map(line => theme.fg("muted", replaceTabs(line)));
+		const memoryLines = recalledMemoryLines(text).map(line => theme.fg("muted", replaceTabs(line)));
 		return memoryCard(theme, status, options, expanded =>
-			expanded ? { rows: memoryLines } : { rows: [], more: formatExpandHint(theme, false, true) },
+			expanded ? { rows: memoryLines } : { rows: [], more: formatExpandHint(theme) },
 		);
 	},
 	describeCall(args: QueryRenderArgs): NativeToolView {
@@ -215,14 +234,10 @@ export const recallToolRenderer = {
 			const query = args?.query?.trim();
 			const output = resultText(result).trim();
 			if (result.isError) return { ...errorView("Recall", output || "Recall failed", query), inline: true };
-			const found = Number(output.match(/^Found (\d+) relevant/)?.[1] ?? 0);
+			const found = recallFoundCount(output);
 			if (found === 0) return { head: toolHead("Recall", query, "no matches"), tone: "warning", inline: true };
 			// Collapsed keeps to the header; expanding reveals the recalled memories.
-			const memories = output
-				.replace(/^[^\n]*\n+/, "")
-				.split("\n")
-				.slice(0, PREVIEW_LIMITS.OUTPUT_EXPANDED)
-				.join("\n");
+			const memories = recalledMemoryLines(output).join("\n");
 			return {
 				head: toolHead("Recall", query, `${found} found`),
 				inline: true,
@@ -238,10 +253,8 @@ export const reflectToolRenderer = {
 	inline: true,
 	mergeCallAndResult: true,
 	renderCall(args: QueryRenderArgs, options: RenderResultOptions, theme: Theme): Component {
-		const status = memoryStatus("Reflect", args.query, callIcon(options), {
-			spinnerFrame: options.spinnerFrame,
-		});
-		return memoryCard(theme, status, options, () => ({ rows: [] }));
+		const status = callStatus("Reflect", args.query, options);
+		return memoryCard(theme, status, options);
 	},
 	renderResult(
 		result: { content: Array<{ type: string; text?: string }>; isError?: boolean },
@@ -260,18 +273,8 @@ export const reflectToolRenderer = {
 			.filter(line => line.trim().length > 0)
 			.map(line => theme.fg("toolOutput", replaceTabs(line)));
 		return memoryCard(theme, status, options, expanded => {
-			const shown = answerLines.slice(
-				0,
-				expanded ? PREVIEW_LIMITS.OUTPUT_EXPANDED : PREVIEW_LIMITS.OUTPUT_COLLAPSED,
-			);
-			const remaining = answerLines.length - shown.length;
-			return {
-				rows: shown,
-				more:
-					remaining > 0
-						? `${theme.fg("dim", formatMoreItems(remaining, "line", theme))} ${formatExpandHint(theme, expanded, true)}`
-						: undefined,
-			};
+			const limit = expanded ? PREVIEW_LIMITS.OUTPUT_EXPANDED : PREVIEW_LIMITS.OUTPUT_COLLAPSED;
+			return cappedRows(answerLines, limit, "line", theme, expanded);
 		});
 	},
 	describeCall(args: QueryRenderArgs): NativeToolView {

@@ -24,7 +24,7 @@ import type { StatusLineOptions } from "../render/status-line";
 import { framedToolCard, plainToolCard } from "../render/tool-card";
 import { wrapPrefixedLine } from "../render/hanging-wrap";
 
-import { formatErrorText, pluralize, sanitizeCarriageReturns } from "../render/render-utils";
+import { formatCount, formatErrorText, sanitizeCarriageReturns } from "../render/render-utils";
 
 /** Result for a single question */
 export interface QuestionResult {
@@ -237,12 +237,13 @@ function renderQuestionOptionLines(
 function questionFlags(multi: boolean | undefined, optionCount: number): string[] {
 	const flags: string[] = [];
 	if (multi) flags.push("multi");
-	if (optionCount > 0) flags.push(`${optionCount} ${pluralize("option", optionCount)}`);
+	if (optionCount > 0) flags.push(formatCount("option", optionCount));
 	return flags;
 }
 
-/** Dim `multi · 3 options` flags, or undefined when there are none. */
-function formatFlags(uiTheme: Theme, flags: readonly string[]): string | undefined {
+/** Dim `multi · 3 options` footer flags, or undefined when there are none. */
+function formatQuestionFlags(uiTheme: Theme, multi: boolean | undefined, optionCount: number): string | undefined {
+	const flags = questionFlags(multi, optionCount);
 	return flags.length > 0 ? uiTheme.fg("dim", flags.join(uiTheme.sep.dot)) : undefined;
 }
 
@@ -272,9 +273,14 @@ function timedOutNotice(uiTheme: Theme): string {
 }
 
 /** Header subject: the lone question's id, or the question count. */
-function askSubject(ids: readonly string[]): string | undefined {
-	if (ids.length === 0) return undefined;
-	return ids.length === 1 ? ids[0] : `${ids.length} questions`;
+function askSubject(questions: readonly { id: string }[] | undefined): string | undefined {
+	if (!questions || questions.length === 0) return undefined;
+	return questions.length === 1 ? questions[0].id : formatCount("question", questions.length);
+}
+
+/** A dismissed prompt reports a cancellation: a cancel, not a failure. */
+function isCancelMessage(message: string): boolean {
+	return /\bcancel/i.test(message);
 }
 
 /**
@@ -398,7 +404,7 @@ function describeAskCall(args: AskRenderArgs): NativeToolView {
 	const questions = normalizeRenderQuestions(args.questions);
 	const legacyQuestion = typeof args.question === "string" ? args.question : undefined;
 	return {
-		tool: askHead(askSubject(questions?.map(q => q.id) ?? []) ?? legacyQuestion),
+		tool: askHead(askSubject(questions) ?? legacyQuestion),
 		inline: true,
 		body: [text([span("Waiting for your answer…", "muted")])],
 	};
@@ -408,12 +414,12 @@ function describeAskResult(result: ToolRenderResult<AskToolDetails>, args: AskRe
 	const rawDetails = result.details;
 	const fallback = plainText(sanitizeCarriageReturns(resultText(result)));
 	const argSubject =
-		askSubject(normalizeRenderQuestions(args?.questions)?.map(q => q.id) ?? []) ??
+		askSubject(normalizeRenderQuestions(args?.questions)) ??
 		(typeof args?.question === "string" ? args.question : undefined);
 	if (result.isError) {
 		return {
 			tool: askHead(argSubject),
-			tone: /\bcancel/i.test(fallback) ? "warning" : "error",
+			tone: isCancelMessage(fallback) ? "warning" : "error",
 			body: fallback ? [noteText(fallback)] : undefined,
 		};
 	}
@@ -438,7 +444,7 @@ function describeAskResult(result: ToolRenderResult<AskToolDetails>, args: AskRe
 				r.customInput !== undefined || r.note !== undefined || (r.selectedOptions && r.selectedOptions.length > 0),
 		);
 		return {
-			tool: askHead(askSubject(results.map(r => r.id))),
+			tool: askHead(askSubject(results)),
 			tone: answered ? undefined : "warning",
 			// Sanitizing preserves order and length, so raw indices align with `r`.
 			body: results.map((r, index) =>
@@ -514,12 +520,12 @@ export const askToolRenderer = {
 			const status: StatusLineOptions = {
 				icon,
 				title: "Ask",
-				description: askSubject(questions.map(q => q.id)),
+				description: askSubject(questions),
 			};
 			// One question: its id is the header subject and its flags the footer.
 			// Several: each question is tagged with its id and flags, divided by separators.
 			const lone = questions.length === 1 ? questions[0] : undefined;
-			const footerMeta = lone ? formatFlags(uiTheme, questionFlags(lone.multi, lone.options.length)) : undefined;
+			const footerMeta = lone ? formatQuestionFlags(uiTheme, lone.multi, lone.options.length) : undefined;
 			return framedToolCard(uiTheme, ({ contentWidth }) => ({
 				status,
 				phase: "pending",
@@ -548,7 +554,7 @@ export const askToolRenderer = {
 		const question = sanitizeCarriageReturns(args.question);
 		const questionOptions = normalizeRenderOptions(args.options) ?? [];
 		const multi = args.multi;
-		const footerMeta = formatFlags(uiTheme, questionFlags(multi, questionOptions.length));
+		const footerMeta = formatQuestionFlags(uiTheme, multi, questionOptions.length);
 		return framedToolCard(uiTheme, ({ contentWidth }) => ({
 			status: { icon, title: "Ask" },
 			phase: "pending",
@@ -570,12 +576,12 @@ export const askToolRenderer = {
 		const mdTheme = getMarkdownTheme();
 		const text = result.content.find(content => content.type === "text")?.text;
 		const fallback = text ? sanitizeCarriageReturns(text) : "";
-		const argSubject = askSubject(normalizeRenderQuestions(args?.questions)?.map(q => q.id) ?? []);
+		const argSubject = askSubject(normalizeRenderQuestions(args?.questions));
 
 		if (result.isError) {
 			// The user dismissing the prompt is a cancel, not a failure.
 			const message = fallback || "Ask failed";
-			const cancelled = /\bcancel/i.test(message);
+			const cancelled = isCancelMessage(message);
 			return plainToolCard(uiTheme, () => ({
 				status: { icon: cancelled ? "aborted" : "error", title: "Ask", description: argSubject },
 				phase: cancelled ? "warning" : "error",
@@ -628,7 +634,7 @@ export const askToolRenderer = {
 				status: {
 					icon: attention ? "warning" : "success",
 					title: "Ask",
-					description: askSubject(results.map(r => r.id)),
+					description: askSubject(results),
 				},
 				phase: attention ? "warning" : "success",
 				sections: results.map((r, index) => {

@@ -4,25 +4,24 @@
  * its strongest verified line ranges with a verbatim snippet.
  */
 import * as path from "node:path";
-import { Ellipsis } from "@oh-my-pi/pi-natives";
 import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
 import { renderProgressBar } from "../components/progress-bar";
-import { fileHyperlink, getTreeBranch, uriHyperlink } from "../render";
+import { fileHyperlink, nestRows, uriHyperlink } from "../render";
 import type { StatusLineOptions } from "../render/status-line";
-import { plainToolCard } from "../render/tool-card";
+import { CardRowsMemo, plainToolCard } from "../render/tool-card";
 import {
+	clipRows,
 	FILE_NAME_COLOR,
 	formatCount,
 	formatErrorText,
 	formatExpandHint,
-	formatMoreItems,
+	formatMoreRow,
 	formatScopedSubject,
 	formatStyledPath,
 	PREVIEW_LIMITS,
 	replaceTabs,
 	type ToolUIStatus,
 } from "../render/render-utils";
-import { truncateToWidth } from "../utils";
 import type { Theme, ThemeColor } from "../theme/theme";
 import type { Component } from "../tui";
 import type { OutputMeta } from "./output-meta";
@@ -178,16 +177,15 @@ function renderHit(hit: FindHit, rangeLimit: number, cwd: string | undefined, ra
 	const coverage = hit.truncated ? `${hit.linesSeen} lines judged, partial` : `${hit.linesSeen} lines judged`;
 	const label = isUrlHit ? theme.fg(FILE_NAME_COLOR, hit.rel) : formatStyledPath(hit.rel, theme);
 	const score = theme.fg(scoreColor(hit.contentScore), hit.contentScore.toFixed(2));
-	const lines = [`${gauge(hit.contentScore, theme)} ${score} ${link(label)} ${theme.fg("dim", coverage)}`];
+	const head = `${gauge(hit.contentScore, theme)} ${score} ${link(label)} ${theme.fg("dim", coverage)}`;
 	const ranges = [...hit.ranges].sort((a, b) => b.p - a.p || a.start - b.start).slice(0, rangeLimit);
-	ranges.forEach((range, index) => {
+	const rangeRows = ranges.map(range => {
 		const span = range.start === range.end ? String(range.start) : `${range.start}-${range.end}`;
 		const ref = link(theme.fg("muted", `:${span}`), range.start);
 		const snippet = theme.fg("toolOutput", replaceTabs(range.snippet.trim()));
-		const branch = theme.fg("dim", getTreeBranch(index === ranges.length - 1, theme));
-		lines.push(`${branch} ${ref} ${theme.fg("dim", range.p.toFixed(2))} ${snippet}`);
+		return `${ref} ${theme.fg("dim", range.p.toFixed(2))} ${snippet}`;
 	});
-	return lines;
+	return [head, ...nestRows(rangeRows, theme)];
 }
 
 function scoreTone(p: number): TspTone {
@@ -318,15 +316,15 @@ export const findToolRenderer = {
 		if (failed) meta.push(failed);
 
 		// Rows are clipped, never wrapped; recomputed only when width or expansion changes.
-		let memo: { width: number; expanded: boolean; rows: readonly string[] } | undefined;
+		const memo = new CardRowsMemo();
 		return plainToolCard(
 			uiTheme,
 			() => ({
 				status: status(failed ? "warning" : "success", meta),
 				phase: failed ? "warning" : "success",
-				body: width => {
-					const expanded = options.expanded;
-					if (memo?.width !== width || memo.expanded !== expanded) {
+				body: width =>
+					memo.rows(width, options.expanded, () => {
+						const expanded = options.expanded;
 						const rangeLimit = expanded ? RANGES_EXPANDED : RANGES_COLLAPSED;
 						const rows: string[] = [];
 						let shown = 0;
@@ -335,25 +333,22 @@ export const findToolRenderer = {
 							const hitRows = renderHit(hit, rangeLimit, linkTargets.cwd, linkTargets.rel(hit, index), uiTheme);
 							// Collapsed rows stay within the line budget, keeping one row for the `… N more hits` summary.
 							const reserve = index < hits.length - 1 ? 1 : 0;
-							if (!expanded && shown > 0 && rows.length + hitRows.length + reserve > COLLAPSED_LINE_BUDGET)
-								break;
+							const overBudget = rows.length + hitRows.length + reserve > COLLAPSED_LINE_BUDGET;
+							if (!expanded && shown > 0 && overBudget) break;
 							rows.push(...hitRows);
 							shown++;
 						}
 						if (shown < hits.length) {
-							const more = uiTheme.fg("dim", formatMoreItems(hits.length - shown, "hit", uiTheme));
-							rows.push(`${more} ${formatExpandHint(uiTheme)}`);
+							rows.push(formatMoreRow(hits.length - shown, "hit", uiTheme));
 						} else if (!expanded) {
 							// The search accounting (and any further ranges) only shows expanded.
 							rows.push(formatExpandHint(uiTheme));
 						}
 						if (expanded) rows.push(uiTheme.fg("dim", accounting), ...failures);
-						memo = { width, expanded, rows: rows.map(row => truncateToWidth(row, width, Ellipsis.Omit)) };
-					}
-					return memo.rows;
-				},
+						return clipRows(rows, width);
+					}),
 			}),
-			{ onInvalidate: () => (memo = undefined), onReleaseRenderCaches: () => (memo = undefined) },
+			memo.cardOptions,
 		);
 	},
 	describeCall(args: FindRenderArgs): NativeToolView {

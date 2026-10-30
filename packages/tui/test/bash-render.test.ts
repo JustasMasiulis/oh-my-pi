@@ -299,7 +299,9 @@ describe("bashToolRenderer", () => {
 		};
 		const options = { expanded: false, isPartial: false };
 		const args = { command: "mkdir -p out" };
-		const rendered = sanitizeText(bashToolRenderer.renderResult(result, options, uiTheme, args).render(120).join("\n"));
+		const rendered = sanitizeText(
+			bashToolRenderer.renderResult(result, options, uiTheme, args).render(120).join("\n"),
+		);
 		expect(rendered).not.toContain("(no output)");
 		expect(rendered).not.toContain("Output ");
 		expect(rendered.split("\n").at(-1)).toContain(`No output${uiTheme.sep.dot}1.5s${uiTheme.sep.dot}Timeout: 300s`);

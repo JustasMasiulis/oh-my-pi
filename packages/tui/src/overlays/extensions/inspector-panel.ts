@@ -16,7 +16,15 @@ import { Section } from "../../components/section";
 import { renderTableRow } from "../../components/table";
 import { theme } from "../../theme";
 import { divider } from "../../chrome/overlay-box";
-import { expandKeyHint, PREVIEW_LIMITS, replaceTabs, shortenPath } from "../../render/render-utils";
+import {
+	expandHintLabel,
+	formatExpandHint,
+	formatMoreItems,
+	formatMoreRow,
+	PREVIEW_LIMITS,
+	replaceTabs,
+	shortenPath,
+} from "../../render/render-utils";
 import {
 	sanitizeDisplayField,
 	sanitizeDisplayLine,
@@ -238,12 +246,13 @@ export class InspectorPanel implements Component {
 		const cut = !this.#expanded && lines.length > PREVIEW_LINE_BUDGET;
 		const shown = cut ? lines.slice(0, PREVIEW_LINE_BUDGET - 1) : lines;
 		const children: NativeChild[] = [code(shown.join("\n"), { lang: "md", wrap: true })];
-		if (cut) children.push(this.#nativeMore(lines.length - shown.length, "lines"));
+		if (cut) children.push(this.#nativeMore(lines.length - shown.length, "line"));
 		return this.#nativeSection(heading, children);
 	}
 
+	/** The native `… N more X [Ctrl+O: Expand]` row; spans carry no theme fg, so the hint is the plain label. */
 	#nativeMore(hidden: number, noun: string): NativeNode {
-		return text([span(`… ${hidden} more ${noun} (${expandKeyHint()} to expand)`, "dim")]);
+		return text([span(`${formatMoreItems(hidden, noun, theme)} ${expandHintLabel(theme)}`, "dim")]);
 	}
 
 	/** Tool/argument rows: name, type and required flag, then the description. */
@@ -281,17 +290,17 @@ export class InspectorPanel implements Component {
 				description ? text(sanitizeDisplayText(description), { wrap: "word" }) : undefined,
 				inline
 					? this.#nativeParams(params)
-					: text([span(`${params.length} args (${expandKeyHint()} to expand)`, "dim")]),
+					: text([span(`${params.length} args ${expandHintLabel(theme)}`, "dim")]),
 			]),
 			{ gap: "xs" },
 		);
 	}
 
 	/** A name-only catalog (MCP resources/prompts) under its budget until expanded. */
-	#nativeNameList(head: string, entries: MCPRuntimeCatalogItem[]): NativeNode {
+	#nativeNameList(head: string, noun: string, entries: MCPRuntimeCatalogItem[]): NativeNode {
 		const { shown, hidden } = visibleMcpTools(entries, this.#expanded ? entries.length : MCP_TOOL_BUDGET);
 		const children: NativeChild[] = shown.map(entry => text([span(entry.name, "accent mono")]));
-		if (hidden > 0) children.push(this.#nativeMore(hidden, ""));
+		if (hidden > 0) children.push(this.#nativeMore(hidden, noun));
 		return this.#nativeSection(head, children);
 	}
 
@@ -426,7 +435,9 @@ export class InspectorPanel implements Component {
 		const shown = items.slice(0, cap).map(item => sanitizeDisplayText(item));
 		const hidden = items.length - shown.length;
 		const spans: TspSpan[] = [span(shown.join("\n"), "accent")];
-		if (hidden > 0) spans.push(span(`\n… ${hidden} more (${expandKeyHint()} to expand)`, "dim"));
+		if (hidden > 0) {
+			spans.push(span(`\n${formatMoreItems(hidden, "pattern", theme)} ${expandHintLabel(theme)}`, "dim"));
+		}
 		return spans;
 	}
 
@@ -463,11 +474,13 @@ export class InspectorPanel implements Component {
 			const entries: NativeChild[] = shown.map(tool =>
 				this.#nativeCatalogEntry(tool.name, tool.title, tool.description, tool.parameters),
 			);
-			if (hidden > 0) entries.push(this.#nativeMore(hidden, "tools"));
+			if (hidden > 0) entries.push(this.#nativeMore(hidden, "tool"));
 			sections.push(this.#nativeSection("Tools", entries));
 		}
-		if (snap && snap.resources.length > 0) sections.push(this.#nativeNameList("Resources", snap.resources));
-		if (snap && snap.prompts.length > 0) sections.push(this.#nativeNameList("Prompts", snap.prompts));
+		if (snap && snap.resources.length > 0) {
+			sections.push(this.#nativeNameList("Resources", "resource", snap.resources));
+		}
+		if (snap && snap.prompts.length > 0) sections.push(this.#nativeNameList("Prompts", "prompt", snap.prompts));
 		return {
 			title: snap?.title,
 			description: snap?.description,
@@ -582,10 +595,10 @@ export class InspectorPanel implements Component {
 				toolsBody.push("");
 			}
 			if (hidden > 0) {
-				toolsBody.push(theme.fg("dim", `  … ${hidden} more (${expandKeyHint()} to expand)`));
+				toolsBody.push(`  ${formatMoreRow(hidden, "tool", theme)}`);
 				toolsBody.push("");
 			} else if (collapsedArgs) {
-				toolsBody.push(theme.fg("dim", `  … args (${expandKeyHint()} to expand)`));
+				toolsBody.push(`  ${theme.fg("dim", `${theme.format.ellipsis} args`)} ${formatExpandHint(theme)}`);
 				toolsBody.push("");
 			}
 			contents.push(...this.#section("Tools", toolsBody, width));
@@ -600,9 +613,7 @@ export class InspectorPanel implements Component {
 			for (const resource of shown) {
 				resourcesBody.push(`  ${theme.fg("accent", resource.name)}`);
 			}
-			if (hidden > 0) {
-				resourcesBody.push(theme.fg("dim", `  … ${hidden} more (${expandKeyHint()} to expand)`));
-			}
+			if (hidden > 0) resourcesBody.push(`  ${formatMoreRow(hidden, "resource", theme)}`);
 			resourcesBody.push("");
 			contents.push(...this.#section("Resources", resourcesBody, width));
 		}
@@ -616,9 +627,7 @@ export class InspectorPanel implements Component {
 			for (const prompt of shown) {
 				promptsBody.push(`  ${theme.fg("accent", prompt.name)}`);
 			}
-			if (hidden > 0) {
-				promptsBody.push(theme.fg("dim", `  … ${hidden} more (${expandKeyHint()} to expand)`));
-			}
+			if (hidden > 0) promptsBody.push(`  ${formatMoreRow(hidden, "prompt", theme)}`);
 			promptsBody.push("");
 			contents.push(...this.#section("Prompts", promptsBody, width));
 		}
@@ -669,7 +678,7 @@ export class InspectorPanel implements Component {
 				factoryBody.push("");
 			}
 			if (collapsedArgs) {
-				factoryBody.push(theme.fg("dim", `  … args (${expandKeyHint()} to expand)`));
+				factoryBody.push(`  ${theme.fg("dim", `${theme.format.ellipsis} args`)} ${formatExpandHint(theme)}`);
 				factoryBody.push("");
 			}
 			surface.push(...this.#section("Tools", factoryBody, width));
@@ -864,9 +873,7 @@ export class InspectorPanel implements Component {
 			lines.push(...wrapped);
 		} else {
 			lines.push(...wrapped.slice(0, MCP_INLINE_DESC_LINES));
-			lines.push(
-				theme.fg("dim", `  … ${wrapped.length - MCP_INLINE_DESC_LINES} more (${expandKeyHint()} to expand)`),
-			);
+			lines.push(`  ${formatMoreRow(wrapped.length - MCP_INLINE_DESC_LINES, "line", theme)}`);
 		}
 		lines.push("");
 	}
@@ -910,7 +917,7 @@ export class InspectorPanel implements Component {
 		if (hidden > 0) {
 			this.#pushLabeled(lines, label, `${items.length} patterns`, width, "dim");
 			for (const item of shown) this.#pushWrapped(lines, item, width, indent);
-			lines.push(theme.fg("dim", `${indent}… ${hidden} more (${expandKeyHint()} to expand)`));
+			lines.push(`${indent}${formatMoreRow(hidden, "pattern", theme)}`);
 			return;
 		}
 		this.#pushLabeled(lines, label, shown[0] ?? "", width);
@@ -962,7 +969,7 @@ export class InspectorPanel implements Component {
 		}
 		const shownBudget = Math.max(1, budget - 1);
 		lines.push(...wrapped.slice(0, shownBudget));
-		lines.push(theme.fg("dim", `  … ${wrapped.length - shownBudget} more (${expandKeyHint()} to expand)`));
+		lines.push(`  ${formatMoreRow(wrapped.length - shownBudget, "line", theme)}`);
 	}
 
 	#highlightMarkdown(line: string): string {

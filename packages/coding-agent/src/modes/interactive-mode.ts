@@ -14,7 +14,7 @@ import type {
 	Component,
 	EditorTheme,
 	KeyId,
-	LoaderMessageColorFn,
+	Loader,
 	OverlayHandle,
 	SlashCommand,
 } from "@oh-my-pi/pi-tui";
@@ -24,7 +24,6 @@ import {
 	getComposerStyle,
 	getPaddingX,
 	getWidthConfigEpoch,
-	Loader,
 	Markdown,
 	Spacer,
 	setTerminalTextSizing,
@@ -54,7 +53,7 @@ import { describeSegmentTrack, renderSegmentTrack, type TrackSegment } from "@oh
 import type { WorkingRowSpec } from "@oh-my-pi/pi-tui/components/loader";
 import { formatDoubleTap } from "@oh-my-pi/pi-tui/key-hint-format";
 import { thinkingLevelWord } from "@oh-my-pi/pi-tui/status-line/segments";
-import type { TspChecklistItem, TspChecklistPhase, TspSpan, TspText, TspTreeNode } from "@oh-my-pi/pi-wire";
+import type { TspText } from "@oh-my-pi/pi-wire";
 import { isInsideTerminalMultiplexer } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import {
 	$env,
@@ -207,9 +206,7 @@ import {
 	type TodoHudStateEntryData,
 } from "../tools/todo";
 import {
-	formatPhaseDisplayName,
 	isClosedTodo,
-	selectCollapsedTodos,
 	setActiveTodoDescriptionsProvider,
 	todoMatchesAnyDescription,
 } from "@oh-my-pi/pi-tui/tools/todo";
@@ -333,10 +330,16 @@ import {
 	SessionObserverRegistry,
 } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
 import { createSessionTeardown, type SessionTeardown } from "./session-teardown";
-import { sanitizeStatusText } from "@oh-my-pi/pi-tui/chrome/shared";
+import {
+	createWorkingLoader,
+	DEFAULT_WORKING_MESSAGE,
+	formatWorkingRowTrailer,
+	NATIVE_ACCENT_SHIMMER,
+	type WorkingMessageAccent,
+} from "./working-row";
 import { invokeSkillCommandFromText, isKnownSkillCommand } from "./skill-command";
+import { formatTodoHudLine, renderTodoHud } from "./todo-hud";
 import { clearMermaidCache } from "@oh-my-pi/pi-tui/theme/mermaid-cache";
-import { type ShimmerPalette, shimmerEnabled, shimmerText } from "@oh-my-pi/pi-tui/theme/shimmer";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import {
 	getEditorTheme,
@@ -516,38 +519,10 @@ const JUDGMENT_BATCH_PROGRESS_RETAIN_MS = 1_000;
 const COMPOSER_STATUS_PERSIST_DELAY_MS = 1_000;
 /** Status-line slot of the link-hint mode prompt; the `omp:` prefix keeps it apart from extension keys. */
 const LINK_HINT_STATUS_KEY = "omp:link-hints";
-const DEFAULT_WORKING_MESSAGE = "Working…";
-/** Native working-message shimmer under a session accent: the hue itself is the terminal's `accent`. */
-const NATIVE_ACCENT_SHIMMER: ShimmerPalette = { low: "dim", mid: "accent", high: "accent", bold: true };
-
-interface WorkingMessageAccent {
-	main: string;
-	dim: string;
-	/**
-	 * Interned shimmer palette for this accent so `compile()` inside
-	 * `shimmerText` sees a stable palette object between animation ticks.
-	 * A fresh palette literal every frame guaranteed a cache miss on the
-	 * Symbol-keyed compiled-ANSI slot and forced `resolveTierAnsi` to walk
-	 * every tier open/close for the ~30fps loader redraw (issue #4377).
-	 */
-	palette?: ShimmerPalette;
-}
-
 interface WorkingMessageAccentCacheKey {
 	sessionName: string | undefined;
 	accentSurfaceLuminance: number | undefined;
 	sessionAccentEnabled: boolean;
-}
-
-function renderWorkingMessage(message: string, accent?: WorkingMessageAccent): string {
-	if (!accent) return shimmerText(message, theme);
-	accent.palette ??= {
-		low: "dim",
-		mid: { ansi: accent.main },
-		high: { ansi: accent.main },
-		bold: true,
-	};
-	return shimmerText(message, theme, accent.palette);
 }
 
 const EDITOR_MAX_HEIGHT_MIN = 6;
@@ -572,28 +547,6 @@ export function computeEditorMaxHeight(terminalRows: number): number {
 	const rows = Number.isFinite(terminalRows) && terminalRows > 0 ? terminalRows : EDITOR_FALLBACK_ROWS;
 	const comfortable = Math.max(EDITOR_MAX_HEIGHT_MIN, Math.min(EDITOR_MAX_HEIGHT_MAX, rows - EDITOR_RESERVED_ROWS));
 	return Math.max(EDITOR_MIN_RENDERED_ROWS, Math.min(comfortable, rows - EDITOR_MIN_CHROME_ROWS));
-}
-
-const HUD_NOTE_SUP_DIGITS: Record<string, string> = {
-	"0": "\u2070",
-	"1": "\u00b9",
-	"2": "\u00b2",
-	"3": "\u00b3",
-	"4": "\u2074",
-	"5": "\u2075",
-	"6": "\u2076",
-	"7": "\u2077",
-	"8": "\u2078",
-	"9": "\u2079",
-};
-
-function formatHudNoteMarker(count: number): string {
-	if (count <= 0) return "";
-	const sub = String(count)
-		.split("")
-		.map(d => HUD_NOTE_SUP_DIGITS[d] ?? d)
-		.join("");
-	return theme.fg("dim", chalk.italic(` \u207a${sub}`));
 }
 
 type GoalSubcommand = "set" | "show" | "pause" | "resume" | "drop" | "budget";
@@ -980,7 +933,8 @@ class DeferredCommandPreview implements Component {
 		}
 		const shown = rows.slice(0, Math.max(1, this.maxRows - 1));
 		const hidden = rows.length - shown.length;
-		shown.push(theme.fg("dim", `… ${hidden} more rows — ${queued} shown in full when the agent pauses`));
+		const moreRows = formatMoreItems(hidden, "row", theme);
+		shown.push(theme.fg("dim", `${moreRows} — ${queued} shown in full when the agent pauses`));
 		return shown;
 	}
 }
@@ -1186,10 +1140,7 @@ function renderSubagentToolPreview(session: ObservableSession, width: number): s
 	const elapsedWidth = visibleWidth(elapsedLabel);
 	const hook = `${theme.fg("dim", theme.tree.hook)} `;
 	// Between calls the row keeps the last call, marked with how it ended.
-	const status =
-		!currentTool && recent
-			? `${theme.styledSymbol(recent.isError ? "status.error" : "status.success", recent.isError ? "error" : "success")} `
-			: "";
+	const status = !currentTool && recent ? `${formatStatusIcon(recent.isError ? "error" : "success", theme)} ` : "";
 	const prefixWidth = visibleWidth(hook) + visibleWidth(status);
 	// Reserve the elapsed marker first, then cap the tool name; the detail gets whatever is left.
 	const shortTool = truncateToWidth(replaceTabs(tool), Math.max(0, width - prefixWidth - elapsedWidth), "");
@@ -1294,21 +1245,14 @@ export function renderSubagentHudLines(
 		},
 		theme,
 	);
+	const toggleLabel =
+		layout.toggle === "expand"
+			? `${formatMoreItems(running.length - layout.itemRows, "agent", theme)}${theme.sep.dot}expand`
+			: `${theme.format.ellipsis} show less`;
 	const toggleRow =
 		layout.toggle === undefined
 			? []
-			: [
-					truncateToWidth(
-						`${outerIndent}${theme.fg(
-							"dim",
-							layout.toggle === "expand"
-								? `${formatMoreItems(running.length - layout.itemRows, "agent", theme)}${theme.sep.dot}expand`
-								: `${theme.format.ellipsis} show less`,
-						)}`,
-						contentColumns,
-						"",
-					),
-				];
+			: [truncateToWidth(`${outerIndent}${theme.fg("dim", toggleLabel)}`, contentColumns, "")];
 	const itemLines: string[] = [];
 	let cursor = 0;
 	for (const session of items) {
@@ -1490,13 +1434,14 @@ export class InteractiveMode implements InteractiveModeContext {
 	#workingMessageAccentCacheKey?: WorkingMessageAccentCacheKey;
 	#workingMessageAccentCacheValue?: WorkingMessageAccent;
 	#workingMessageAccentCacheHasValue = false;
-	/** Band composer: the status band hides `session_name`, so the title docks
-	 * onto the working row instead — right-aligned, dim, italic. */
-	#workingTitleTrailer(): string | undefined {
+	/** Right-docked suffix of the working row: the tok/s readout, then the band-mode title. */
+	#workingRowTrailer(): string | undefined {
+		return formatWorkingRowTrailer(this.#tokenRateReading(), this.#workingRowTitle());
+	}
+	/** Band composer: the status band hides `session_name`, so the title docks onto the working row instead. */
+	#workingRowTitle(): string | undefined {
 		if (cfgComposerShape.get(settings) !== "band") return undefined;
-		const name = this.sessionManager.getSessionName();
-		if (!name) return undefined;
-		return `\x1b[2;3m${sanitizeStatusText(name)}\x1b[23;22m`;
+		return this.sessionManager.getSessionName();
 	}
 	/** Live gen tok/s for the working row: the viewed session's own meter, so a
 	 * focused subagent shows its own reading and the main session's survives
@@ -1506,18 +1451,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 	/** Generation tok/s: live while streaming, the last reading between
 	 * turns, blank until a run has produced enough tokens to measure. */
-	#tokenRateLabel(): string | undefined {
+	#tokenRateReading(): number | undefined {
 		if (!cfgComposerTokenRate.get(settings)) return undefined;
-		const rate = this.tokenRate.rate();
-		if (rate === null) return undefined;
-		return theme.fg("dim", `${theme.icon.throughput} ${rate.toFixed(1)} tok/s`);
-	}
-	/** Right-docked suffix of the working row: the tok/s readout, then the band-mode title. */
-	#workingRowTrailer(): string | undefined {
-		const rate = this.#tokenRateLabel();
-		const title = this.#workingTitleTrailer();
-		if (rate && title) return `${rate}  ${title}`;
-		return rate ?? title;
+		return this.tokenRate.rate() ?? undefined;
 	}
 	/** Idle stand-in for the working row: the last tok/s reading and the
 	 * band-mode title stay readable between turns, docked where the loader's
@@ -4765,24 +4701,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 	}
 
-	#formatTodoLine(todo: TodoItem, prefix: string, matched: boolean): string {
-		const checkbox = theme.checkbox;
-		const marker = formatHudNoteMarker(todo.notes?.length ?? 0);
-		switch (todo.status) {
-			case "completed":
-				return theme.fg("success", `${prefix}${checkbox.checked} ${chalk.strikethrough(todo.content)}`) + marker;
-			case "in_progress":
-				return theme.fg("accent", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
-			case "abandoned":
-				return theme.fg("error", `${prefix}${checkbox.unchecked} ${chalk.strikethrough(todo.content)}`) + marker;
-			case "blocked":
-				return theme.fg("warning", `${prefix}${checkbox.unchecked} ${todo.content} (blocked)`) + marker;
-			default:
-				if (matched) return theme.fg("accent", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
-				return theme.fg("dim", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
-		}
-	}
-
 	#getActiveSubagentDescriptions(): string[] {
 		const out: string[] = [];
 		for (const session of this.#observerRegistry.getSessions()) {
@@ -4939,14 +4857,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#modelCycleClearTimer.unref?.();
 	}
 
-	#getActivePhase(phases: TodoPhase[]): TodoPhase | undefined {
-		const nonEmpty = phases.filter(phase => phase.tasks.length > 0);
-		const active = nonEmpty.find(phase =>
-			phase.tasks.some(task => task.status === "pending" || task.status === "in_progress"),
-		);
-		return active ?? nonEmpty[nonEmpty.length - 1];
-	}
-
 	#scheduleObserverUiSync(kind: SessionObserverChangeKind): void {
 		if (kind !== "progress") {
 			this.#observerUiSyncNeedsTodoReconcile = true;
@@ -4995,211 +4905,13 @@ export class InteractiveMode implements InteractiveModeContext {
 	#renderTodoList(): void {
 		this.todoContainer.clear();
 		this.#todoHudNative = undefined;
-		const activeDescs = this.#getActiveSubagentDescriptions();
-		this.#todoHudSubagentKey = activeDescs.join("\n");
+		const activeDescriptions = this.#getActiveSubagentDescriptions();
+		this.#todoHudSubagentKey = activeDescriptions.join("\n");
 		if (this.#todoHudHidden) return;
-		const phases = this.todoPhases.filter(phase => phase.tasks.length > 0);
-		if (phases.length === 0) return;
-		const expanded = this.todoExpanded;
-		const multiPhase = phases.length > 1;
-		const activeIdx = phases.indexOf(this.#getActivePhase(phases) ?? phases[0]);
-		// Fixed budgets keep the HUD bounded regardless of plan size / progress.
-		const subsequentStageCap = 4; // stages shown after the active one (a trailing summary row covers the rest)
-		const activeTaskCap = 5; // open tasks previewed for the active stage
-
-		// A pending todo "lights up" (accent) when an in-flight subagent is doing
-		// its work, matched by normalized content overlap.
-		const isMatched = (todo: TodoItem): boolean =>
-			activeDescs.length > 0 && todoMatchesAnyDescription(todo.content, activeDescs);
-
-		// Task subtree for a phase. Collapsed runs the shared walking-viewport
-		// policy (completed/abandoned omitted, active work pulled to the head,
-		// then following pending tasks) so the HUD and the transient tool result
-		// can never disagree about the current work (#5873). Expanded lists all.
-		const renderTasks = (phase: TodoPhase): string[] => {
-			if (expanded) {
-				return renderTreeList(
-					{
-						items: phase.tasks,
-						expanded: true,
-						renderItem: todo => this.#formatTodoLine(todo, "", isMatched(todo)),
-					},
-					theme,
-				);
-			}
-			const selection = selectCollapsedTodos(phase.tasks, isMatched, activeTaskCap);
-			return renderTreeList(
-				{
-					items: selection.items,
-					itemType: "task",
-					trailingSummary: selection.summary,
-					renderItem: todo => this.#formatTodoLine(todo, "", isMatched(todo)),
-				},
-				theme,
-			);
-		};
-
-		// One phase node. The active stage is highlighted with normal-brightness task
-		// progress; other stages render their whole row (name + progress) in the
-		// brighter muted gray. Overall progress lives in the tree spine (below).
-		const renderPhase = (phase: TodoPhase, oneBased: number, isActive: boolean): string | string[] => {
-			const label = multiPhase ? formatPhaseDisplayName(phase.name, oneBased) : phase.name;
-			// Closed, not just completed: the collapsed task window hides abandoned
-			// tasks too, so counting only completions leaves the phase reading stuck.
-			const done = phase.tasks.filter(isClosedTodo).length;
-			const progress = ` · ${done}/${phase.tasks.length}`;
-			if (!isActive) {
-				const header = theme.fg("muted", label) + theme.fg("dim", progress);
-				return expanded ? [header, ...renderTasks(phase)] : header;
-			}
-			const header = theme.bold(theme.fg("accent", label)) + theme.fg("dim", progress);
-			return [header, ...renderTasks(phase)];
-		};
-
-		// Collapsed: active stage + a bounded number of following stages, with a
-		// "… n more stages" row for anything past the cap. Expanded: every stage
-		// from the top. Roman numerals stay tied to the real phase index.
-		const baseIdx = expanded ? 0 : activeIdx;
-		const phaseSlice = expanded ? phases.slice(baseIdx) : phases.slice(baseIdx, baseIdx + 1 + subsequentStageCap);
-		const hiddenStages = phases.length - baseIdx - phaseSlice.length;
-
-		// Flatten the stage tree into content rows plus a per-row top-level spine
-		// glyph (`├─` for stage rows, `│` for continuations). The spine never
-		// closes downward — a short elbow tail (`└────`) ends the block instead,
-		// so spine + bend + tail form one continuous progress path.
-		const spineGlyphs: string[] = [];
-		const contentLines: string[] = [];
-		const pushBlock = (block: string | string[]): void => {
-			const rows = Array.isArray(block) ? block : [block];
-			if (rows.length === 0) return;
-			spineGlyphs.push(`${theme.tree.branch} `);
-			contentLines.push(replaceTabs(rows[0]!));
-			for (let i = 1; i < rows.length; i++) {
-				spineGlyphs.push(`${theme.tree.vertical}  `);
-				contentLines.push(replaceTabs(rows[i]!));
-			}
-		};
-		for (let i = 0; i < phaseSlice.length; i++) {
-			pushBlock(renderPhase(phaseSlice[i], baseIdx + i + 1, baseIdx + i === activeIdx));
-		}
-		if (hiddenStages > 0) {
-			pushBlock(theme.fg("muted", formatMoreItems(hiddenStages, "stage", theme)));
-		}
-
-		// Closing tail: hook + a few horizontals. Every tail cell is 1 column in
-		// both glyph sets, so string slicing below splits it by visible cells.
-		const tailLen = 6;
-		const tail = theme.tree.hook + theme.tree.horizontal.repeat(Math.max(0, tailLen - visibleWidth(theme.tree.hook)));
-
-		// Overall progress (summed across every stage) fills the path in reading
-		// order: down the spine, around the bend, out along the tail.
-		// Clamp so partial progress lights at least one cell; a closed plan fills
-		// the entire path until the configured auto-clear removes the HUD.
-		const totalTasks = phases.reduce((sum, phase) => sum + phase.tasks.length, 0);
-		const closedTasks = phases.reduce((sum, phase) => sum + phase.tasks.filter(isClosedTodo).length, 0);
-		const pathLen = contentLines.length + tailLen;
-		let filled = Math.round((closedTasks / totalTasks) * pathLen);
-		if (closedTasks > 0) filled = Math.max(filled, 1);
-		if (closedTasks < totalTasks) filled = Math.min(filled, pathLen - 1);
-
-		const lines = ["", theme.bold(theme.fg("accent", "TODO"))];
-		for (let i = 0; i < contentLines.length; i++) {
-			lines.push(` ${theme.fg(i < filled ? "accent" : "dim", spineGlyphs[i]!)}${contentLines[i]}`);
-		}
-		const tailFilled = Math.max(0, Math.min(filled - contentLines.length, tail.length));
-		lines.push(` ${theme.fg("accent", tail.slice(0, tailFilled))}${theme.fg("dim", tail.slice(tailFilled))}`);
-		this.todoContainer.addChild(new Text(lines.join("\n"), 1, 0));
-
-		// Native: the same stage window as a tree, overall progress as a bar.
-		const describeTask = (todo: TodoItem, id: string): TspTreeNode => {
-			const done = todo.status === "completed";
-			const token =
-				todo.status === "completed"
-					? "success del"
-					: todo.status === "abandoned"
-						? "error del"
-						: todo.status === "blocked"
-							? "warning"
-							: todo.status === "in_progress" || isMatched(todo)
-								? "accent"
-								: "dim";
-			const label: TspSpan[] = [span(todo.status === "blocked" ? `${todo.content} (blocked)` : todo.content, token)];
-			const notes = todo.notes?.length ?? 0;
-			if (notes > 0) label.push(span(` +${notes}`, "dim em"));
-			return { id, label, icon: done ? "check" : "circle" };
-		};
-		const describeTasks = (phase: TodoPhase, phaseIndex: number): TspTreeNode[] => {
-			const index = (todo: TodoItem): string => `${phaseIndex}.${phase.tasks.indexOf(todo)}`;
-			if (expanded) return phase.tasks.map(todo => describeTask(todo, index(todo)));
-			const selection = selectCollapsedTodos(phase.tasks, isMatched, activeTaskCap);
-			const nodes = selection.items.map(todo => describeTask(todo, index(todo)));
-			if (selection.summary) nodes.push({ id: `${phaseIndex}.more`, label: [span(selection.summary, "muted")] });
-			return nodes;
-		};
-		const phaseNodes: TspTreeNode[] = phaseSlice.map((phase, offset) => {
-			const phaseIndex = baseIdx + offset;
-			const isActive = phaseIndex === activeIdx;
-			const name = multiPhase ? formatPhaseDisplayName(phase.name, phaseIndex + 1) : phase.name;
-			const done = phase.tasks.filter(isClosedTodo).length;
-			const open = isActive || expanded;
-			return {
-				id: `${phaseIndex}`,
-				label: [span(name, isActive ? "accent strong" : "muted"), span(` · ${done}/${phase.tasks.length}`, "dim")],
-				open,
-				children: open ? describeTasks(phase, phaseIndex) : undefined,
-			};
-		});
-		if (hiddenStages > 0) {
-			phaseNodes.push({ id: "more", label: [span(formatMoreItems(hiddenStages, "stage", theme), "muted")] });
-		}
-		const fallback = node(
-			"col",
-			{ role: "omp.hud.todo" },
-			[
-				row(
-					[
-						text([span("TODO", "accent strong")]),
-						node("progress", { value: closedTasks / totalTasks, label: `${closedTasks}/${totalTasks}` }),
-					],
-					{ gap: "sm", align: "center" },
-				),
-				node("tree", { nodes: phaseNodes }),
-			],
-			"todo",
-		);
-		// A `checklist` HUD is a pill with the whole plan as its popover.
-		const checklistPhases: TspChecklistPhase[] = phases.map((phase, phaseIndex) => ({
-			id: `${phaseIndex}`,
-			title: multiPhase ? formatPhaseDisplayName(phase.name, phaseIndex + 1) : phase.name,
-			collapsed: phase.tasks.every(isClosedTodo) || undefined,
-			items: phase.tasks.map((todo, taskIndex): TspChecklistItem => {
-				const note = todo.blocker ?? todo.notes?.at(-1);
-				return {
-					id: `${phaseIndex}.${taskIndex}`,
-					text: todo.content,
-					status:
-						todo.status === "completed"
-							? "done"
-							: todo.status === "abandoned"
-								? "dropped"
-								: todo.status === "blocked"
-									? "blocked"
-									: todo.status === "in_progress" || isMatched(todo)
-										? "active"
-										: "pending",
-					note,
-				};
-			}),
-		}));
-		this.#todoHudNative = {
-			checklist: node(
-				"checklist",
-				{ phases: checklistPhases, mode: "hud", role: "omp.hud.todo" },
-				undefined,
-				"todo",
-			),
-			fallback,
-		};
+		const hud = renderTodoHud(this.todoPhases, { expanded: this.todoExpanded, activeDescriptions });
+		if (!hud) return;
+		this.todoContainer.addChild(new Text(hud.text, 1, 0));
+		this.#todoHudNative = hud.native;
 	}
 
 	isCompactTodoMode(): boolean {
@@ -5221,7 +4933,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		const header = `${theme.bold(theme.fg("accent", "TODO"))} ${theme.fg("dim", `${closedTasks}/${totalTasks}`)}`;
 		const taskStr = activeTask
-			? this.#formatTodoLine(activeTask, "", isMatched(activeTask))
+			? formatTodoHudLine(activeTask, isMatched(activeTask))
 			: theme.fg("success", `${theme.checkbox.checked} done`);
 		const rightLine = `${header} ${theme.fg("dim", "·")} ${taskStr}`;
 
@@ -8535,29 +8247,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!this.loadingAnimation) {
 			this.#clearWorkingMessageAccentCache();
 			this.statusContainer.disposeChildren();
-			const messageColorFn = ((message: string) =>
-				renderWorkingMessage(message, this.#getWorkingMessageAccent())) as LoaderMessageColorFn & {
-				animated?: true;
-			};
-			// Shimmer drives the 30fps redraw; when it is disabled the working
-			// message is static, so leave `animated` unset and let the loader use
-			// the spinner-only ~12.5fps cadence instead of repainting a frozen line.
-			if (shimmerEnabled()) messageColorFn.animated = true;
-			this.loadingAnimation = new Loader(
-				this.ui,
-				spinner => {
-					const accent = this.#getWorkingMessageAccent();
-					return accent ? `${accent.dim}${spinner}\x1b[39m` : theme.fg("muted", spinner);
-				},
-				messageColorFn,
-				DEFAULT_WORKING_MESSAGE,
-				// The brand spinner lives in the status line while working; this row
-				// leads with the interrupt affordance instead of a second spinner.
-				// The leading space nudges the row one column right of the flush-left
-				// status rows so the interrupt glyph reads as indented.
-				[` ${appKey(this.keybindings, "app.interrupt")}`],
-			);
-			this.loadingAnimation.setTrailer(() => this.#workingRowTrailer());
+			this.loadingAnimation = createWorkingLoader(this.ui, {
+				interruptLabel: appKey(this.keybindings, "app.interrupt"),
+				accent: () => this.#getWorkingMessageAccent(),
+				trailer: () => this.#workingRowTrailer(),
+			});
 			this.loadingAnimation.setWorkingRow(
 				() => this.#workingRowSpec(),
 				() => this.interruptFromPointer(),

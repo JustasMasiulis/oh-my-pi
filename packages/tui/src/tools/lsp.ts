@@ -15,7 +15,7 @@ import {
 	formatCount,
 	formatErrorText,
 	formatExpandHint,
-	formatMoreItems,
+	formatMoreRow,
 	formatStyledPath,
 	type ParsedDiagnostic,
 	PREVIEW_LIMITS,
@@ -29,6 +29,7 @@ import {
 } from "../render/render-utils";
 import type { StatusLineOptions } from "../render/status-line";
 import { plainToolCard } from "../render/tool-card";
+import { nestRows } from "../render/utils";
 import { visibleWidth } from "../utils";
 import { ansi, code, col, compact, keyed, md, node, row, span, text } from "../native/describe";
 import type { NativeNode } from "../native/node";
@@ -105,15 +106,16 @@ function sanitizeInlineText(value: string): string {
 	return replaceTabs(value).replaceAll(/\r?\n/g, " ");
 }
 
+/** A short single-line preview of a user-supplied argument. */
+function inlinePreview(value: string): string {
+	return truncateToWidth(sanitizeInlineText(value), TRUNCATE_LENGTHS.SHORT);
+}
+
 /** The header subject: `action target`, e.g. `references src/a.ts:42 (validateToken)`. */
 function lspSubject(args: Partial<LspParams> | undefined, theme: Theme): string {
 	const actionLabel = (args?.action ?? "request").replace(/_/g, " ");
-	const queryPreview = args?.query
-		? truncateToWidth(sanitizeInlineText(args.query), TRUNCATE_LENGTHS.SHORT)
-		: undefined;
-	const symbolPreview = args?.symbol
-		? truncateToWidth(sanitizeInlineText(args.symbol), TRUNCATE_LENGTHS.SHORT)
-		: undefined;
+	const queryPreview = args?.query ? inlinePreview(args.query) : undefined;
+	const symbolPreview = args?.symbol ? inlinePreview(args.symbol) : undefined;
 
 	let target: string | undefined;
 	if (args?.file) {
@@ -134,13 +136,12 @@ function lspSubject(args: Partial<LspParams> | undefined, theme: Theme): string 
 /** Call facts not already in the subject. */
 function lspCallMeta(args: Partial<LspParams> | undefined): string[] {
 	const meta: string[] = [];
-	if (args?.query && (args.file || args.line !== undefined)) {
-		meta.push(`query:${truncateToWidth(sanitizeInlineText(args.query), TRUNCATE_LENGTHS.SHORT)}`);
-	}
+	if (args?.query && (args.file || args.line !== undefined)) meta.push(`query:${inlinePreview(args.query)}`);
 	if (args?.apply !== undefined) meta.push(`apply:${args.apply ? "true" : "false"}`);
 	return meta;
 }
 
+/** The LSP status line: the request subject, its call facts, then any result `meta`. */
 function lspStatus(
 	args: Partial<LspParams> | undefined,
 	icon: ToolUIStatus,
@@ -181,7 +182,8 @@ const COLLAPSED_GENERIC_LINES = 4;
 /**
  * Body rows for one expansion state. Rows are unclipped; collapsed rows are
  * clipped to the width afterwards. `more` is the trailing `… N more <items>`
- * marker; `markerLast` says the last row is already a (nested) truncation marker.
+ * row (with its expand hint); `markerLast` says the last row is already a
+ * hinted (nested) truncation marker.
  */
 interface LspRows {
 	rows: string[];
@@ -191,7 +193,7 @@ interface LspRows {
 
 /** A parsed LSP response: the header outcome and meta, and the body rows per expansion. */
 interface LspResultView {
-	icon: ToolUIStatus;
+	icon: "success" | "warning";
 	meta: string[];
 	rows(expanded: boolean): LspRows;
 }
@@ -207,16 +209,9 @@ function layoutRows(view: LspResultView, expanded: boolean, width: number, theme
 	if (expanded) return rows;
 	const clipped = rows.some(row => visibleWidth(row) > width);
 	const fitted = rows.map(row => truncateToWidth(row, width));
-	const hint = formatExpandHint(theme, false, true);
-	if (more) fitted.push(`${theme.fg("dim", more)} ${hint}`);
-	else if (markerLast) fitted[fitted.length - 1] += ` ${hint}`;
-	else if (clipped) fitted.push(hint);
+	if (more) fitted.push(more);
+	else if (clipped && !markerLast) fitted.push(formatExpandHint(theme));
 	return fitted;
-}
-
-/** A tree child row under a flush item. */
-function childRow(content: string, isLast: boolean, theme: Theme): string {
-	return `${theme.fg("dim", isLast ? theme.tree.last : theme.tree.branch)} ${content}`;
 }
 
 /**
@@ -229,8 +224,8 @@ export function renderResult(
 	theme: Theme,
 	args?: LspParams,
 ): Component {
-	const request = args ??
-		result.details?.request ?? { action: (result.details?.action ?? "request") as LspParams["action"] };
+	const fallbackAction = (result.details?.action ?? "request") as LspParams["action"];
+	const request = args ?? result.details?.request ?? { action: fallbackAction };
 	const content = result.content?.[0];
 	const text = content?.type === "text" ? (content.text ?? "") : "";
 
@@ -261,7 +256,7 @@ export function renderResult(
 		const icon: ToolUIStatus = isPartial ? "running" : view.icon;
 		return {
 			status: lspStatus(request, icon, theme, { spinnerFrame, meta: view.meta }),
-			phase: isPartial ? "partial" : view.icon === "success" ? "success" : "warning",
+			phase: isPartial ? "partial" : view.icon,
 			body: cached.rows,
 		};
 	});
@@ -285,8 +280,9 @@ function parseLspResult(text: string, action: string, theme: Theme): LspResultVi
 
 	if (/Symbols in (.+):/.test(text)) return symbolsView(lines, theme);
 
-	if (action === "diagnostics" && text.trim() === "OK")
+	if (action === "diagnostics" && text.trim() === "OK") {
 		return { icon: "success", meta: ["no issues"], rows: () => ({ rows: [] }) };
+	}
 	return genericView(text, lines, theme);
 }
 
@@ -313,7 +309,7 @@ function hoverView(codeBlockMatch: RegExpMatchArray, fullText: string, theme: Th
 			const hidden = before.length + codeLines.length - 1 + after.length;
 			return {
 				rows: [codeLines[0] ?? ""],
-				more: hidden > 0 ? formatMoreItems(hidden, "line", theme) : undefined,
+				more: hidden > 0 ? formatMoreRow(hidden, "line", theme) : undefined,
 			};
 		},
 	};
@@ -394,7 +390,7 @@ function diagnosticsView(
 			const remaining = items.length - shown.length;
 			return {
 				rows: shown.map(renderItem),
-				more: remaining > 0 ? formatMoreItems(remaining, "diagnostic", theme) : undefined,
+				more: remaining > 0 ? formatMoreRow(remaining, "diagnostic", theme) : undefined,
 			};
 		},
 	};
@@ -404,8 +400,8 @@ function diagnosticsView(
 // References Rendering
 // =============================================================================
 
-/** References grouped by file: `file (N)` rows with their `line:col` locations as children. */
-function referencesView(refCount: number, lines: string[], theme: Theme): LspResultView {
+/** `file:line:col` response lines grouped by file, in first-seen order, as `line:col` locations. */
+function groupReferencesByFile(lines: readonly string[]): Map<string, string[]> {
 	const byFile = new Map<string, string[]>();
 	for (const loc of lines) {
 		const match = loc.trim().match(/^(.+):(\d+):(\d+)$/);
@@ -418,6 +414,12 @@ function referencesView(refCount: number, lines: string[], theme: Theme): LspRes
 		}
 		locs.push(`${line}:${col}`);
 	}
+	return byFile;
+}
+
+/** References grouped by file: `file (N)` rows with their `line:col` locations as children. */
+function referencesView(refCount: number, lines: string[], theme: Theme): LspResultView {
+	const byFile = groupReferencesByFile(lines);
 	const files = Array.from(byFile.keys());
 
 	return {
@@ -427,27 +429,27 @@ function referencesView(refCount: number, lines: string[], theme: Theme): LspRes
 				? [formatCount("reference", refCount), formatCount("file", files.length)]
 				: [formatCount("reference", refCount)],
 		rows(expanded) {
-			const maxFiles = expanded ? files.length : COLLAPSED_REFERENCE_FILES;
 			const maxLocs = expanded ? Number.POSITIVE_INFINITY : COLLAPSED_REFERENCE_LOCATIONS;
+			const shownFiles = files.slice(0, expanded ? files.length : COLLAPSED_REFERENCE_FILES);
+			const hiddenFiles = files.length - shownFiles.length;
 			const rows: string[] = [];
-			let lastLocMarker = -1;
-			for (const file of files.slice(0, maxFiles)) {
+			let markerLast = false;
+			shownFiles.forEach((file, fileIndex) => {
 				const locs = byFile.get(file)!;
 				rows.push(`${formatStyledPath(replaceTabs(file), theme)} ${theme.fg("dim", `(${locs.length})`)}`);
-				const shown = locs.slice(0, maxLocs);
-				const hiddenLocs = locs.length - shown.length;
-				shown.forEach((loc, index) => {
-					rows.push(childRow(theme.fg("muted", loc), index === shown.length - 1 && hiddenLocs === 0, theme));
-				});
+				const children = locs.slice(0, maxLocs).map(loc => theme.fg("muted", loc));
+				const hiddenLocs = locs.length - children.length;
+				// Only the body's final row carries the expand hint.
+				markerLast = hiddenLocs > 0 && fileIndex === shownFiles.length - 1 && hiddenFiles === 0;
 				if (hiddenLocs > 0) {
-					lastLocMarker = rows.length;
-					rows.push(childRow(theme.fg("dim", formatMoreItems(hiddenLocs, "location", theme)), true, theme));
+					children.push(formatMoreRow(hiddenLocs, "location", theme, { expanded: !markerLast }));
 				}
-			}
+				rows.push(...nestRows(children, theme));
+			});
 			return {
 				rows,
-				more: files.length > maxFiles ? formatMoreItems(files.length - maxFiles, "file", theme) : undefined,
-				markerLast: lastLocMarker >= 0 && lastLocMarker === rows.length - 1,
+				more: hiddenFiles > 0 ? formatMoreRow(hiddenFiles, "file", theme) : undefined,
+				markerLast,
 			};
 		},
 	};
@@ -464,15 +466,22 @@ interface SymbolInfo {
 	icon: string;
 }
 
-/** Document symbols: top-level symbols flush, nested symbols as tree children. */
-function symbolsView(lines: string[], theme: Theme): LspResultView {
+/** Document symbol lines (`icon name @ line N`), indented by nesting depth. */
+function parseSymbols(lines: readonly string[]): SymbolInfo[] {
 	const symbols: SymbolInfo[] = [];
 	for (const line of lines) {
 		if (!line.includes("@") || !line.includes("line")) continue;
-		const indent = line.match(/^(\s*)/)?.[1].length ?? 0;
 		const symMatch = line.trim().match(/^(\S+)\s+(.+?)\s*@\s*line\s*(\d+)/);
-		if (symMatch) symbols.push({ icon: symMatch[1], name: symMatch[2], line: symMatch[3], indent });
+		if (!symMatch) continue;
+		const indent = line.match(/^(\s*)/)?.[1].length ?? 0;
+		symbols.push({ icon: symMatch[1], name: symMatch[2], line: symMatch[3], indent });
 	}
+	return symbols;
+}
+
+/** Document symbols: top-level symbols flush, nested symbols as tree children. */
+function symbolsView(lines: string[], theme: Theme): LspResultView {
+	const symbols = parseSymbols(lines);
 	const topLevelIndent = symbols.reduce((min, sym) => Math.min(min, sym.indent), Number.POSITIVE_INFINITY);
 
 	// One linear pass each: `isLast[i]` — the next symbol at indent <= mine is
@@ -516,7 +525,7 @@ function symbolsView(lines: string[], theme: Theme): LspResultView {
 			const hidden = symbols.length - shown.length;
 			return {
 				rows: shown.map(symbolLabel),
-				more: hidden > 0 ? formatMoreItems(hidden, "symbol", theme) : undefined,
+				more: hidden > 0 ? formatMoreRow(hidden, "symbol", theme) : undefined,
 			};
 		},
 	};
@@ -541,7 +550,7 @@ function genericView(text: string, lines: string[], theme: Theme): LspResultView
 			const remaining = outputLines.length - shown.length;
 			return {
 				rows: shown.map(line => theme.fg("toolOutput", line)),
-				more: remaining > 0 ? formatMoreItems(remaining, "line", theme) : undefined,
+				more: remaining > 0 ? formatMoreRow(remaining, "line", theme) : undefined,
 			};
 		},
 	};
@@ -741,20 +750,8 @@ function describeLspDiagnostics(request: Partial<LspParams> | undefined, fallbac
 
 /** References grouped by file (§7.3): a file row with the count, then the `line:col` positions. */
 function describeLspReferences(lines: string[]): NativeNode[] {
-	const byFile = new Map<string, string[]>();
-	for (const loc of lines) {
-		const match = loc.trim().match(/^(.+):(\d+):(\d+)$/);
-		if (!match) continue;
-		const [, file, line, col] = match;
-		let locs = byFile.get(file);
-		if (!locs) {
-			locs = [];
-			byFile.set(file, locs);
-		}
-		locs.push(`${line}:${col}`);
-	}
 	const nodes: NativeNode[] = [];
-	for (const [file, locs] of byFile) {
+	for (const [file, locs] of groupReferencesByFile(lines)) {
 		const name = plainText(file);
 		nodes.push(
 			keyed(
@@ -775,27 +772,22 @@ function describeLspReferences(lines: string[]): NativeNode[] {
 function describeLspSymbols(lines: string[]): NativeNode | undefined {
 	const roots: TspTreeNode[] = [];
 	const stack: { indent: number; children: TspTreeNode[] }[] = [];
-	let index = 0;
-	for (const line of lines) {
-		if (!line.includes("@") || !line.includes("line")) continue;
-		const symMatch = line.trim().match(/^(\S+)\s+(.+?)\s*@\s*line\s*(\d+)/);
-		if (!symMatch) continue;
-		const indent = line.match(/^(\s*)/)?.[1].length ?? 0;
+	for (const [index, symbol] of parseSymbols(lines).entries()) {
 		const children: TspTreeNode[] = [];
 		const treeNode: TspTreeNode = {
-			id: `${index++}`,
+			id: `${index}`,
 			label: [
-				span(plainText(symMatch[1]), "accent"),
+				span(plainText(symbol.icon), "accent"),
 				span(" "),
-				span(plainText(symMatch[2]), "accent"),
-				span(` line ${symMatch[3]}`, "muted"),
+				span(plainText(symbol.name), "accent"),
+				span(` line ${symbol.line}`, "muted"),
 			],
 			open: true,
 			children,
 		};
-		while (stack.length > 0 && stack[stack.length - 1].indent >= indent) stack.pop();
+		while (stack.length > 0 && stack[stack.length - 1].indent >= symbol.indent) stack.pop();
 		(stack[stack.length - 1]?.children ?? roots).push(treeNode);
-		stack.push({ indent, children });
+		stack.push({ indent: symbol.indent, children });
 	}
 	return roots.length > 0 ? node("tree", { nodes: roots }) : undefined;
 }

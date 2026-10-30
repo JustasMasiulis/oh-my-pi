@@ -8,6 +8,7 @@
  */
 import { replaceTabs, truncateToWidth } from "../utils";
 import { ensureThemeSync, theme } from "../theme/theme";
+import { formatMoreItems } from "../render/render-utils";
 
 const RENDER_INTERVAL_MS = 80;
 
@@ -87,7 +88,8 @@ export function createLiveBoard(
 		const spinner = frames[frame % frames.length] ?? "*";
 		let lines = render(spinner, width);
 		if (lines.length > maxRows) {
-			lines = [...lines.slice(0, maxRows - 1), `… +${lines.length - (maxRows - 1)} more`];
+			const hidden = lines.length - (maxRows - 1);
+			lines = [...lines.slice(0, maxRows - 1), theme.fg("dim", formatMoreItems(hidden, "line", theme))];
 		}
 		paint(lines);
 	};

@@ -533,7 +533,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 						return toolResult(appliedDetails).text(text).done();
 					},
 				});
-				// The renderer's ⟨proposed⟩ badge is TUI-only; this line is the model's
+				// The renderer's `proposed` badge is TUI-only; this line is the model's
 				// in-result signal that the diff above is staged, not applied.
 				outputLines.unshift(PREVIEW_PENDING_NOTICE, "");
 			}

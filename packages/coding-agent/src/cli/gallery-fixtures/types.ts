@@ -2,7 +2,16 @@
  * Types for `omp gallery` sample data. See {@link ./index} for the aggregated
  * fixture registry and the contract each fixture must satisfy.
  */
+import type { TUI } from "@oh-my-pi/pi-tui";
 import type { EditMode } from "@oh-my-pi/pi-tui/tools/edit";
+
+/**
+ * Stand-in terminal for static gallery renders. Components only call
+ * `requestRender`/`requestComponentRender` during a static render, and
+ * `imageBudget` is read solely when images render, which no sample does.
+ * A cast avoids constructing a real terminal.
+ */
+export const GALLERY_UI = { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
 
 /** A tool result snapshot, matching the shape `ToolExecutionComponent` consumes. */
 export interface GalleryResult {
@@ -13,7 +22,7 @@ export interface GalleryResult {
 
 export type GalleryFixtureState = "streaming" | "progress" | "success" | "error";
 
-/** One named preview inside a composer or status-segment gallery section. */
+/** One named preview inside a gallery section: a lifecycle state, message sample, composer or segment variant. */
 export interface GalleryPreviewVariant {
 	label: string;
 	render(width: number, expanded: boolean): readonly string[] | Promise<readonly string[]>;

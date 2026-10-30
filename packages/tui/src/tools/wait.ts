@@ -4,8 +4,17 @@ import { visibleWidth } from "../utils";
 import { formatAge, formatCount } from "@oh-my-pi/pi-utils";
 import { shimmerEnabled, shimmerText } from "../theme/shimmer";
 import type { Theme } from "../theme/theme";
-import { Hasher, type RenderCache, renderStatusLine, renderTreeList, truncateToWidth } from "../render/index";
-import { wrapPrefixedLine } from "../render/hanging-wrap";
+import {
+	FLUSH_BODY_INDENT,
+	Hasher,
+	nestRows,
+	type RenderCache,
+	renderFittedStatusLine,
+	renderStatusLine,
+	type StatusLineOptions,
+	renderTreeList,
+	truncateToWidth,
+} from "../render/index";
 import { formatArtifactErrorNotice, stripOutputNotice, type OutputMeta } from "./output-meta";
 import {
 	FEED_MODEL_BADGE_WIDTH,
@@ -13,7 +22,7 @@ import {
 	formatDuration,
 	formatErrorText,
 	formatExpandHint,
-	formatMoreItems,
+	formatMoreRow,
 	sanitizeDisplayLines,
 	formatFeedModelBadge,
 	formatStatusIcon,
@@ -165,16 +174,18 @@ const PREVIEW_LINES_EXPANDED = 4;
 const LABEL_LINES_EXPANDED = 3;
 const PREVIEW_LINE_WIDTH = 80;
 /** Body rows of a flush card sit under the header at this indent. */
-const INDENT = "  ";
+const INDENT = " ".repeat(FLUSH_BODY_INDENT);
 
 /**
- * Fit a self-built flush card to `width`: the header (first row) hang-wraps
- * under the body column so its trailing facts stay visible; body rows, which
- * reserve their own facts, truncate.
+ * Fit a self-built flush card to `width`: the header stays on one row with its
+ * subject cut in the middle, and body rows, which reserve their own facts,
+ * truncate.
  */
-export function fitFlushRows(rows: readonly string[], width: number): string[] {
-	const [header = "", ...body] = rows;
-	return [...wrapPrefixedLine("", INDENT, header, width), ...body.map(row => truncateToWidth(row, width))];
+function fitFlushRows(header: StatusLineOptions, body: readonly string[], width: number, theme: Theme): string[] {
+	return [
+		truncateToWidth(renderFittedStatusLine(header, theme, width), width),
+		...body.map(row => truncateToWidth(row, width)),
+	];
 }
 
 /** A job's lifecycle as a row status glyph. */
@@ -300,14 +311,6 @@ function nestedRowIndent(theme: Theme): number {
 	return Math.max(visibleWidth(theme.tree.branch), visibleWidth(theme.tree.last)) + 1;
 }
 
-/** Nest detail rows under an item row with tree connectors. */
-function nestRows(details: readonly string[], theme: Theme): string[] {
-	return details.map((line, index) => {
-		const last = index === details.length - 1;
-		return `${theme.fg("dim", last ? theme.tree.last : theme.tree.branch)} ${line}`;
-	});
-}
-
 /** Pending wait frame. */
 function waitRenderCall(_args: object, options: RenderResultOptions, uiTheme: Theme): Component {
 	return new Text(
@@ -345,16 +348,13 @@ function jobsRenderResult(
 
 	const runningCount = jobs.filter(job => job.status === "running").length;
 	const headerIcon: ToolUIStatus = options.isPartial ? "running" : waitOutcome(jobs, agents.length);
-	const header = renderStatusLine(
-		{
-			icon: headerIcon,
-			spinnerFrame: options.spinnerFrame,
-			title: "Wait",
-			description: waitSubject(jobs.length, agents.length),
-			meta: waitMeta(jobs, agents.length),
-		},
-		uiTheme,
-	);
+	const header: StatusLineOptions = {
+		icon: headerIcon,
+		spinnerFrame: options.spinnerFrame,
+		title: "Wait",
+		description: waitSubject(jobs.length, agents.length),
+		meta: waitMeta(jobs, agents.length),
+	};
 
 	const outputMeta = result.details?.meta;
 	// Historical snapshots promoted a job failure to the root. Render it there
@@ -401,12 +401,10 @@ function jobsRenderResult(
 
 	/** Whether Ctrl+O shows more of `job`: further label lines, its output, or a longer failure. */
 	const jobHidesDetail = (job: JobSnapshot, width: number): boolean => {
-		if (
-			jobRowLabel(job)
-				.split(/\r?\n/)
-				.filter(line => line.trim()).length > 1
-		)
-			return true;
+		const labelLineCount = jobRowLabel(job)
+			.split(/\r?\n/)
+			.filter(line => line.trim()).length;
+		if (labelLineCount > 1) return true;
 		const collapsed = jobDetails(job, false, width, []);
 		const expanded = jobDetails(job, true, width, []);
 		return expanded.length !== collapsed.length || expanded.some((line, index) => line !== collapsed[index]);
@@ -448,35 +446,27 @@ function jobsRenderResult(
 		// The outcome is reserved first; a long id gives way so a failure is never cut off the row.
 		const idBudget = Math.max(1, width - visibleWidth(`${icon} `) - visibleWidth(`${sep}${facts}`));
 		const id = truncateToWidth(replaceTabs(job.id).replace(/\s+/g, " "), idBudget);
-		const idText =
-			live && running
-				? shimmerEnabled()
-					? shimmerText(id, uiTheme)
-					: uiTheme.fg("accent", id)
-				: uiTheme.fg("accent", id);
+		const idText = live && running && shimmerEnabled() ? shimmerText(id, uiTheme) : uiTheme.fg("accent", id);
 		const modelIdentity = job.resolvedModelIdentity ?? job.resolvedModel;
 		let row = `${icon} ${idText}${sep}${facts}`;
 		if (job.type === "task" && isFeedModelBadgeEnabled() && typeof modelIdentity === "string") {
 			const badgeWidth = Math.min(FEED_MODEL_BADGE_WIDTH, width - visibleWidth(row) - visibleWidth(sep));
-			const badge =
-				badgeWidth > 0
-					? formatFeedModelBadge(
-							modelIdentity,
-							job.resolvedThinkingLevel,
-							job.advisor === true,
-							uiTheme,
-							badgeWidth,
-						)
-					: "";
-			if (badge) row += `${sep}${badge}`;
+			if (badgeWidth > 0) {
+				const badge = formatFeedModelBadge(
+					modelIdentity,
+					job.resolvedThinkingLevel,
+					job.advisor === true,
+					uiTheme,
+					badgeWidth,
+				);
+				if (badge) row += `${sep}${badge}`;
+			}
 		}
 		const firstLabel = replaceTabs(labelLines[0] ?? "").trim();
 		const labelBudget = Math.min(LABEL_MAX_WIDTH, width - visibleWidth(row) - visibleWidth(sep));
-		if (firstLabel && labelBudget >= 8)
-			row += `${sep}${uiTheme.fg("muted", truncateToWidth(firstLabel, labelBudget))}`;
-		const extraLabels = expanded
-			? labelLines.slice(firstLabel && labelBudget >= 8 ? 1 : 0, LABEL_LINES_EXPANDED).map(replaceTabs)
-			: [];
+		const labelInline = firstLabel !== "" && labelBudget >= 8;
+		if (labelInline) row += `${sep}${uiTheme.fg("muted", truncateToWidth(firstLabel, labelBudget))}`;
+		const extraLabels = expanded ? labelLines.slice(labelInline ? 1 : 0, LABEL_LINES_EXPANDED).map(replaceTabs) : [];
 		return [
 			truncateToWidth(row, width, ""),
 			...nestRows(jobDetails(job, expanded, detailWidth, extraLabels), uiTheme),
@@ -561,7 +551,12 @@ function jobsRenderResult(
 			if (!expanded && !capped && sortedJobs.some(job => jobHidesDetail(job, rowWidth))) {
 				body.push(formatExpandHint(uiTheme));
 			}
-			const all = fitFlushRows([header, ...body.map(line => `${INDENT}${line}`)], width);
+			const all = fitFlushRows(
+				header,
+				body.map(line => `${INDENT}${line}`),
+				width,
+				uiTheme,
+			);
 			cached = { key, lines: all };
 			return all;
 		},
@@ -584,32 +579,47 @@ function messageAge(ts: number | undefined): string {
 	return formatAge(Math.max(1, Math.round((Date.now() - ts) / 1000)));
 }
 
-/**
- * Message body preview rows, indented under the header. `tone` separates
- * outbound text (dim) from received text (toolOutput); a trailing dim row
- * counts elided lines.
- */
-function bodyLines(
-	body: string,
-	expanded: boolean,
-	theme: Theme,
-	options: { tone?: "dim" | "toolOutput"; collapsedLines?: number } = {},
-): string[] {
-	const tone = options.tone ?? "toolOutput";
-	const max = expanded ? BODY_LINES_EXPANDED : (options.collapsedLines ?? BODY_LINES_COLLAPSED);
+/** Message body preview rows, indented under the header; a trailing dim row counts elided lines. */
+function bodyLines(body: string, expanded: boolean, theme: Theme, collapsedLines = BODY_LINES_COLLAPSED): string[] {
+	const max = expanded ? BODY_LINES_EXPANDED : collapsedLines;
 	const preview = cappedHeadLines(
 		body.split("\n").filter(line => line.trim()),
 		max,
 	);
 	const lines = preview.lines.map(
-		line => `${INDENT}${theme.fg(tone, replaceTabs(truncateToWidth(line.trim(), BODY_LINE_WIDTH)))}`,
+		line => `${INDENT}${theme.fg("toolOutput", replaceTabs(truncateToWidth(line.trim(), BODY_LINE_WIDTH)))}`,
 	);
-	if (preview.hidden > 0) {
-		lines.push(
-			`${INDENT}${theme.fg("dim", formatMoreItems(preview.hidden, "line", theme))} ${formatExpandHint(theme, expanded, true)}`,
-		);
-	}
+	if (preview.hidden > 0) lines.push(`${INDENT}${formatMoreRow(preview.hidden, "line", theme, { expanded })}`);
 	return lines;
+}
+
+/** A display-only IRC traffic card: who sent what to whom, and when. */
+export interface IrcMessageCard {
+	kind: "incoming" | "autoreply" | "relay" | "workpool";
+	from?: string;
+	to?: string;
+	body?: string;
+	replyTo?: string;
+	timestamp?: number;
+	pool?: string;
+	mode?: string;
+}
+
+/** IRC card subject: the sender, the recipient, or both, joined by direction arrows. */
+function ircCardSubject(card: IrcMessageCard, theme: Theme): string {
+	const { arrowLeft, arrowRight } = theme.format;
+	const from = replaceTabs(card.from?.trim() || "?");
+	const to = replaceTabs(card.to?.trim() || "?");
+	switch (card.kind) {
+		case "incoming":
+			return `${arrowLeft} ${from}`;
+		case "autoreply":
+			return `${arrowRight} ${to}`;
+		case "workpool":
+			return `${replaceTabs(card.pool?.trim() || "?")} ${arrowRight} ${to}`;
+		case "relay":
+			return `${from} ${arrowRight} ${to}`;
+	}
 }
 
 /**
@@ -618,43 +628,20 @@ function bodyLines(
  * this session's behalf, and `irc:relay` observations of agent↔agent
  * traffic. Shares the IRC tool card's header and body conventions.
  */
-export function createIrcMessageCard(
-	card: {
-		kind: "incoming" | "autoreply" | "relay" | "workpool";
-		from?: string;
-		to?: string;
-		body?: string;
-		replyTo?: string;
-		timestamp?: number;
-		pool?: string;
-		mode?: string;
-	},
-	getExpanded: () => boolean,
-	uiTheme: Theme,
-): Component {
-	const from = card.from?.trim() || "?";
-	const to = card.to?.trim() || "?";
-	const { arrowLeft, arrowRight } = uiTheme.format;
+export function createIrcMessageCard(card: IrcMessageCard, getExpanded: () => boolean, uiTheme: Theme): Component {
 	const title = card.kind === "workpool" ? "Pool" : "IRC";
-	const subject =
-		card.kind === "incoming"
-			? `${arrowLeft} ${from}`
-			: card.kind === "autoreply"
-				? `${arrowRight} ${to}`
-				: card.kind === "workpool"
-					? `${card.pool?.trim() || "?"} ${arrowRight} ${to}`
-					: `${from} ${arrowRight} ${to}`;
+	const subject = ircCardSubject(card, uiTheme);
 	const body = card.body ?? "";
 	const meta: string[] = [];
 	if (card.kind === "autoreply") meta.push("auto");
-	if (card.kind === "workpool" && card.mode) meta.push(card.mode);
+	if (card.kind === "workpool" && card.mode) meta.push(replaceTabs(card.mode));
 	if (card.replyTo) meta.push("reply");
 	const age = messageAge(card.timestamp);
 	if (age) meta.push(age);
 	const component = createCachedComponent(getExpanded, (width, expanded) => {
-		const lines = [renderStatusLine({ icon: "info", title, description: subject, meta }, uiTheme)];
-		if (body.trim()) lines.push(...bodyLines(body, expanded, uiTheme, { collapsedLines: 3 }));
-		return fitFlushRows(lines, width);
+		const header: StatusLineOptions = { icon: "info", title, description: subject, meta };
+		const lines = body.trim() ? bodyLines(body, expanded, uiTheme, 3) : [];
+		return fitFlushRows(header, lines, width, uiTheme);
 	});
 	// Terminal-local collapse replaces `getExpanded`; the node never changes after creation.
 	const described = cardNode(
@@ -830,19 +817,15 @@ export const waitToolRenderer = {
 			() => options.expanded,
 			(width, expanded) =>
 				fitFlushRows(
-					[
-						renderStatusLine(
-							{
-								icon: "success",
-								title: "Wait",
-								description: `${uiTheme.format.arrowLeft} ${replaceTabs(waited.from)}`,
-								meta: [messageAge(waited.ts), ...(waited.replyTo ? ["reply"] : [])],
-							},
-							uiTheme,
-						),
-						...bodyLines(waited.body, expanded, uiTheme),
-					],
+					{
+						icon: "success",
+						title: "Wait",
+						description: `${uiTheme.format.arrowLeft} ${replaceTabs(waited.from)}`,
+						meta: [messageAge(waited.ts), ...(waited.replyTo ? ["reply"] : [])],
+					},
+					bodyLines(waited.body, expanded, uiTheme),
 					width,
+					uiTheme,
 				),
 		);
 	},

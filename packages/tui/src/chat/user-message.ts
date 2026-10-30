@@ -1,9 +1,9 @@
-import { applyBackgroundToLine, padding, stripTerminalSequences, visibleWidth } from "../utils";
+import { applyBackgroundToLine, padding, stripTerminalSequences, truncateToWidth, visibleWidth } from "../utils";
 import type { AnimationFrame, TranscriptPresentationTarget } from "../chrome/transcript-container";
 import { type Component, Container } from "../tui";
 import { Disclosure } from "../components/disclosure";
 import { Markdown } from "../components/markdown";
-import { formatBytes } from "@oh-my-pi/pi-utils";
+import { formatBytes, pluralize } from "@oh-my-pi/pi-utils";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { ensureThemeSync, getMarkdownTheme, theme } from "../theme";
@@ -18,7 +18,7 @@ import {
 	skillChipStyle,
 } from "../prompt/composer-attachments";
 import { MODEL_MENTION_TAG_RE } from "../prompt/model-mention-syntax";
-import { expandKeyHint, fileHyperlink, fileLinkSpan } from "../render";
+import { fileHyperlink, fileLinkSpan, formatExpandHint } from "../render";
 import { imageLinksEnabled, imageReferenceHyperlink } from "../prompt/image-references";
 import { highlightMagicKeywords } from "../prompt/magic-keywords";
 import type { ReactionTarget } from "./reaction";
@@ -412,8 +412,7 @@ class SyntheticSummary implements Component {
 	render(width: number): readonly string[] {
 		width = Math.max(1, width);
 		if (this.#cache?.width === width) return this.#cache.lines;
-		const hint = `${theme.sep.dot.trim()} ${expandKeyHint()}`;
-		const lines = [` ${theme.fg("dim", truncateSummary(`${this.#summary} ${hint}`, Math.max(10, width - 1)))}`];
+		const lines = [truncateToWidth(` ${theme.fg("dim", this.#summary)} ${formatExpandHint(theme)}`, width)];
 		this.#cache = { width, lines };
 		return lines;
 	}
@@ -506,20 +505,6 @@ export class CollapsedSyntheticMessageComponent implements Component {
 	}
 }
 
-/** Truncate a plain summary label to `maxWidth` display columns, appending `…`. */
-function truncateSummary(text: string, maxWidth: number): string {
-	if (Bun.stringWidth(text, { countAnsiEscapeCodes: false }) <= maxWidth) return text;
-	let out = "";
-	let w = 0;
-	for (const ch of text) {
-		const cw = Bun.stringWidth(ch, { countAnsiEscapeCodes: false });
-		if (w + cw > maxWidth - 1) break;
-		out += ch;
-		w += cw;
-	}
-	return `${out}…`;
-}
-
 /**
  * One-line summary for a collapsed synthetic input: `<label> · <size> · <n>
  * lines`. The label is the first Markdown heading's text (e.g. `Session
@@ -529,7 +514,7 @@ function summarizeSyntheticInput(text: string): string {
 	const size = formatBytes(Buffer.byteLength(text, "utf-8"));
 	const lineCount = text === "" ? 0 : text.split("\n").length;
 	const dot = theme.sep.dot.trim();
-	return `${syntheticInputLabel(text)} ${dot} ${size} ${dot} ${lineCount} line${lineCount === 1 ? "" : "s"}`;
+	return `${syntheticInputLabel(text)} ${dot} ${size} ${dot} ${lineCount} ${pluralize("line", lineCount)}`;
 }
 
 /** First Markdown heading text in `text`, else `Synthetic input`. */

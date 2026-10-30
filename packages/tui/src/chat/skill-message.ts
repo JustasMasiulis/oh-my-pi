@@ -8,7 +8,7 @@ import { Spacer } from "../components/spacer";
 import { Text } from "../components/text";
 import { getMarkdownTheme, theme } from "../theme";
 import type { CustomMessage, SkillPromptDetails } from "./messages";
-import { fileHyperlink, formatExpandHint } from "../render";
+import { fileHyperlink, formatCount, formatExpandHint } from "../render";
 import { tryFileUri } from "../render/hyperlink";
 import { collapseSkillTokens, skillChipLabel, skillChipStyle, skillToken } from "../prompt/composer-attachments";
 import { type UserBubbleOptions, UserMessageComponent, userBubbleColor } from "./user-message";
@@ -89,7 +89,7 @@ export class SkillMessageComponent extends Container {
 				span(label, "customMessageLabel strong", details?.path ? { href: tryFileUri(details.path) } : undefined),
 			];
 			if (typeof details?.lineCount === "number") {
-				head.push(span(`  ${details.lineCount} ${details.lineCount === 1 ? "line" : "lines"}`, "muted"));
+				head.push(span(`  ${formatCount("line", details.lineCount)}`, "muted"));
 			}
 			const children: NativeChild[] = [];
 			if (draft) children.push(md(draft));
@@ -162,7 +162,7 @@ export class SkillMessageComponent extends Container {
 			skillPath: candidate => (candidate === name ? details?.path : undefined),
 		};
 
-		// Ctrl+O reveals the loaded SKILL.md prompt; say so while it is folded away.
+		// The expand key reveals the loaded SKILL.md prompt; say so while it is folded away.
 		const hasPrompt = this.#hasPromptText();
 
 		if (!leading) {
@@ -229,7 +229,7 @@ export class SkillMessageComponent extends Container {
 		const chip = skillChipStyle(label, bubbleReset());
 		const parts = [details?.path ? fileHyperlink(details.path, chip, { line: 1 }) : chip];
 		if (typeof details?.lineCount === "number") {
-			parts.push(theme.fg("muted", `${details.lineCount} ${details.lineCount === 1 ? "line" : "lines"}`));
+			parts.push(theme.fg("muted", formatCount("line", details.lineCount)));
 		}
 		return parts.join("  ");
 	}

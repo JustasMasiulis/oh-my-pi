@@ -4,28 +4,27 @@
  * For each tool with a registered renderer, the gallery drives a real
  * {@link ToolExecutionComponent} through four states — streaming arguments,
  * arguments complete (in progress), success, and failure — and prints the
- * rendered output to stdout. Transcript messages, composer shapes and
- * status-line segments render alongside as preview sections. It exists for
+ * rendered output to stdout. Transcript messages, live-window widgets, composer
+ * shapes and status-line segments render alongside as preview sections. It exists for
  * visual QA without having to provoke each state through a live agent session.
  */
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
-import { type TUI, visibleWidth } from "@oh-my-pi/pi-tui";
+import { visibleWidth } from "@oh-my-pi/pi-tui";
 import { getProjectDir } from "@oh-my-pi/pi-utils";
 import { Settings } from "../config/settings";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { toolRenderers } from "@oh-my-pi/pi-tui/tools";
 import {
+	GALLERY_UI,
 	type GalleryFixture,
 	type GalleryPreviewEntry,
 	type GalleryResult,
 	galleryFixtures,
 	getComposerGalleryEntries,
-	getComposerGalleryInventory,
 	getMessageGalleryEntries,
-	getMessageGalleryInventory,
 	getSegmentGalleryEntries,
-	getSegmentGalleryInventory,
+	getWidgetGalleryEntries,
 } from "./gallery-fixtures";
 import { captureGalleryScreenshots } from "./gallery-screenshot";
 
@@ -58,7 +57,7 @@ const GALLERY_STATE_ALIASES: Record<string, GalleryState> = {
 export const GALLERY_STATE_TOKENS = Object.keys(GALLERY_STATE_ALIASES);
 
 /** Gallery surfaces in stable product order. */
-export const GALLERY_SURFACES = ["tool", "message", "composer", "segment"] as const;
+export const GALLERY_SURFACES = ["tool", "message", "widget", "composer", "segment"] as const;
 export type GallerySurface = (typeof GALLERY_SURFACES)[number];
 export const GALLERY_SURFACE_TOKENS = [...GALLERY_SURFACES, "all"] as const;
 
@@ -103,6 +102,8 @@ export interface GalleryCommandArgs {
 	tool?: string;
 	/** Restrict to a single transcript message kind. */
 	message?: string;
+	/** Restrict to a single live-window widget. */
+	widget?: string;
 	/** Restrict to a single composer shape. */
 	composer?: string;
 	/** Restrict to a single status-line segment. */
@@ -123,7 +124,7 @@ export interface GalleryCommandArgs {
 	fontSize?: number;
 }
 
-/** One tool's rendered lifecycle, as ANSI lines: a leading blank, the section rule, then each state. */
+/** One rendered gallery section, as ANSI lines: a leading blank, the section rule, then each variant. */
 export interface GallerySection {
 	heading: string;
 	lines: string[];
@@ -186,21 +187,16 @@ export async function renderGalleryState(
 	// A non-customRendered fixture may borrow another tool's built-in renderer
 	// (e.g. `edit_delete` → `edit`): drive the component under that real tool
 	// name so the sample exercises the exact production branch, not the
-	// custom-tool one (which tints/pads non-framed result rows).
+	// custom-tool one.
 	const componentName = fixture.customRendered ? name : (fixture.renderer ?? name);
 	const tool = fakeToolFor(componentName, fixture);
 	const streamingArgs = state === "streaming" ? (fixture.streamingArgs ?? fixture.args) : fixture.args;
-	// The component only calls `requestRender`/`requestComponentRender` (via
-	// its loader) during a static render; `imageBudget` is consulted solely
-	// when images render, which the gallery disables. A cast avoids
-	// constructing a real terminal.
-	const ui = { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
 	const component = new ToolExecutionComponent(
 		componentName,
 		streamingArgs,
 		{ showImages: false, useBuiltInRenderer: !fixture.customRendered },
 		tool,
-		ui,
+		GALLERY_UI,
 		getProjectDir(),
 	);
 	component.setExpanded(expanded);
@@ -238,52 +234,49 @@ function sectionRule(label: string, width: number): string {
 	return theme.fg("accent", theme.bold(`${prefix}${rule.repeat(fill)}`));
 }
 
-/** Dim sub-heading above one rendered state or variant. */
-function variantLabel(label: string): string {
-	return theme.fg("dim", `  ${theme.sep.dot.trim()} ${label}`);
+/** One entry per tool (every registry renderer plus every fixture, sorted), one variant per lifecycle state. */
+function toolGalleryEntries(states: readonly GalleryState[]): GalleryPreviewEntry[] {
+	const names = new Set([...Object.keys(toolRenderers), ...Object.keys(galleryFixtures)]);
+	return [...names].sort().map(name => {
+		const fixture = resolveFixture(name);
+		const heading = fixture.label && fixture.label !== name ? `${name}${theme.sep.dot}${fixture.label}` : name;
+		return {
+			id: name,
+			heading,
+			variants: states.map(state => ({
+				label: GALLERY_STATE_LABELS[state],
+				render: (width, expanded) => renderGalleryState(name, fixture, state, width, expanded),
+			})),
+		};
+	});
+}
+
+function surfaceEntries(surface: GallerySurface, states: readonly GalleryState[]): readonly GalleryPreviewEntry[] {
+	switch (surface) {
+		case "tool":
+			return toolGalleryEntries(states);
+		case "message":
+			return getMessageGalleryEntries();
+		case "widget":
+			return getWidgetGalleryEntries();
+		case "composer":
+			return getComposerGalleryEntries();
+		case "segment":
+			return getSegmentGalleryEntries();
+	}
+}
+
+/** Surfaces named by `--surface` or implied by an entry filter (`--tool`, `--message`, …); all when neither is given. */
+function resolveSurfaces(args: GalleryCommandArgs): GallerySurface[] {
+	const selected = GALLERY_SURFACES.filter(surface => args.surfaces?.includes(surface) || args[surface]);
+	return selected.length > 0 ? selected : [...GALLERY_SURFACES];
 }
 
 /**
- * Render each requested tool's lifecycle into ANSI section blocks. The block
- * layout (leading blank, section rule, then a blank + dim label + body per
- * state) is shared by the stdout and screenshot paths so both stay identical.
+ * Render entries into ANSI section blocks. The block layout (leading blank,
+ * section rule, then a blank + dim label + body per variant) is shared by the
+ * stdout and screenshot paths so both stay identical.
  */
-async function renderGallerySections(
-	names: string[],
-	states: GalleryState[],
-	width: number,
-	expanded: boolean,
-): Promise<GallerySection[]> {
-	const sections: GallerySection[] = [];
-	for (const name of names) {
-		const fixture = resolveFixture(name);
-		const heading = fixture.label && fixture.label !== name ? `${name}${theme.sep.dot}${fixture.label}` : name;
-		const lines: string[] = ["", sectionRule(heading, width)];
-		for (const state of states) {
-			lines.push("", variantLabel(GALLERY_STATE_LABELS[state]));
-			try {
-				for (const line of await renderGalleryState(name, fixture, state, width, expanded)) lines.push(line);
-			} catch (err) {
-				lines.push(theme.fg("error", `  render failed: ${String(err)}`));
-			}
-		}
-		sections.push({ heading, lines });
-	}
-	return sections;
-}
-
-function resolveSurfaces(args: GalleryCommandArgs): GallerySurface[] {
-	const selected = new Set<GallerySurface>(args.surfaces ?? []);
-	if (!args.surfaces || args.surfaces.length === 0) {
-		if (!args.tool && !args.message && !args.composer && !args.segment) return [...GALLERY_SURFACES];
-	}
-	if (args.tool) selected.add("tool");
-	if (args.message) selected.add("message");
-	if (args.composer) selected.add("composer");
-	if (args.segment) selected.add("segment");
-	return GALLERY_SURFACES.filter(surface => selected.has(surface));
-}
-
 async function renderPreviewSections(
 	entries: readonly GalleryPreviewEntry[],
 	width: number,
@@ -293,7 +286,7 @@ async function renderPreviewSections(
 	for (const entry of entries) {
 		const lines = ["", sectionRule(entry.heading, width)];
 		for (const variant of entry.variants) {
-			lines.push("", variantLabel(variant.label));
+			lines.push("", theme.fg("dim", `  ${theme.sep.dot.trim()} ${variant.label}`));
 			try {
 				for (const line of await variant.render(width, expanded)) lines.push(line);
 			} catch (err) {
@@ -305,40 +298,25 @@ async function renderPreviewSections(
 	return sections;
 }
 
-/** Build requested sections in the fixed tool → message → composer → segment order. */
+/** Build requested sections in the fixed tool → message → widget → composer → segment order. */
 export async function renderGallerySurfaceSections(
 	args: GalleryCommandArgs,
 	width = resolveWidth(args.width),
 ): Promise<GallerySection[]> {
 	const expanded = args.expanded ?? false;
-	const states = args.states && args.states.length > 0 ? args.states : [...GALLERY_STATES];
-	const surfaces = resolveSurfaces(args);
+	const states = args.states && args.states.length > 0 ? args.states : GALLERY_STATES;
 	const sections: GallerySection[] = [];
-
-	if (surfaces.includes("tool")) {
-		const allNames = Array.from(new Set([...Object.keys(toolRenderers), ...Object.keys(galleryFixtures)])).sort();
-		const names = args.tool ? allNames.filter(name => name === args.tool) : allNames;
-		sections.push(...(await renderGallerySections(names, states, width, expanded)));
-	}
-	if (surfaces.includes("message")) {
-		const entries = getMessageGalleryEntries().filter(entry => !args.message || entry.id === args.message);
-		sections.push(...(await renderPreviewSections(entries, width, expanded)));
-	}
-	if (surfaces.includes("composer")) {
-		const entries = getComposerGalleryEntries().filter(entry => !args.composer || entry.id === args.composer);
-		sections.push(...(await renderPreviewSections(entries, width, expanded)));
-	}
-	if (surfaces.includes("segment")) {
-		const entries = getSegmentGalleryEntries().filter(entry => !args.segment || entry.id === args.segment);
+	for (const surface of resolveSurfaces(args)) {
+		const filter = args[surface];
+		const entries = surfaceEntries(surface, states).filter(entry => !filter || entry.id === filter);
 		sections.push(...(await renderPreviewSections(entries, width, expanded)));
 	}
 	return sections;
 }
 
 /**
- * Render the gallery. Iterates the renderer registry (or a single tool),
- * printing each requested lifecycle state under a labeled section — or, with
- * `screenshot`, capturing the rendered output as PNG(s) via VHS.
+ * Render the gallery: every requested surface's sections printed to stdout —
+ * or, with `screenshot`, captured as PNG(s) via VHS.
  */
 export async function runGalleryCommand(args: GalleryCommandArgs): Promise<void> {
 	const settingsInstance = await Settings.init();
@@ -355,31 +333,14 @@ export async function runGalleryCommand(args: GalleryCommandArgs): Promise<void>
 	);
 
 	const width = resolveWidth(args.width);
-	const surfaces = resolveSurfaces(args);
-	if (surfaces.includes("tool") && args.tool) {
-		const knownTools = Array.from(new Set([...Object.keys(toolRenderers), ...Object.keys(galleryFixtures)])).sort();
-		if (!knownTools.includes(args.tool)) {
-			process.stdout.write(`Unknown tool '${args.tool}'. Known tools: ${knownTools.join(", ")}\n`);
+	for (const surface of resolveSurfaces(args)) {
+		const requested = args[surface];
+		if (!requested) continue;
+		const known = surfaceEntries(surface, GALLERY_STATES).map(entry => entry.id);
+		if (!known.includes(requested)) {
+			process.stdout.write(`Unknown ${surface} '${requested}'. Known ${surface}s: ${known.join(", ")}\n`);
 			return;
 		}
-	}
-	if (surfaces.includes("message") && args.message && !getMessageGalleryInventory().includes(args.message)) {
-		process.stdout.write(
-			`Unknown message '${args.message}'. Known messages: ${getMessageGalleryInventory().join(", ")}\n`,
-		);
-		return;
-	}
-	if (surfaces.includes("composer") && args.composer && !getComposerGalleryInventory().includes(args.composer)) {
-		process.stdout.write(
-			`Unknown composer '${args.composer}'. Known composers: ${getComposerGalleryInventory().join(", ")}\n`,
-		);
-		return;
-	}
-	if (surfaces.includes("segment") && args.segment && !getSegmentGalleryInventory().some(id => id === args.segment)) {
-		process.stdout.write(
-			`Unknown segment '${args.segment}'. Known segments: ${getSegmentGalleryInventory().join(", ")}\n`,
-		);
-		return;
 	}
 
 	const sections = await renderGallerySurfaceSections(args, width);

@@ -6,8 +6,14 @@ import { noteText } from "./native-view";
 import type { Theme } from "../theme/theme";
 import { formatOutputPaneLines, styleToolOutputLine } from "../render/output-pane";
 import { renderStatusLine, type StatusLineOptions } from "../render/status-line";
-import { FLUSH_BODY_INDENT, layoutFlushCard, plainToolCard, type ToolCardPhase } from "../render/tool-card";
-import { clipCollapsed } from "../render/render-utils";
+import {
+	CardRowsMemo,
+	FLUSH_BODY_INDENT,
+	layoutFlushCard,
+	plainToolCard,
+	type ToolCardPhase,
+} from "../render/tool-card";
+import { clipCollapsed, formatExpandHint } from "../render/render-utils";
 import {
 	describeJsonValue,
 	formatArgsInline,
@@ -19,7 +25,6 @@ import {
 	JSON_TREE_SCALAR_LEN_EXPANDED,
 	renderJsonTreeLines,
 } from "./json-tree";
-import { formatExpandHint } from "../render/render-utils";
 
 /** Width that never clips an args line; `truncateToWidth` coerces widths to int32, so it stays below 2^31. */
 const UNCLIPPED_ARGS_WIDTH = 2 ** 30;
@@ -104,7 +109,7 @@ function buildDefaultToolBody(input: DefaultToolRenderInput, uiTheme: Theme, con
 					// Ctrl+O falls through to the uncapped raw view instead.
 					if (tree.lines.length > 0 && !(options.expanded && tree.truncated)) {
 						body.push(...tree.lines);
-						if (!options.expanded) body.push(formatExpandHint(uiTheme, options.expanded, true));
+						if (!options.expanded) body.push(formatExpandHint(uiTheme));
 						renderedAsJson = true;
 					}
 				} catch {
@@ -214,32 +219,22 @@ export function describeDefaultToolExecution(input: DefaultToolRenderInput): Nat
 export function renderDefaultToolExecution(input: DefaultToolRenderInput, uiTheme: Theme): Component {
 	// The body (JSON parse + tree walk or output styling) is spinner-invariant;
 	// rebuild it only when its inputs change instead of on every animated frame.
-	let memo:
-		| { args: unknown; output: string | undefined; expanded: boolean; contentWidth: number; body: readonly string[] }
-		| undefined;
+	const memo = new CardRowsMemo();
+	let builtFor: { args: unknown; output: string | undefined } | undefined;
 	return plainToolCard(
 		uiTheme,
 		({ contentWidth }) => {
 			const { status, phase } = buildDefaultToolStatus(input);
 			const output = input.result?.output;
-			const expanded = input.options.expanded;
-			if (
-				memo === undefined ||
-				memo.args !== input.args ||
-				memo.output !== output ||
-				memo.expanded !== expanded ||
-				memo.contentWidth !== contentWidth
-			) {
-				memo = {
-					args: input.args,
-					output,
-					expanded,
-					contentWidth,
-					body: buildDefaultToolBody(input, uiTheme, contentWidth),
-				};
+			if (builtFor === undefined || builtFor.args !== input.args || builtFor.output !== output) {
+				memo.clear();
+				builtFor = { args: input.args, output };
 			}
-			return { status, phase, body: memo.body };
+			const body = memo.rows(contentWidth, input.options.expanded, () =>
+				buildDefaultToolBody(input, uiTheme, contentWidth),
+			);
+			return { status, phase, body };
 		},
-		{ ignoreTight: true, onInvalidate: () => (memo = undefined) },
+		{ ignoreTight: true, ...memo.cardOptions },
 	);
 }

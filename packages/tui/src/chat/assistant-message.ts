@@ -15,7 +15,7 @@ import {
 } from "../components/markdown";
 import { Spacer } from "../components/spacer";
 import { Text } from "../components/text";
-import { formatDuration, formatNumber, logger } from "@oh-my-pi/pi-utils";
+import { formatCount, formatDuration, formatNumber, logger } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import type { AssistantTextRenderer, AssistantTextRendering, AssistantThinkingRenderer } from "./extension-types";
@@ -1152,7 +1152,7 @@ export class AssistantMessageComponent extends Container {
 				"section",
 				{
 					role: "omp.assistant.recovered",
-					head: [span(`↻ Recovered after ${attempt} ${attempt === 1 ? "retry" : "retries"}`, "muted")],
+					head: [span(`↻ Recovered after ${formatCount("retry", attempt)}`, "muted")],
 					collapsible: true,
 					collapsed: true,
 				},

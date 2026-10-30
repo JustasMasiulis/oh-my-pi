@@ -12,10 +12,10 @@ import { type StatusLineOptions, urlHyperlink } from "../render";
 import { framedToolCard, plainToolCard } from "../render/tool-card";
 import {
 	formatErrorText,
-	formatExpandHint,
-	formatMoreItems,
+	formatMoreRow,
 	getDomain,
 	PREVIEW_LIMITS,
+	formatCount,
 	sanitizeDisplayLines,
 } from "../render/render-utils";
 import { applyListLimit } from "./list-limit";
@@ -192,7 +192,7 @@ export function describeReadUrlResult(result: {
 		[
 			plainText(details.contentType || "unknown"),
 			details.method ? plainText(details.method) : "",
-			`${contentLines.length} line${contentLines.length === 1 ? "" : "s"}`,
+			formatCount("line", contentLines.length),
 			`${contentBody.trim().length} chars`,
 			hidden > 0 ? `… ${hidden} more lines` : "",
 			...details.notes.map(note => plainText(note)),
@@ -269,7 +269,7 @@ export function renderReadUrlResult(
 			`${uiTheme.fg("muted", "Final URL:")} ${formatReadUrlMetadataValue(details.finalUrl, uiTheme)}`,
 		);
 	}
-	const lineLabel = `${lineCount} line${lineCount === 1 ? "" : "s"}`;
+	const lineLabel = formatCount("line", lineCount);
 	if (truncation?.artifactId) metadataLines.push(formatStyledArtifactReference(truncation.artifactId, uiTheme));
 	if (hasNotes) {
 		metadataLines.push(`${uiTheme.fg("muted", "Notes:")} ${details.notes.join("; ")}`);
@@ -298,12 +298,7 @@ export function renderReadUrlResult(
 					previewLines.length > 0
 						? previewLines.map(line => uiTheme.fg("dim", line))
 						: [uiTheme.fg("dim", "(no content)")];
-				previewMarker =
-					remaining > 0
-						? [formatMoreItems(remaining, "line", uiTheme), formatExpandHint(uiTheme, expanded, true)]
-								.filter(Boolean)
-								.join(" ")
-						: "";
+				previewMarker = remaining > 0 ? formatMoreRow(remaining, "line", uiTheme, { expanded }) : "";
 				lastExpanded = expanded;
 			}
 

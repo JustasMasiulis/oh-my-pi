@@ -10,7 +10,8 @@ import type { DescribeContext, NativeChild, NativeNode } from "../native/node";
 import { node } from "../native/describe";
 import { overlayCard } from "../native/overlay";
 import { type Component, visibleWidth } from "../tui";
-import { Ellipsis, truncateToWidth } from "../utils";
+import { truncateToWidth } from "../utils";
+import { clipRows } from "../render/render-utils";
 import { padToWidth } from "../render/utils";
 import { type ThemeColor, theme } from "../theme/index";
 
@@ -333,12 +334,8 @@ export class OverlayPanel implements Component {
 			for (const line of childLines[i] ?? NO_LINES) result.push(row(line, width));
 		}
 		result.push(bottomBorder(width));
-		if (width < 4) {
-			for (let index = 0; index < result.length; index++) {
-				result[index] = truncateToWidth(result[index]!, width, Ellipsis.Omit);
-			}
-		}
-		this.#memo = { width, title: this.#title, children: [...this.children], childLines, result };
-		return result;
+		const lines = width < 4 ? clipRows(result, width) : result;
+		this.#memo = { width, title: this.#title, children: [...this.children], childLines, result: lines };
+		return lines;
 	}
 }

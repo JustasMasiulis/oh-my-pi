@@ -55,13 +55,13 @@ describe("eval renderer: agent() progress in the cell's Output section", () => {
 	}
 
 	/** Rows between the cell's Output bar and its bottom border. */
-	function outputRows<T extends string>(lines: readonly T[]): T[] {
+	function outputRows(lines: readonly string[]): string[] {
 		const bar = lines.findIndex(line => Bun.stripANSI(line).includes("Output"));
 		expect(bar).toBeGreaterThan(0);
 		return lines.slice(bar + 1, -1);
 	}
 
-	it("draws a running subagent below the box with its current tool and intent", () => {
+	it("draws a running subagent under the Output bar with its current tool and intent", () => {
 		setFeedModelBadgeEnabled(true);
 		const event: EvalStatusEvent = {
 			op: "agent",
@@ -95,7 +95,7 @@ describe("eval renderer: agent() progress in the cell's Output section", () => {
 		expect(below).not.toContain("p/model:high:high");
 	});
 
-	it("keeps full stats on a completed subagent below the box", () => {
+	it("keeps full stats on a completed subagent under the Output bar", () => {
 		setFeedModelBadgeEnabled(true);
 		const event: EvalStatusEvent = {
 			op: "agent",

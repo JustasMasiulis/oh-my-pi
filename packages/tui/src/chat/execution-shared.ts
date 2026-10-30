@@ -16,7 +16,7 @@ import { formatArtifactErrorNotice, formatTruncationMetaNotice, type TruncationM
 import { DynamicBorder } from "../chrome/dynamic-border";
 import { Ellipsis, truncateToWidth, visibleWidth } from "../utils";
 import { interruptKey } from "../chrome/keybinding-hints";
-import { DEFAULT_TERMINAL_PREVIEW_LINES, formatExpandHint, formatMoreItems } from "../render/render-utils";
+import { DEFAULT_TERMINAL_PREVIEW_LINES, formatMoreRow } from "../render/render-utils";
 import type { TspCardStatus, TspSpan, TspText, TspTone } from "@oh-my-pi/pi-wire";
 import { card, node, span, text } from "../native/describe";
 import type { NativeChild, NativeNode } from "../native/node";
@@ -35,7 +35,7 @@ export function clampDisplayLine(line: string): string {
 		return line;
 	}
 	const omitted = visible - MAX_DISPLAY_LINE_CHARS;
-	return `${truncateToWidth(line, MAX_DISPLAY_LINE_CHARS, Ellipsis.Omit)}… [${omitted} visible columns omitted]`;
+	return `${truncateToWidth(line, MAX_DISPLAY_LINE_CHARS, Ellipsis.Omit)}${theme.format.ellipsis} [${omitted} visible columns omitted]`;
 }
 
 export type ExecutionStatus = "running" | "complete" | "cancelled" | "error";
@@ -97,7 +97,7 @@ export function buildStatusFooter(opts: {
 	const parts: string[] = [];
 
 	if (opts.hiddenLineCount > 0 && !opts.suppressHiddenCount) {
-		parts.push(`${theme.fg("dim", formatMoreItems(opts.hiddenLineCount, "line", theme))} ${formatExpandHint(theme)}`);
+		parts.push(formatMoreRow(opts.hiddenLineCount, "line", theme));
 	}
 	if (opts.truncation) {
 		parts.push(theme.fg("warning", formatTruncationMetaNotice(opts.truncation)));

@@ -10,12 +10,12 @@ import type { Theme } from "../theme/theme";
 import { oneLineLabel } from "./task";
 import { formatCount } from "@oh-my-pi/pi-utils";
 import { plainToolCard } from "../render/tool-card";
+import { nestRows } from "../render/utils";
 import {
 	formatBadge,
 	formatDuration,
 	formatErrorText,
-	formatExpandHint,
-	formatMoreItems,
+	formatMoreRow,
 	formatStatusIcon,
 	replaceTabs,
 	sanitizeDisplayLines,
@@ -160,8 +160,9 @@ function frameText(text: string, max: number): string {
 function vibeSubject(op: VibeOp, args: VibeRenderArgs | undefined, sep: string, details?: VibeToolDetails): string {
 	switch (op) {
 		case "spawn": {
+			const cli = details?.spawned?.cli ?? args?.cli ?? "fast";
 			const name = details?.spawned?.id ?? args?.name;
-			return `spawn ${details?.spawned?.cli ?? args?.cli ?? "fast"}${name ? `${sep}${frameText(name, 40)}` : ""}`;
+			return name ? `spawn ${cli}${sep}${frameText(name, 40)}` : `spawn ${cli}`;
 		}
 		case "send":
 			return args?.session ? `send ${frameText(args.session, 40)}` : "send";
@@ -181,12 +182,16 @@ function messageRows(uiTheme: Theme, message: string, expanded: boolean): string
 	const rawLines = message.split(/\r?\n/).filter(line => line.trim().length > 0);
 	const maxRows = expanded ? COMPOSER_ROWS_EXPANDED : COMPOSER_ROWS_COLLAPSED;
 	const rows = rawLines.slice(0, maxRows).map(line => uiTheme.fg("toolOutput", frameText(line, COMPOSER_LINE_MAX)));
-	if (rawLines.length > maxRows) {
-		rows.push(
-			`${uiTheme.fg("dim", formatMoreItems(rawLines.length - maxRows, "line", uiTheme))} ${formatExpandHint(uiTheme, expanded, true)}`,
-		);
-	}
+	const hidden = rawLines.length - maxRows;
+	if (hidden > 0) rows.push(formatMoreRow(hidden, "line", uiTheme, { expanded }));
 	return rows;
+}
+
+/** The director's message a composer op sends: the spawn prompt or the send body; empty otherwise. */
+function vibeMessage(op: VibeOp, args: VibeRenderArgs | undefined): string {
+	if (op === "spawn") return args?.prompt ?? "";
+	if (op === "send") return args?.message ?? "";
+	return "";
 }
 
 /** One worker: `<icon> id [cli] - state - 3t - 1m2s - model`, its live trace nested below. */
@@ -218,9 +223,9 @@ function screenRows(
 		if (screen.turnMessage) details.push(uiTheme.fg("dim", frameText(screen.turnMessage, TV_LINE_MAX)));
 		const traceCap = options.expanded ? TV_TRACE_EXPANDED : TV_TRACE_COLLAPSED;
 		for (const line of screen.trace.slice(-traceCap)) details.push(uiTheme.fg("dim", frameText(line, TV_LINE_MAX)));
-		const current = screen.currentTool
-			? `${screen.currentTool}${(screen.lastIntent ?? screen.currentToolArgs) ? `: ${screen.lastIntent ?? screen.currentToolArgs}` : ""}`
-			: screen.lastIntent;
+		const toolDetail = screen.lastIntent ?? screen.currentToolArgs;
+		const toolLabel = toolDetail ? `${screen.currentTool}: ${toolDetail}` : screen.currentTool;
+		const current = screen.currentTool ? toolLabel : screen.lastIntent;
 		if (current) {
 			const label = frameText(current, TV_LINE_MAX);
 			details.push(animate && shimmerEnabled() ? shimmerText(label, uiTheme) : uiTheme.fg("muted", label));
@@ -232,13 +237,7 @@ function screenRows(
 	} else if (screen.lastActivity) {
 		details.push(uiTheme.fg("muted", frameText(screen.lastActivity, TV_LINE_MAX)));
 	}
-	return [
-		head,
-		...details.map(
-			(line, index) =>
-				`${uiTheme.fg("dim", index === details.length - 1 ? uiTheme.tree.last : uiTheme.tree.branch)} ${line}`,
-		),
-	];
+	return [head, ...nestRows(details, uiTheme)];
 }
 
 // =============================================================================
@@ -355,7 +354,7 @@ function describeVibeResult(
 	}
 
 	if (op === "spawn" || op === "send") {
-		const message = op === "spawn" ? (args?.prompt ?? "") : (args?.message ?? "");
+		const message = vibeMessage(op, args);
 		const head = toolHead("Vibe", label);
 		const ack: TspSpan =
 			op === "spawn"
@@ -417,7 +416,7 @@ export function createVibeToolRenderer(op: VibeOp) {
 		animatedPartialResult: op === "wait",
 
 		renderCall(args: VibeRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
-			const message = op === "spawn" ? (args?.prompt ?? "") : op === "send" ? (args?.message ?? "") : "";
+			const message = vibeMessage(op, args);
 			return plainToolCard(uiTheme, () => ({
 				status: {
 					icon: options.executionStarted ? "running" : "pending",
@@ -452,7 +451,7 @@ export function createVibeToolRenderer(op: VibeOp) {
 			}
 
 			if (composerOp) {
-				const message = op === "spawn" ? (args?.prompt ?? "") : (args?.message ?? "");
+				const message = vibeMessage(op, args);
 				const queued = details.send?.mode === "queued";
 				const jobId = op === "spawn" ? details.spawned?.jobId : details.send?.jobId;
 				const mode = op === "send" ? details.send?.mode : undefined;
@@ -507,13 +506,8 @@ export function createVibeToolRenderer(op: VibeOp) {
 				if (settledById.size > 0) meta.push(`${settledById.size} settled`);
 				if (details.wait?.timedOut) meta.push("timed out");
 				meta.push(...killedMeta);
-				const icon: ToolUIStatus = options.isPartial
-					? options.spinnerFrame !== undefined
-						? "running"
-						: "pending"
-					: details.wait?.timedOut
-						? "warning"
-						: "success";
+				let icon: "warning" | "success" | "running" | "pending" = details.wait?.timedOut ? "warning" : "success";
+				if (options.isPartial) icon = options.spinnerFrame !== undefined ? "running" : "pending";
 				const nowMs = options.isPartial ? Date.now() : snapshotTime;
 				return {
 					status: { icon, spinnerFrame: wallOptions.spinnerFrame, title: TITLE, description: subject, meta },
@@ -526,9 +520,10 @@ export function createVibeToolRenderer(op: VibeOp) {
 		},
 
 		describeCall(args: VibeRenderArgs): NativeToolView | undefined {
-			const message = op === "spawn" ? (args?.prompt ?? "") : op === "send" ? (args?.message ?? "") : "";
-			return callMemo.get(args, [vibeSubject(op, args, " · "), message], () => {
-				const head = toolHead("Vibe", vibeSubject(op, args, " · "));
+			const message = vibeMessage(op, args);
+			const label = vibeSubject(op, args, " · ");
+			return callMemo.get(args, [label, message], () => {
+				const head = toolHead("Vibe", label);
 				if (!composerOp) return { head, inline: true };
 				return {
 					head,

@@ -8,7 +8,7 @@ import { Markdown } from "../components/markdown";
 import { code, md, span } from "../native/describe";
 import type { NativeNode } from "../native/node";
 import { getMarkdownTheme, highlightCode, type Theme } from "../theme/theme";
-import { formatExpandHint, formatMoreItems, replaceTabs } from "./render-utils";
+import { formatMoreRow, replaceTabs } from "./render-utils";
 import { wrapPrefixedLine } from "./hanging-wrap";
 import {
 	describeOutputBlock,
@@ -84,11 +84,6 @@ function joinFooter(theme: Theme, footerMeta: string | undefined, marker: string
 	return footerMeta ? `${footerMeta}${theme.fg("dim", theme.sep.dot)}${dimMarker}` : dimMarker;
 }
 
-function hiddenMarker(hidden: number, expanded: boolean, theme: Theme): string {
-	const hint = formatExpandHint(theme, expanded, hidden > 0);
-	return `${formatMoreItems(hidden, "line", theme)}${hint ? ` ${hint}` : ""}`;
-}
-
 /** Output rows plus the count hidden below them; the caller places the marker. */
 function renderCellOutput(
 	output: string | undefined,
@@ -127,11 +122,11 @@ function renderCellBlock(
 
 	let footerMarker: string | undefined;
 	if (content.hidden > 0) {
-		const marker = hiddenMarker(content.hidden, expanded, theme);
-		if (hasOutput) content.lines.push(theme.fg("dim", content.gutterPad + marker));
+		const marker = formatMoreRow(content.hidden, "line", theme, { expanded });
+		if (hasOutput) content.lines.push(content.gutterPad + marker);
 		else footerMarker = marker;
 	}
-	if (output.hidden > 0) footerMarker = hiddenMarker(output.hidden, expanded, theme);
+	if (output.hidden > 0) footerMarker = formatMoreRow(output.hidden, "line", theme, { expanded });
 
 	const sections: Array<{ label?: string; lines: readonly string[] }> = [{ lines: content.lines }];
 	if (hasOutput) sections.push({ label: theme.fg("toolTitle", "Output"), lines: output.lines });
@@ -202,9 +197,8 @@ export function renderCodeCell(options: CodeCellOptions, theme: Theme): string[]
 	if (tail) {
 		// Earlier rows scrolled above the live tail window — mark them on top so
 		// the newest streamed line stays pinned to the bottom of the box.
-		const hint = formatExpandHint(theme, expanded, true);
-		const earlier = `${formatMoreItems(hiddenCodeLines, "line", theme, "earlier")}${hint ? ` ${hint}` : ""}`;
-		displayCodeLines.unshift(theme.fg("dim", gutterPad + earlier));
+		const earlier = formatMoreRow(hiddenCodeLines, "line", theme, { expanded, position: "earlier" });
+		displayCodeLines.unshift(gutterPad + earlier);
 	}
 
 	return renderCellBlock(options, { lines: displayCodeLines, hidden: tail ? 0 : hiddenCodeLines, gutterPad }, theme);

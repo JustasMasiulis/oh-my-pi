@@ -58,7 +58,7 @@ describe("globToolRenderer", () => {
 			.render(240);
 		const plain = sanitizeText(renderedLines.join("\n"));
 
-		expect(plain).toContain("0 files · timed out");
+		expect(plain).toContain(`0 files${uiTheme.sep.dot}timed out`);
 	});
 
 	it("distinguishes a timed-out partial listing from a result-limit truncation", async () => {
@@ -100,7 +100,7 @@ describe("globToolRenderer", () => {
 		expect(limited).not.toContain("timed out");
 	});
 
-	it("renders a genuinely empty result as no files found", async () => {
+	it("renders a genuinely empty result as 0 files without a timeout note", async () => {
 		const theme = await getThemeByName("dark");
 		expect(theme).toBeDefined();
 		const uiTheme = theme!;

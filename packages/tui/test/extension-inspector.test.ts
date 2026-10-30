@@ -437,7 +437,7 @@ describe("tool inspector", () => {
 		expect(collapsed).toMatch(/action\s+string/);
 		expect(collapsed).toContain("Required");
 		expect(collapsed).not.toContain("1 arg");
-		expect(collapsed).not.toMatch(/args \(.* to expand\)/);
+		expect(collapsed).not.toMatch(/args .*: Expand/);
 		expect(collapsed).not.toContain("systemd custom tool");
 		expect(collapsed).not.toContain("(no arguments)");
 
@@ -445,7 +445,7 @@ describe("tool inspector", () => {
 		const expanded = render(panel);
 		expect(expanded).toContain("action");
 		expect(expanded).toContain("Required");
-		expect(expanded).not.toMatch(/args \(.* to expand\)/);
+		expect(expanded).not.toMatch(/args .*: Expand/);
 
 		const list = new ExtensionList(
 			[
@@ -868,7 +868,7 @@ describe("inspector wrap and fill", () => {
 		});
 		const collapsed = Bun.stripANSI(panel.render(42).join("\n"));
 		expect(collapsed).toContain("30 patterns");
-		expect(collapsed).toMatch(/more \(.* to expand\)/);
+		expect(collapsed).toMatch(/\d+ more patterns/);
 		expect(collapsed).toContain("Rule");
 		expect(collapsed).toContain("do not guard timers");
 		expect(collapsed).not.toContain("clearTimeout($X) // 30");
@@ -890,7 +890,7 @@ describe("inspector wrap and fill", () => {
 		expect(lines.length).toBeLessThanOrEqual(40);
 		expect(collapsed).toContain("line 1");
 		expect(collapsed).not.toContain("line 40");
-		expect(collapsed).toMatch(/more \(.* to expand\)/);
+		expect(collapsed).toMatch(/more .*: Expand/);
 	});
 });
 
@@ -925,11 +925,11 @@ describe("inspector expand", () => {
 		const collapsed = render(panel);
 		expect(collapsed).toContain("line 1");
 		expect(collapsed).not.toContain("line 20");
-		expect(collapsed).toMatch(/more \(.* to expand\)/);
+		expect(collapsed).toMatch(/more .*: Expand/);
 
 		panel.toggleExpanded();
 		const expanded = render(panel);
 		expect(expanded).toContain("line 20");
-		expect(expanded).not.toMatch(/more \(.* to expand\)/);
+		expect(expanded).not.toMatch(/more .*: Expand/);
 	});
 });
