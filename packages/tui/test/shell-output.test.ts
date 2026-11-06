@@ -66,6 +66,11 @@ describe("shell output styling", () => {
 		expect(styled[4]).toBe(theme.fg("toolDiffAdded", diff[4]!));
 	});
 
+	it("keeps a `--- ` / `+++ ` pair that names no file as plain output rows", () => {
+		const rows = ["--- ", "+++ ", "tail"];
+		expect(styleOutput("echo", rows)).toEqual(rows.map(plain));
+	});
+
 	it("resolves a search context row whose path contains `-digits-`", () => {
 		const path = "app-2-x/src/a.ts";
 		const styled = styleOutput("rg -n -C1 value app-2-x", [`${path}-1-const a = 0;`, `${path}:2:const value = 1;`]);

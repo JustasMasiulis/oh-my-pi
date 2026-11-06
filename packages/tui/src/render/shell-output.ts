@@ -459,10 +459,10 @@ function classifyRows(lines: readonly string[], hints: ShellOutputHints): Output
 			rows.push({ kind: "diffMeta" });
 			continue;
 		}
-		const nextLine = lines[index + 1];
-		if (line.startsWith("--- ") && nextLine?.startsWith("+++ ")) {
-			const oldPath = DIFF_PATH_RE.exec(line)!;
-			const newPath = DIFF_PATH_RE.exec(nextLine)!;
+		// Diff file headers come in pairs, each naming a path; `--- ` alone is ordinary output.
+		const oldPath = line.startsWith("--- ") ? DIFF_PATH_RE.exec(line) : null;
+		const newPath = oldPath && lines[index + 1]?.startsWith("+++ ") ? DIFF_PATH_RE.exec(lines[index + 1]!) : null;
+		if (oldPath && newPath) {
 			diffLang = pathLanguage(newPath[2]!) ?? pathLanguage(oldPath[2]!);
 			rows.push({ kind: "diffPath", marker: oldPath[1]!, path: oldPath[2]!, suffix: oldPath[3]! });
 			rows.push({ kind: "diffPath", marker: newPath[1]!, path: newPath[2]!, suffix: newPath[3]! });
