@@ -61,7 +61,7 @@ import {
 import { type LineRange, parseLineRanges, selectorLineRanges } from "@oh-my-pi/pi-tui/tools/line-ranges";
 import { isReadableUrlPath, splitPathAndSel } from "@oh-my-pi/pi-tui/tools/read";
 import { isRawSelector } from "./read-selector";
-import { CODE_FRAME_GUTTER, formatCodeFrameLine, toPathList } from "@oh-my-pi/pi-tui/render/render-utils";
+import { formatCodeFrameLine, toPathList } from "@oh-my-pi/pi-tui/render/render-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { toolResult } from "./tool-result";
 
@@ -1173,15 +1173,13 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 						const pushLine = (lineNumber: number, line: string, isMatch: boolean) => {
 							if (lastEmittedLine !== undefined && lineNumber > lastEmittedLine + 1) {
 								modelOut.push("...");
-								displayOut.push(`${gutterPad}${CODE_FRAME_GUTTER}...`);
+								displayOut.push(`${gutterPad}│...`);
 							}
 							modelOut.push(formatMatchLine(lineNumber, line, isMatch, { useHashLines }));
 							if (!isMatch && line.endsWith("...") && Buffer.byteLength(line) >= DEFAULT_MAX_COLUMN - 6) {
 								(cutLines ??= new Set()).add(lineNumber);
 							}
-							displayOut.push(
-								formatCodeFrameLine(isMatch ? "*" : " ", lineNumber, line, lineNumberWidth, CODE_FRAME_GUTTER),
-							);
+							displayOut.push(formatCodeFrameLine(isMatch ? "*" : " ", lineNumber, line, lineNumberWidth));
 							lastEmittedLine = lineNumber;
 						};
 						if (match.contextBefore) {

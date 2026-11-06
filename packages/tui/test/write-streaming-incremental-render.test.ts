@@ -57,7 +57,7 @@ describe("write streaming preview incremental line tracking", () => {
 			args,
 		);
 		const text = Bun.stripANSI(result.render(120).join("\n"));
-		expect(text).toContain(`IRC: ${uiTheme.format.arrowRight} all`);
+		expect(text).toContain(`IRC: ${uiTheme.nav.selected} all`);
 		expect(text).toContain("Please review the change");
 		expect(text).toContain("Broadcast delivered to 2 of 2 peer(s).");
 	});

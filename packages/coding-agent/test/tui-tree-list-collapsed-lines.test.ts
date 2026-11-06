@@ -1,11 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { renderTreeList } from "@oh-my-pi/pi-tui/render/tree-list";
-import { Ellipsis, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
+import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 
 const stubTheme = {
 	fg: (_color: string, text: string) => text,
 	tree: { branch: "├", last: "└", vertical: "│", horizontal: "─", hook: "╰" },
-	format: { ellipsis: "…" },
 } as Parameters<typeof renderTreeList>[1];
 
 function expectWithinBudget(lines: string[], budget: number) {
@@ -24,10 +23,9 @@ describe("renderTreeList maxCollapsedLines", () => {
 					items: ["first item with long details", "second item with long details"],
 					width: 200,
 					trailingSummary,
-					// Pin the ellipsis: the default follows whatever symbol preset an earlier test left active.
 					renderItem: (item, context) => [
-						truncateToWidth(item, 18 - (context.prefixWidth ?? 0), Ellipsis.Unicode),
-						truncateToWidth("continued details", 18 - (context.prefixWidth ?? 0), Ellipsis.Unicode),
+						truncateToWidth(item, 18 - (context.prefixWidth ?? 0)),
+						truncateToWidth("continued details", 18 - (context.prefixWidth ?? 0)),
 					],
 				},
 				customTheme,

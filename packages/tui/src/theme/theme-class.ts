@@ -11,8 +11,6 @@ import {
 } from "./schema";
 import type { SessionAccentTheme } from "./session-color";
 import {
-	roundBoxSymbols,
-	sharpBoxSymbols,
 	type SlashCommandIconName,
 	SPINNER_FRAMES,
 	type SpinnerType,
@@ -555,7 +553,22 @@ export class Theme {
 	}
 
 	get boxRound() {
-		return roundBoxSymbols(this.#symbols);
+		return {
+			topLeft: this.#symbols["boxRound.topLeft"],
+			topRight: this.#symbols["boxRound.topRight"],
+			bottomLeft: this.#symbols["boxRound.bottomLeft"],
+			bottomRight: this.#symbols["boxRound.bottomRight"],
+			horizontal: this.#symbols["boxRound.horizontal"],
+			vertical: this.#symbols["boxRound.vertical"],
+			// Junctions have no rounded Unicode variant, so a rounded box reuses the
+			// sharp tee/cross glyphs. Sourcing them from the boxSharp.* tokens keeps a
+			// theme's `boxSharp.tee*` overrides effective for rounded-box dividers.
+			cross: this.#symbols["boxSharp.cross"],
+			teeDown: this.#symbols["boxSharp.teeDown"],
+			teeUp: this.#symbols["boxSharp.teeUp"],
+			teeRight: this.#symbols["boxSharp.teeRight"],
+			teeLeft: this.#symbols["boxSharp.teeLeft"],
+		};
 	}
 
 	/**
@@ -570,7 +583,19 @@ export class Theme {
 	}
 
 	get boxSharp() {
-		return sharpBoxSymbols(this.#symbols);
+		return {
+			topLeft: this.#symbols["boxSharp.topLeft"],
+			topRight: this.#symbols["boxSharp.topRight"],
+			bottomLeft: this.#symbols["boxSharp.bottomLeft"],
+			bottomRight: this.#symbols["boxSharp.bottomRight"],
+			horizontal: this.#symbols["boxSharp.horizontal"],
+			vertical: this.#symbols["boxSharp.vertical"],
+			cross: this.#symbols["boxSharp.cross"],
+			teeDown: this.#symbols["boxSharp.teeDown"],
+			teeUp: this.#symbols["boxSharp.teeUp"],
+			teeRight: this.#symbols["boxSharp.teeRight"],
+			teeLeft: this.#symbols["boxSharp.teeLeft"],
+		};
 	}
 
 	get sep() {
@@ -757,9 +782,6 @@ export class Theme {
 			dash: this.#symbols["format.dash"],
 			bracketLeft: this.#symbols["format.bracketLeft"],
 			bracketRight: this.#symbols["format.bracketRight"],
-			ellipsis: this.#symbols["format.ellipsis"],
-			arrowRight: this.#symbols["format.arrowRight"],
-			arrowLeft: this.#symbols["format.arrowLeft"],
 		};
 	}
 

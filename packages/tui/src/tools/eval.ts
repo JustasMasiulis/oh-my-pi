@@ -585,7 +585,7 @@ function formatStatusEventExpanded(event: EvalStatusEvent, theme: Theme, width: 
 			lines.push(itemRow(i));
 		}
 		if (arr.length > shown) {
-			lines.push(`  ${theme.fg("dim", formatMoreItems(arr.length - shown, "item", theme))}`);
+			lines.push(`  ${theme.fg("dim", formatMoreItems(arr.length - shown, "item"))}`);
 		}
 	};
 
@@ -598,7 +598,7 @@ function formatStatusEventExpanded(event: EvalStatusEvent, theme: Theme, width: 
 			lines.push(previewRow(line));
 		}
 		if (previewLines.hidden > 0) {
-			lines.push(`  ${theme.fg("dim", formatMoreItems(previewLines.hidden, "line", theme))}`);
+			lines.push(`  ${theme.fg("dim", formatMoreItems(previewLines.hidden, "line"))}`);
 		}
 	};
 
@@ -679,7 +679,7 @@ function statusEventRows(
 	const visible = shownFrom > 0 ? events.slice(shownFrom) : events;
 
 	const rows: string[] = [];
-	if (hidden > 0) rows.push(theme.fg("dim", formatMoreItems(hidden, "event", theme, "earlier")));
+	if (hidden > 0) rows.push(theme.fg("dim", formatMoreItems(hidden, "event", "earlier")));
 	for (const event of visible) {
 		if (expanded) rows.push(...formatStatusEventExpanded(event, theme, width));
 		else rows.push(formatStatusEvent(event, theme));
@@ -788,7 +788,7 @@ function jsonTreeRows(value: unknown, theme: Theme, expanded: boolean): string[]
 				JSON_TREE_MAX_LINES_COLLAPSED,
 				JSON_TREE_SCALAR_LEN_COLLAPSED,
 			);
-	return tree.truncated ? [...tree.lines, theme.fg("dim", theme.format.ellipsis)] : tree.lines;
+	return tree.truncated ? [...tree.lines, theme.fg("dim", "…")] : tree.lines;
 }
 
 /** Display cells a status field value keeps on its one-line summary. */

@@ -25,7 +25,7 @@ const COMPACTION_METHOD_LABELS: Record<string, string> = {
 /** `256K→20K` amount badge, or undefined when the entry predates `tokensAfter`. */
 function compactionAmount(message: CompactionSummaryMessage): string | undefined {
 	if (message.tokensAfter === undefined || message.tokensBefore <= 0) return undefined;
-	return `${formatNumber(message.tokensBefore)}${theme.format.arrowRight}${formatNumber(message.tokensAfter)}`;
+	return `${formatNumber(message.tokensBefore)}→${formatNumber(message.tokensAfter)}`;
 }
 
 interface SummaryDividerOptions {

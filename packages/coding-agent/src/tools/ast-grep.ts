@@ -32,7 +32,6 @@ import {
 import { searchApprovalCacheTargets } from "./search-approval-targets";
 import { isRawSelector } from "./read-selector";
 import {
-	CODE_FRAME_GUTTER,
 	capParseErrors,
 	formatCodeFrameLine,
 	formatParseErrors,
@@ -356,9 +355,7 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 						modelOut.push(
 							formatMatchLine(lineNumber, line, isMatch, { useHashLines: hashContext !== undefined }),
 						);
-						displayOut.push(
-							formatCodeFrameLine(isMatch ? "*" : " ", lineNumber, line, lineNumberWidth, CODE_FRAME_GUTTER),
-						);
+						displayOut.push(formatCodeFrameLine(isMatch ? "*" : " ", lineNumber, line, lineNumberWidth));
 					}
 					if (match.metaVariables && Object.keys(match.metaVariables).length > 0) {
 						const serializedMeta = Object.entries(match.metaVariables)

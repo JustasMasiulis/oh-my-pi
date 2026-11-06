@@ -12,7 +12,6 @@ import type { TspTone } from "@oh-my-pi/pi-wire";
 import { code, col, keyed, span, text } from "../native/describe";
 import type { NativeNode } from "../native/node";
 import {
-	CODE_FRAME_GUTTER,
 	FILE_NAME_COLOR,
 	formatMoreRow,
 	formatScopedSubject,
@@ -354,31 +353,20 @@ export function groupLineIndicesByBlank(rawLines: readonly string[]): number[][]
 // Flush search previews (grep / ast-grep TUI renderers)
 // =============================================================================
 
-/** A persisted code-frame row up to its gutter: optional marker, line number, then {@link CODE_FRAME_GUTTER}. */
-const CODE_FRAME_ROW_RE = new RegExp(`^(\\s*[*+\\->]?\\s*\\d*)${CODE_FRAME_GUTTER}`);
+/** A persisted code-frame row through its `│` rule: optional marker and line number, then the rule. */
+const NUMBERED_CODE_FRAME_RE = /^\s*[*+\->]?\s*(\d+)│/;
 
-/**
- * Redraw a persisted code-frame row's canonical gutter with the theme's
- * vertical rule (`|` in ASCII). Rows without that gutter (older transcripts'
- * `12|text` / `12:text`, headers, notes) pass through unchanged.
- */
-export function themeCodeFrameGutter(line: string, theme: Theme): string {
-	const match = CODE_FRAME_ROW_RE.exec(line);
-	if (!match) return line;
-	return `${match[1]}${theme.boxSharp.vertical}${line.slice(match[0].length)}`;
-}
-
-/** A code-frame row split at its rule: the gutter (match marker and padded line number) and the source line. */
+/** A code-frame row split after its rule: the gutter (match marker, line number, rule) and the source line. */
 export interface CodeFrameRow {
 	gutter: string;
 	source: string;
 }
 
 /**
- * Draw the code-frame rows of consecutive source lines: each gutter and the
- * theme's vertical rule in `color`, the sources highlighted in `lang` as one
- * run, so a multi-line string or comment keeps its colors. Without a language
- * the sources take `color` too.
+ * Draw the code-frame rows of consecutive source lines: each gutter in
+ * `color`, the sources highlighted in `lang` as one run, so a multi-line
+ * string or comment keeps its colors. Without a language the sources take
+ * `color` too.
  */
 export function renderCodeFrameRun(
 	rows: readonly CodeFrameRow[],
@@ -389,7 +377,7 @@ export function renderCodeFrameRun(
 	const sources = rows.map(row => replaceTabs(row.source));
 	const highlighted = isHighlightLanguage(lang) ? highlightCode(sources.join("\n"), lang, theme) : undefined;
 	return rows.map((row, index) => {
-		const gutter = theme.fg(color, `${row.gutter}${theme.boxSharp.vertical}`);
+		const gutter = theme.fg(color, row.gutter);
 		return `${gutter}${highlighted?.[index] ?? theme.fg(color, sources[index]!)}`;
 	});
 }
@@ -401,10 +389,9 @@ interface NumberedCodeFrame {
 }
 
 function parseNumberedCodeFrame(line: string): NumberedCodeFrame | undefined {
-	const match = CODE_FRAME_ROW_RE.exec(line);
-	const digits = match ? /\d+/.exec(match[1]!)?.[0] : undefined;
-	if (!match || digits === undefined) return undefined;
-	return { row: { gutter: match[1]!, source: line.slice(match[0].length) }, n: Number(digits) };
+	const match = NUMBERED_CODE_FRAME_RE.exec(line);
+	if (!match) return undefined;
+	return { row: { gutter: match[0], source: line.slice(match[0].length) }, n: Number(match[1]) };
 }
 
 /**

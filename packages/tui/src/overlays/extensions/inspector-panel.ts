@@ -253,7 +253,7 @@ export class InspectorPanel implements Component {
 
 	/** The native `… N more X [Ctrl+O: Expand]` row; spans carry no theme fg, so the hint is the plain label. */
 	#nativeMore(hidden: number, noun: string): NativeNode {
-		return text([span(`${formatMoreItems(hidden, noun, theme)} ${expandHintLabel(theme)}`, "dim")]);
+		return text([span(`${formatMoreItems(hidden, noun)} ${expandHintLabel(theme)}`, "dim")]);
 	}
 
 	/** Tool/argument rows: name, type and required flag, then the description. */
@@ -444,7 +444,7 @@ export class InspectorPanel implements Component {
 		const hidden = items.length - shown.length;
 		const spans: TspSpan[] = [span(shown.join("\n"), "accent")];
 		if (hidden > 0) {
-			spans.push(span(`\n${formatMoreItems(hidden, "pattern", theme)} ${expandHintLabel(theme)}`, "dim"));
+			spans.push(span(`\n${formatMoreItems(hidden, "pattern")} ${expandHintLabel(theme)}`, "dim"));
 		}
 		return spans;
 	}
@@ -606,7 +606,7 @@ export class InspectorPanel implements Component {
 				toolsBody.push(`  ${formatMoreRow(hidden, "tool", theme)}`);
 				toolsBody.push("");
 			} else if (collapsedArgs) {
-				toolsBody.push(`  ${theme.fg("dim", `${theme.format.ellipsis} args`)} ${formatExpandHint(theme)}`);
+				toolsBody.push(`  ${theme.fg("dim", "… args")} ${formatExpandHint(theme)}`);
 				toolsBody.push("");
 			}
 			contents.push(...this.#section("Tools", toolsBody, width));
@@ -700,7 +700,7 @@ export class InspectorPanel implements Component {
 				factoryBody.push("");
 			}
 			if (collapsedArgs) {
-				factoryBody.push(`  ${theme.fg("dim", `${theme.format.ellipsis} args`)} ${formatExpandHint(theme)}`);
+				factoryBody.push(`  ${theme.fg("dim", "… args")} ${formatExpandHint(theme)}`);
 				factoryBody.push("");
 			}
 			surface.push(...this.#section("Tools", factoryBody, width));

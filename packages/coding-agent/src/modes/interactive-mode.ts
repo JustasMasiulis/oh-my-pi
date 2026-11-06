@@ -935,7 +935,7 @@ class DeferredCommandPreview implements Component {
 		}
 		const shown = rows.slice(0, Math.max(1, this.maxRows - 1));
 		const hidden = rows.length - shown.length;
-		const moreRows = formatMoreItems(hidden, "row", theme);
+		const moreRows = formatMoreItems(hidden, "row");
 		shown.push(theme.fg("dim", `${moreRows} — ${queued} shown in full when the agent pauses`));
 		return shown;
 	}
@@ -1285,8 +1285,8 @@ export function renderSubagentHudLines(
 	);
 	const toggleLabel =
 		layout.toggle === "expand"
-			? `${formatMoreItems(running.length - layout.itemRows, "agent", theme)}${theme.sep.dot}expand`
-			: `${theme.format.ellipsis} show less`;
+			? `${formatMoreItems(running.length - layout.itemRows, "agent")}${theme.sep.dot}expand`
+			: "… show less";
 	const toggleRow =
 		layout.toggle === undefined
 			? []

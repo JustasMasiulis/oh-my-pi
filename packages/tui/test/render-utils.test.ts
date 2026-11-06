@@ -6,7 +6,6 @@ import * as natives from "@oh-my-pi/pi-natives/path";
 import { KeybindingsManager, setKeyHintPlatform } from "@oh-my-pi/pi-tui/app-keybindings";
 import { getThemeByName, initTheme, type Theme, theme } from "@oh-my-pi/pi-tui/theme";
 import {
-	CODE_FRAME_GUTTER,
 	dedupeParseErrors,
 	expandKeyHint,
 	formatCodeFrameLine,
@@ -348,10 +347,10 @@ describe("formatDiagnostics", () => {
 
 describe("formatCodeFrameLine", () => {
 	it("pads markers as part of the gutter", () => {
-		expect(formatCodeFrameLine(" ", 447, "context", 3, CODE_FRAME_GUTTER)).toBe(" 447│context");
-		expect(formatCodeFrameLine("*", 448, "match", 3, CODE_FRAME_GUTTER)).toBe("*448│match");
-		expect(formatCodeFrameLine("+", 11, "added", 3, "|")).toBe(" +11|added");
-		expect(formatCodeFrameLine("+", 235, "added", 3, "|")).toBe("+235|added");
+		expect(formatCodeFrameLine(" ", 447, "context", 3)).toBe(" 447│context");
+		expect(formatCodeFrameLine("*", 448, "match", 3)).toBe("*448│match");
+		expect(formatCodeFrameLine("+", 11, "added", 3)).toBe(" +11│added");
+		expect(formatCodeFrameLine("+", 235, "added", 3)).toBe("+235│added");
 	});
 });
 
@@ -642,18 +641,16 @@ describe("shortenToolArgumentPaths", () => {
 });
 
 describe("sanitizeDisplayWarnings", () => {
-	it("caps warning count and reports omitted warnings", async () => {
-		const theme = await getThemeByName("dark");
+	it("caps warning count and reports omitted warnings", () => {
 		const warnings = Array.from({ length: PREVIEW_LIMITS.COLLAPSED_ITEMS + 2 }, (_, index) => `warning-${index}`);
-		const displayed = sanitizeDisplayWarnings(warnings, theme!);
+		const displayed = sanitizeDisplayWarnings(warnings);
 
 		expect(displayed).toHaveLength(PREVIEW_LIMITS.COLLAPSED_ITEMS + 1);
-		expect(displayed.at(-1)).toBe(`${theme!.format.ellipsis} 2 more warnings`);
+		expect(displayed.at(-1)).toBe("… 2 more warnings");
 	});
 
-	it("truncates each warning before display", async () => {
-		const theme = await getThemeByName("dark");
-		const displayed = sanitizeDisplayWarnings(["warning ".repeat(TRUNCATE_LENGTHS.LONG)], theme!);
+	it("truncates each warning before display", () => {
+		const displayed = sanitizeDisplayWarnings(["warning ".repeat(TRUNCATE_LENGTHS.LONG)]);
 
 		expect(Bun.stringWidth(displayed[0])).toBeLessThanOrEqual(TRUNCATE_LENGTHS.LONG);
 	});

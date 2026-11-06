@@ -104,7 +104,7 @@ function formatReadUrlDescription(input: string): string {
 	const target = readUrlLinkTarget(input);
 	const displayUrl = target.match(/^www\./i) ? `https://${target}` : target;
 	const domain = getDomain(displayUrl);
-	const urlPath = truncate(displayUrl.replace(/^https?:\/\/[^/]+/, ""), 50, theme.format.ellipsis);
+	const urlPath = truncate(displayUrl.replace(/^https?:\/\/[^/]+/, ""), 50, "…");
 	const label = `${domain}${urlPath ? ` ${urlPath}` : ""}`.trim();
 	return urlHyperlink(target, label);
 }

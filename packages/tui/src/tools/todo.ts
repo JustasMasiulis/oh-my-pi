@@ -192,7 +192,7 @@ function selectWithinCap<T extends { status: TodoStatus }>(
 		const hidden = base.length - cap;
 		if (hidden === 1 && fitsRow(active[cap])) return { items: base, summary: "" };
 		const onlyActive = hidden === hiddenActive;
-		const more = formatMoreItems(hidden, onlyActive ? "active todo" : "todo", theme);
+		const more = formatMoreItems(hidden, onlyActive ? "active todo" : "todo");
 		return {
 			items: active.slice(0, cap),
 			summary: onlyActive ? more : `${more}${theme.sep.dot}${hiddenActive} active`,
@@ -211,7 +211,7 @@ function selectWithinCap<T extends { status: TodoStatus }>(
 	const items = [...active, ...fill];
 	const hidden = base.length - items.length;
 	if (hidden === 1 && fitsRow(base.find(task => !items.includes(task))!)) return { items: base, summary: "" };
-	return { items, summary: hidden > 0 ? formatMoreItems(hidden, "todo", theme) : "" };
+	return { items, summary: hidden > 0 ? formatMoreItems(hidden, "todo") : "" };
 }
 
 /**

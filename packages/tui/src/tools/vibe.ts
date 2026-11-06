@@ -158,12 +158,12 @@ function frameText(text: string, max: number): string {
 }
 
 /** Header subject `op target`, shared by the call, the result, and the native head. */
-function vibeSubject(op: VibeOp, args: VibeRenderArgs | undefined, sep: string, details?: VibeToolDetails): string {
+function vibeSubject(op: VibeOp, args: VibeRenderArgs | undefined, details?: VibeToolDetails): string {
 	switch (op) {
 		case "spawn": {
 			const cli = details?.spawned?.cli ?? args?.cli ?? "fast";
 			const name = details?.spawned?.id ?? args?.name;
-			return name ? `spawn ${cli}${sep}${frameText(name, 40)}` : `spawn ${cli}`;
+			return name ? `spawn ${cli} · ${frameText(name, 40)}` : `spawn ${cli}`;
 		}
 		case "send":
 			return args?.session ? `send ${frameText(args.session, 40)}` : "send";
@@ -351,7 +351,7 @@ function describeVibeResult(
 	args: VibeRenderArgs | undefined,
 ): NativeToolView {
 	const details = result.details;
-	const label = vibeSubject(op, args, " · ", details);
+	const label = vibeSubject(op, args, details);
 	if (result.isError) return { ...errorView("Vibe", resultText(result) || "vibe failed", label), inline: true };
 	if (!details) {
 		const fallback = resultText(result).trim();
@@ -427,7 +427,7 @@ export function createVibeToolRenderer(op: VibeOp) {
 					icon: options.executionStarted ? "running" : "pending",
 					spinnerFrame: options.spinnerFrame,
 					title: TITLE,
-					description: vibeSubject(op, args, uiTheme.sep.dot),
+					description: vibeSubject(op, args),
 				},
 				phase: options.executionStarted ? "running" : "pending",
 				body: messageRows(uiTheme, message, options.expanded, contentWidth),
@@ -441,7 +441,7 @@ export function createVibeToolRenderer(op: VibeOp) {
 			args?: VibeRenderArgs,
 		): Component {
 			const details = result.details;
-			const subject = vibeSubject(op, args, uiTheme.sep.dot, details);
+			const subject = vibeSubject(op, args, details);
 			const fallback = result.content.find(part => part.type === "text")?.text?.trim() ?? "";
 			if (!details || result.isError) {
 				return plainToolCard(uiTheme, () => ({
@@ -526,7 +526,7 @@ export function createVibeToolRenderer(op: VibeOp) {
 
 		describeCall(args: VibeRenderArgs): NativeToolView | undefined {
 			const message = vibeMessage(op, args);
-			const label = vibeSubject(op, args, " · ");
+			const label = vibeSubject(op, args);
 			return callMemo.get(args, [label, message], () => {
 				const head = toolHead("Vibe", label);
 				if (!composerOp) return { head, inline: true };

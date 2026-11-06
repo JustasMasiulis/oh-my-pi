@@ -23,7 +23,7 @@ import {
 import type { FileDiagnosticsResult } from "./lsp";
 import { nativeDiff, renderDiff as renderDiffColored } from "../chrome/diff";
 import { getLanguageFromPath } from "../lang-from-path";
-import { type Theme, theme as activeTheme } from "../theme/theme";
+import type { Theme } from "../theme/theme";
 import type { OutputMeta } from "./output-meta";
 import {
 	cachedRenderedString,
@@ -223,7 +223,7 @@ export function renderStreamingFallback(editMode: EditMode, args: unknown, theme
 	if (!newString) return "";
 	// A live preview built without a width: it keeps its fixed window, marker included.
 	const preview = plainTextPreview(newString, theme, CALL_TEXT_PREVIEW_LINES);
-	if (preview.hidden > 0) preview.lines.push(theme.fg("dim", formatMoreItems(preview.hidden, "line", theme)));
+	if (preview.hidden > 0) preview.lines.push(theme.fg("dim", formatMoreItems(preview.hidden, "line")));
 	return preview.lines.join("\n");
 }
 
@@ -271,24 +271,24 @@ function getOperationTitle(op: Operation | undefined, rename?: string): string {
 	return rename ? "Move" : "Edit";
 }
 
-function truncateEditTitlePath(displayPath: string, maxWidth: number | undefined, ellipsis: string): string {
+function truncateEditTitlePath(displayPath: string, maxWidth: number | undefined): string {
 	if (maxWidth === undefined) return displayPath;
 	const width = visibleWidth(displayPath);
 	const safeMaxWidth = Math.max(0, Math.floor(maxWidth));
 	if (width <= safeMaxWidth) return displayPath;
 
-	const contentWidth = safeMaxWidth - visibleWidth(ellipsis);
-	if (contentWidth <= 0) return ellipsis;
+	const contentWidth = safeMaxWidth - 1;
+	if (contentWidth <= 0) return "…";
 
 	const headWidth = Math.floor(contentWidth / 2);
 	const tailWidth = contentWidth - headWidth;
 	const head = sliceWithWidth(displayPath, 0, headWidth, true).text;
 	const tail = sliceWithWidth(displayPath, Math.max(0, width - tailWidth), tailWidth, true).text;
-	return `${head}${ellipsis}${tail}`;
+	return `${head}…${tail}`;
 }
 
-function formatEditTitlePath(pathValue: string, uiTheme: Theme, maxWidth?: number): string {
-	return truncateEditTitlePath(replaceTabs(shortenPath(sanitizeText(pathValue))), maxWidth, uiTheme.format.ellipsis);
+function formatEditTitlePath(pathValue: string, maxWidth?: number): string {
+	return truncateEditTitlePath(replaceTabs(shortenPath(sanitizeText(pathValue))), maxWidth);
 }
 
 /** Facts behind an edit card's status line, identical across the call and result states. */
@@ -304,17 +304,17 @@ interface EditHeaderOptions {
 }
 
 /** `path` or `source -> destination`, each path linked and middle-truncated to `maxPathWidth`. */
-function formatEditSubject(options: EditHeaderOptions, uiTheme: Theme, maxPathWidth?: number): string {
-	if (!options.rawPath) return uiTheme.format.ellipsis;
+function formatEditSubject(options: EditHeaderOptions, maxPathWidth?: number): string {
+	if (!options.rawPath) return "…";
 	const lineLink = options.firstChangedLine ? { line: options.firstChangedLine } : undefined;
 	let subject = fileHyperlink(
 		options.linkPath || options.rawPath,
-		formatEditTitlePath(options.rawPath, uiTheme, maxPathWidth),
+		formatEditTitlePath(options.rawPath, maxPathWidth),
 		lineLink,
 	);
 	if (options.rename) {
-		const rename = formatEditTitlePath(options.rename, uiTheme, maxPathWidth);
-		subject += ` ${uiTheme.format.arrowRight} ${fileHyperlink(options.renameLinkPath || options.rename, rename)}`;
+		const rename = formatEditTitlePath(options.rename, maxPathWidth);
+		subject += ` → ${fileHyperlink(options.renameLinkPath || options.rename, rename)}`;
 	}
 	return subject;
 }
@@ -328,14 +328,14 @@ function editStatus(options: EditHeaderOptions, budget: number, uiTheme: Theme):
 	const status: StatusLineOptions = {
 		icon: options.icon,
 		title,
-		description: formatEditSubject(options, uiTheme),
+		description: formatEditSubject(options),
 	};
 	const overflow = visibleWidth(renderStatusLine(status, uiTheme)) - budget;
 	if (overflow <= 0 || !options.rawPath) return status;
-	let pathWidth = visibleWidth(formatEditTitlePath(options.rawPath, uiTheme));
-	if (options.rename) pathWidth += visibleWidth(formatEditTitlePath(options.rename, uiTheme));
+	let pathWidth = visibleWidth(formatEditTitlePath(options.rawPath));
+	if (options.rename) pathWidth += visibleWidth(formatEditTitlePath(options.rename));
 	const fittedPathWidth = Math.max(1, Math.floor((pathWidth - overflow) / (options.rename ? 2 : 1)));
-	return { ...status, description: formatEditSubject(options, uiTheme, fittedPathWidth) };
+	return { ...status, description: formatEditSubject(options, fittedPathWidth) };
 }
 
 /** Columns a framed card's top border leaves for its status line. */
@@ -535,7 +535,7 @@ function getCallPreview(
 		const preview = plainTextPreview(text, uiTheme, CALL_TEXT_PREVIEW_LINES);
 		return {
 			lines: preview.lines,
-			footer: preview.hidden > 0 ? formatMoreItems(preview.hidden, "line", uiTheme) : undefined,
+			footer: preview.hidden > 0 ? formatMoreItems(preview.hidden, "line") : undefined,
 		};
 	}
 	if (renderContext?.editStreamingFallback) {
@@ -923,11 +923,10 @@ function wrapEditRendererLine(line: string, width: number): string[] {
 	const startAnsi = line.match(/^((?:\x1b\[[0-9;]*m)*)/)?.[1] ?? "";
 	const bodyWithReset = line.slice(startAnsi.length);
 	const body = bodyWithReset.endsWith("\x1b[39m") ? bodyWithReset.slice(0, -"\x1b[39m".length) : bodyWithReset;
-	// Gutter shapes produced by formatCodeFrameLine, separated by the theme's
-	// vertical (`│`, or `|` in ASCII): "-315│", " 313│", "+322│", plus the
-	// deduplicated forms "   +│" and "    │" whose repeated line number
+	// Gutter shapes produced by formatCodeFrameLine: "-315│", " 313│", "+322│",
+	// plus the deduplicated forms "   +│" and "    │" whose repeated line number
 	// renderDiff blanked (single-line replacement pairs and insert-then-context
-	// runs). Those gutters are padded to at least 4 columns. Raw canonical rows
+	// runs), all │-separated and padded to at least 4 columns. Raw canonical rows
 	// ("+12|") from injected renderers always carry a marker column and a line
 	// number. Anything else (a body line merely starting with "|", error text
 	// like "123|…") is not a diff row and wraps generically.
@@ -990,8 +989,8 @@ export const editToolRenderer = {
 		const facts = resolveEditCallFacts(editArgs, context.isPartial, editMode);
 		const label = getOperationTitle(facts.op, facts.rename);
 		if (!facts.rawPath) return { label };
-		let detail = formatEditTitlePath(facts.rawPath, activeTheme);
-		if (facts.rename) detail += ` ${activeTheme.format.arrowRight} ${formatEditTitlePath(facts.rename, activeTheme)}`;
+		let detail = formatEditTitlePath(facts.rawPath);
+		if (facts.rename) detail += ` → ${formatEditTitlePath(facts.rename)}`;
 		if (facts.fileCount > 1) detail += ` (+${facts.fileCount - 1} more)`;
 		return { label, detail };
 	},
@@ -1496,7 +1495,7 @@ export function diagnosticsCardSection(
 	if (!text) return undefined;
 	const [label, ...rows] = text.split("\n");
 	const last = rows.at(-1);
-	const marker = last && Bun.stripANSI(last).startsWith(uiTheme.format.ellipsis) ? rows.pop() : undefined;
+	const marker = last && Bun.stripANSI(last).startsWith("…") ? rows.pop() : undefined;
 	return { section: { label, content: rows }, marker };
 }
 

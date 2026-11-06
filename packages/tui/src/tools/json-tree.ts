@@ -308,7 +308,6 @@ export function renderJsonTreeLines(
 			: [node(value, undefined, 0)];
 
 	const prefixStyle = { vertical: (symbol: string) => symbol };
-	const ellipsis = theme.format.ellipsis;
 	let renderedLineCount = 0;
 	let scalarTruncated = false;
 
@@ -330,7 +329,7 @@ export function renderJsonTreeLines(
 							value: undefined,
 							depth: item.depth + 1,
 							kind: "placeholder",
-							placeholder: ellipsis,
+							placeholder: "…",
 						},
 					];
 				} else {
@@ -347,7 +346,7 @@ export function renderJsonTreeLines(
 							value: undefined,
 							depth: item.depth + 1,
 							kind: "placeholder",
-							placeholder: ellipsis,
+							placeholder: "…",
 						},
 					];
 				} else if (keys.length === 0) {
@@ -375,7 +374,7 @@ export function renderJsonTreeLines(
 				displayKey || (item.kind === "array" ? "array" : item.kind === "object" ? "object" : "value"),
 			);
 			if (item.kind === "placeholder") {
-				body = [theme.fg("dim", item.placeholder ?? ellipsis)];
+				body = [theme.fg("dim", item.placeholder ?? "…")];
 			} else if (item.kind === "inline") {
 				body = [`${label}: ${(item.inline ?? []).map(([text, color]) => theme.fg(color, text)).join("")}`];
 			} else if (item.kind === "array") {
@@ -403,7 +402,7 @@ export function renderJsonTreeLines(
 					if (sourceLines.length > displayedCount) {
 						scalarTruncated = true;
 						scalarLines.push(
-							`${indent}${theme.fg("dim", `${ellipsis}(${sourceLines.length - displayedCount} more lines)"`)}`,
+							`${indent}${theme.fg("dim", `…(${sourceLines.length - displayedCount} more lines)"`)}`,
 						);
 					} else {
 						const lastIndex = scalarLines.length - 1;

@@ -22,7 +22,6 @@ import {
 	groupLineIndicesByBlank,
 	renderSearchPreviewRows,
 	searchSubject,
-	themeCodeFrameGutter,
 } from "./grouped-file-output";
 import { code, compact, node, span } from "../native/describe";
 import type { NativeChild } from "../native/node";
@@ -152,7 +151,7 @@ export const astGrepToolRenderer = {
 				styled = target ? fileHyperlink(target, header) : header;
 			} else {
 				const color = line.startsWith("  meta:") ? "dim" : "toolOutput";
-				styled = styleCodeFrame(index) ?? uiTheme.fg(color, themeCodeFrameGutter(line, uiTheme));
+				styled = styleCodeFrame(index) ?? uiTheme.fg(color, line);
 			}
 			styledLines[index] = styled;
 			return styled;

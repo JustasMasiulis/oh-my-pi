@@ -38,7 +38,7 @@ function ruleRow(rule: NotificationRule, collapsed: boolean): string {
 	const desc = ruleDescription(rule);
 	if (!desc) return name;
 	const newline = desc.indexOf("\n");
-	const shown = collapsed && newline !== -1 ? `${desc.slice(0, newline).trimEnd()}${theme.format.ellipsis}` : desc;
+	const shown = collapsed && newline !== -1 ? `${desc.slice(0, newline).trimEnd()}…` : desc;
 	return `${name}: ${theme.italic(shown)}`;
 }
 
@@ -134,7 +134,7 @@ export class TtsrNotificationComponent extends Container {
 		if (!desc) return { rows: [], foldRows: 0 };
 		const lines = desc.split("\n");
 		if (full || lines.length <= SINGLE_COLLAPSED_LINES) return { rows: [theme.italic(desc)], foldRows: 0 };
-		const head = `${lines.slice(0, SINGLE_COLLAPSED_LINES).join("\n")}${theme.format.ellipsis}`;
+		const head = `${lines.slice(0, SINGLE_COLLAPSED_LINES).join("\n")}…`;
 		return { rows: [theme.italic(head), theme.italic(expandHintLabel(theme))], foldRows: 1 };
 	}
 
@@ -151,7 +151,7 @@ export class TtsrNotificationComponent extends Container {
 		if (hidden === 0 && !elided) return { rows, foldRows: 0 };
 		// The inverse banner would turn a dim fg into a gray band: keep the
 		// `… N more rules` row and its hint unstyled (not formatMoreRow).
-		const more = hidden > 0 ? `${formatMoreItems(hidden, "rule", theme)} ` : "";
+		const more = hidden > 0 ? `${formatMoreItems(hidden, "rule")} ` : "";
 		rows.push(theme.italic(`${more}${expandHintLabel(theme)}`));
 		return { rows, foldRows: 1 };
 	}

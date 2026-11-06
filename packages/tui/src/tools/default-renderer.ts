@@ -107,7 +107,7 @@ function buildDefaultToolRows(
 			JSON_TREE_SCALAR_LEN_EXPANDED,
 		);
 		body.push(...tree.lines);
-		if (tree.truncated) body.push(uiTheme.fg("dim", uiTheme.format.ellipsis));
+		if (tree.truncated) body.push(uiTheme.fg("dim", "…"));
 	}
 
 	if (result) {

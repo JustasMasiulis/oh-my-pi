@@ -76,7 +76,7 @@ function preview(
 	const lines = shown.lines.map(
 		line => `${INDENT}${theme.fg(tone, truncateToWidth(safe(line.trim()), TRUNCATE_LENGTHS.LINE))}`,
 	);
-	if (shown.hidden) lines.push(`${INDENT}${theme.fg("dim", formatMoreItems(shown.hidden, "line", theme))}`);
+	if (shown.hidden) lines.push(`${INDENT}${theme.fg("dim", formatMoreItems(shown.hidden, "line"))}`);
 	return lines;
 }
 
@@ -124,7 +124,7 @@ export function renderAgentWrite(
 	theme: Theme,
 ): Component {
 	return card((width, expanded) => {
-		const recipient = safe(details?.to || to || theme.format.ellipsis);
+		const recipient = safe(details?.to || to || "…");
 		const receipts = details?.receipts ?? [];
 		const delivered = receipts.filter(receipt => receipt.outcome !== "failed").length;
 		const failed = receipts.length - delivered;
@@ -137,7 +137,7 @@ export function renderAgentWrite(
 		const header: StatusLineOptions = {
 			icon: agentWriteStatus(result, details, options),
 			title: "IRC",
-			description: `${theme.format.arrowRight} ${recipient}`,
+			description: `${theme.nav.selected} ${recipient}`,
 			badge: single ? { label: single.outcome, color: "muted" } : undefined,
 			meta,
 		};
@@ -245,7 +245,7 @@ export function renderProcWrite(
 		const header: StatusLineOptions = {
 			icon: result === undefined ? inFlightStatus(options) : result.isError ? "error" : "success",
 			title: "Proc",
-			description: writeSubject(action, safe(id) || theme.format.ellipsis, content),
+			description: writeSubject(action, safe(id) || "…", content),
 			meta: daemon ? daemonMeta(daemon, theme) : [],
 		};
 		if (result?.isError) return [header, ...errorRows(firstText(result) || "Process operation failed.", theme)];
@@ -326,7 +326,7 @@ export function renderProcRead(
 			});
 			if (output.length > shownCount)
 				visible.unshift(
-					`${INDENT}${theme.fg("dim", formatMoreItems(output.length - shownCount, "line", theme, "earlier"))}`,
+					`${INDENT}${theme.fg("dim", formatMoreItems(output.length - shownCount, "line", "earlier"))}`,
 				);
 			return [headerFor("success", daemonMeta(daemon, theme)), ...visible];
 		}

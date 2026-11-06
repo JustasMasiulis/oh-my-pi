@@ -51,7 +51,7 @@ function buildMcpArgsSection(args: Record<string, unknown>, theme: Theme): reado
 		JSON_TREE_SCALAR_LEN_EXPANDED,
 	);
 	lines.push(...tree.lines);
-	if (tree.truncated) lines.push(theme.fg("dim", theme.format.ellipsis));
+	if (tree.truncated) lines.push(theme.fg("dim", "…"));
 	return lines;
 }
 
@@ -251,7 +251,7 @@ export function renderMCPResult(
 				if (!expanded) {
 					body.push(formatExpandHint(theme));
 				} else if (tree.truncated) {
-					body.push(theme.fg("dim", theme.format.ellipsis));
+					body.push(theme.fg("dim", "…"));
 				}
 				if (truncationWarning) body.push(truncationWarning);
 				return { rows: body, foldRows: expanded ? 0 : 1 };

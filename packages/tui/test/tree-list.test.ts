@@ -19,13 +19,8 @@ describe("renderTreeList overflow", () => {
 		const items = (count: number) => Array.from({ length: count }, (_, i) => `item-${i}`);
 
 		expect(render(items(4))).toEqual(["item-0", "item-1", "item-2", "item-3"]);
-		expect(render(items(5))).toEqual(["item-0", "item-1", "item-2", `${theme.format.ellipsis} 2 more items`]);
+		expect(render(items(5))).toEqual(["item-0", "item-1", "item-2", "… 2 more items"]);
 		// A lone hidden row that would not fit the width keeps its marker.
-		expect(render([...items(3), "x".repeat(81)])).toEqual([
-			"item-0",
-			"item-1",
-			"item-2",
-			`${theme.format.ellipsis} 1 more item`,
-		]);
+		expect(render([...items(3), "x".repeat(81)])).toEqual(["item-0", "item-1", "item-2", "… 1 more item"]);
 	});
 });

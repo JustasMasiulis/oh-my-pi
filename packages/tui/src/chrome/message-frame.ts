@@ -192,7 +192,7 @@ export class FramedMessageComponent<M extends FramedMessage> extends Container {
 		if (!this.#expanded && collapseAfterLines !== undefined) {
 			const lines = text.split("\n");
 			if (lines.length > collapseAfterLines) {
-				text = `${lines.slice(0, collapseAfterLines).join("\n")}\n${theme.format.ellipsis}`;
+				text = `${lines.slice(0, collapseAfterLines).join("\n")}\n…`;
 			}
 		}
 

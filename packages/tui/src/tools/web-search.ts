@@ -191,7 +191,7 @@ export function renderSearchResult(
 			);
 			const capped = renderedAnswer.slice(0, shownCount);
 			const remaining = renderedAnswer.length - capped.length;
-			if (remaining > 0) capped.push(theme.fg("dim", formatMoreItems(remaining, "line", theme)));
+			if (remaining > 0) capped.push(theme.fg("dim", formatMoreItems(remaining, "line")));
 			answerLines = capped;
 		} else {
 			answerLines = renderedAnswer;

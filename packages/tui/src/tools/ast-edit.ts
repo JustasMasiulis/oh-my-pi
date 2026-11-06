@@ -228,7 +228,7 @@ export const astEditToolRenderer = {
 			const hiddenParseErrors = (details?.parseErrorsTotal ?? parseErrors.length) - parseErrors.length;
 			const parseRows = parseErrors.map(error => uiTheme.fg("warning", replaceTabs(error)));
 			if (hiddenParseErrors > 0) {
-				parseRows.push(uiTheme.fg("dim", formatMoreItems(hiddenParseErrors, "parse issue", uiTheme)));
+				parseRows.push(uiTheme.fg("dim", formatMoreItems(hiddenParseErrors, "parse issue")));
 			}
 			return plainToolCard(uiTheme, () => ({
 				status: { icon: "warning", title: "AST Edit", description, meta },

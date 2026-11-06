@@ -384,7 +384,7 @@ function formatMergedSelectorParts(selectors: string[]): string {
 	const first = selectors[0]!;
 	const second = selectors[1]!;
 	const last = selectors[selectors.length - 1]!;
-	return `${first},${second},${theme.format.ellipsis},${last}`;
+	return `${first},${second},…,${last}`;
 }
 
 /**
@@ -683,9 +683,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		if (rows.length <= 1) {
 			const row = rows[0];
 			const error = row && this.#statusForTargets(row.targets) === "error" ? this.#errorFor(row) : undefined;
-			const rowHead: NativeToolHead = row
-				? this.#nativeRowHead(row)
-				: { target: theme.format.ellipsis, targetKind: "path" };
+			const rowHead: NativeToolHead = row ? this.#nativeRowHead(row) : { target: "…", targetKind: "path" };
 			if (error !== undefined) {
 				const view = inlineErrorView(rowHead, error);
 				head = view.tool ?? rowHead;
@@ -715,7 +713,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			for (const entry of previews) {
 				const split = splitPathAndSel(entry.path);
 				const name = shortenPath(split.path);
-				const sectionHead: TspSpan[] = [span(name || theme.format.ellipsis, "path")];
+				const sectionHead: TspSpan[] = [span(name || "…", "path")];
 				if (split.sel) sectionHead.push(span(`:${split.sel}`, "muted"));
 				body.push(node("section", { head: sectionHead }, this.#nativePreview(entry), `p${entry.toolCallId}`));
 				const usage = this.#usageRows.get(entry.toolCallId);
@@ -747,7 +745,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		const correctedFrom = this.#correctedFromForTargets(row.targets);
 		const conflicts = this.#conflictCountForTargets(row.targets);
 		return {
-			target: filePath ? `${filePath}${split.sel ? `:${split.sel}` : ""}` : theme.format.ellipsis,
+			target: filePath ? `${filePath}${split.sel ? `:${split.sel}` : ""}` : "…",
 			targetKind: "path",
 			href: fileHref(linkPathForTargets(row.targets)),
 			meta: correctedFrom ? [`corrected from ${shortenPath(correctedFrom)}`] : undefined,
@@ -925,7 +923,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			const href = linkPath ? fileHref(linkPath) : undefined;
 			spans.push(span(filePath, "path", href ? { href } : undefined));
 		} else {
-			spans.push(span(theme.format.ellipsis, "toolOutput"));
+			spans.push(span("…", "toolOutput"));
 		}
 		if (split.sel) spans.push(span(`:${split.sel}`, "accent"));
 		const correctedFrom = this.#correctedFromForTargets(row.targets);
@@ -1204,7 +1202,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		const selectors = split.sel ? `${query}:${split.sel}` : query;
 		let pathDisplay: string;
 		if (!filePath) {
-			pathDisplay = theme.fg("toolOutput", theme.format.ellipsis);
+			pathDisplay = theme.fg("toolOutput", "…");
 		} else if (options.header) {
 			// Headers keep the plain subject color.
 			pathDisplay = filePath;

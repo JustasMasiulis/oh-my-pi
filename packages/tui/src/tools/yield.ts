@@ -158,7 +158,7 @@ function dataLines(data: unknown, expanded: boolean, width: number, theme: Theme
 		hiddenRootKeys: [],
 	});
 	if (!tree.truncated) return { rows: tree.lines, foldRows: 0 };
-	if (expanded) return { rows: [...tree.lines, theme.fg("dim", theme.format.ellipsis)], foldRows: 0 };
+	if (expanded) return { rows: [...tree.lines, theme.fg("dim", "…")], foldRows: 0 };
 	return { rows: [...tree.lines, formatExpandHint(theme)], foldRows: 1 };
 }
 

@@ -207,7 +207,7 @@ export function renderTodoHud(allPhases: readonly TodoPhase[], options: TodoHudO
 		pushBlock(renderPhase(phaseSlice[i], baseIdx + i + 1, baseIdx + i === activeIdx));
 	}
 	if (hiddenStages > 0) {
-		pushBlock(theme.fg("dim", formatMoreItems(hiddenStages, "stage", theme)));
+		pushBlock(theme.fg("dim", formatMoreItems(hiddenStages, "stage")));
 	}
 
 	// Closing tail: hook + a few horizontals. Every tail cell is 1 column in
@@ -274,7 +274,7 @@ export function renderTodoHud(allPhases: readonly TodoPhase[], options: TodoHudO
 		};
 	});
 	if (hiddenStages > 0) {
-		phaseNodes.push({ id: "more", label: [span(formatMoreItems(hiddenStages, "stage", theme), "dim")] });
+		phaseNodes.push({ id: "more", label: [span(formatMoreItems(hiddenStages, "stage"), "dim")] });
 	}
 	const fallback = node(
 		"col",

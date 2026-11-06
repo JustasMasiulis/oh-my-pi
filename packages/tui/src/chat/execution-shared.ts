@@ -35,7 +35,7 @@ export function clampDisplayLine(line: string): string {
 		return line;
 	}
 	const omitted = visible - MAX_DISPLAY_LINE_CHARS;
-	return `${truncateToWidth(line, MAX_DISPLAY_LINE_CHARS, Ellipsis.Omit)}${theme.format.ellipsis} [${omitted} visible columns omitted]`;
+	return `${truncateToWidth(line, MAX_DISPLAY_LINE_CHARS, Ellipsis.Omit)}… [${omitted} visible columns omitted]`;
 }
 
 export type ExecutionStatus = "running" | "complete" | "cancelled" | "error";
@@ -66,7 +66,7 @@ export function buildExecutionFrame(
 		ui,
 		spinner => theme.fg(colorKey, spinner),
 		text => theme.fg("muted", text),
-		`Running${theme.format.ellipsis} (${interruptKey()} to cancel)`,
+		`Running… (${interruptKey()} to cancel)`,
 		// The status spinner, as on a running tool card's header.
 		theme.spinnerFrames,
 	);

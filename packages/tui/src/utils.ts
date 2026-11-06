@@ -173,13 +173,6 @@ export function wrapLiteralLine(line: string, width: number): string[] {
 	return rows;
 }
 
-let defaultEllipsis: Ellipsis = Ellipsis.Unicode;
-
-/** Ellipsis `truncateToWidth` draws when the caller names none; the theme sets it from its symbol preset. */
-export function setDefaultEllipsis(kind: Ellipsis): void {
-	defaultEllipsis = kind;
-}
-
 export function truncateToWidth(
 	text: string,
 	maxWidth: number,
@@ -197,7 +190,7 @@ export function truncateToWidth(
 	return nativeTruncateToWidth(
 		text,
 		maxWidth,
-		(typeof ellipsisKind === "string" ? Ellipsis.Omit : ellipsisKind) ?? defaultEllipsis,
+		(typeof ellipsisKind === "string" ? Ellipsis.Omit : ellipsisKind) ?? Ellipsis.Unicode,
 		pad ?? false,
 		DEFAULT_TAB_WIDTH,
 	);

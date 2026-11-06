@@ -200,7 +200,7 @@ function renderRunRows(run: GhRunWatchRunDetails, theme: Theme): string[] {
 	const runMeta = theme.fg("dim", getRunMeta(run).join(theme.sep.dot));
 	const head = `${icon} ${theme.fg("accent", getRunLabel(run))} ${runMeta}`;
 	if (run.jobs.length === 0) {
-		return [head, ...nestRows([theme.fg("dim", `waiting for workflow jobs${theme.format.ellipsis}`)], theme)];
+		return [head, ...nestRows([theme.fg("dim", "waiting for workflow jobs…")], theme)];
 	}
 	const jobRows = run.jobs.map(job => {
 		const duration = job.durationSeconds !== undefined ? ` ${theme.fg("dim", `${job.durationSeconds}s`)}` : "";
@@ -223,7 +223,7 @@ function renderWatchRows(watch: GhRunWatchViewDetails, theme: Theme): string[] {
 		rows.push(...renderRunRows(watch.run, theme));
 	} else if (watch.mode === "commit") {
 		const runs = watch.runs ?? [];
-		if (runs.length === 0) rows.push(theme.fg("dim", `waiting for workflow runs${theme.format.ellipsis}`));
+		if (runs.length === 0) rows.push(theme.fg("dim", "waiting for workflow runs…"));
 		for (const run of runs) rows.push(...renderRunRows(run, theme));
 	}
 	return rows;

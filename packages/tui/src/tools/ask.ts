@@ -249,7 +249,7 @@ function formatQuestionFlags(uiTheme: Theme, multi: boolean | undefined, optionC
 
 /** Dim `(id · multi · 3 options)`: trails the question of each section in a multi-question card. */
 function questionTag(uiTheme: Theme, id: string, flags: readonly string[]): string {
-	return uiTheme.fg("dim", `(${[id, ...flags].join(uiTheme.sep.dot)})`);
+	return uiTheme.fg("dim", `(${[id, ...flags].join(" · ")})`);
 }
 
 /**

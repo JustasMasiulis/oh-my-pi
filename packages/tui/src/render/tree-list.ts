@@ -182,7 +182,7 @@ export function renderTreeList<T>(options: TreeListOptions<T>, theme: Theme): st
 
 	const roots: TreeListRow[] = [];
 	if (truncateFrom === "start" && hasSummary) {
-		roots.push({ kind: "summary", text: theme.fg("dim", formatMoreItems(remaining, itemType, theme)) });
+		roots.push({ kind: "summary", text: theme.fg("dim", formatMoreItems(remaining, itemType)) });
 	}
 	if (truncateFrom === "start" && shownHidden) roots.push(shownHidden);
 	for (let i = displayedSlice.start; i < displayedSlice.end; i++) {
@@ -190,7 +190,7 @@ export function renderTreeList<T>(options: TreeListOptions<T>, theme: Theme): st
 	}
 	if (truncateFrom === "end" && shownHidden) roots.push(shownHidden);
 	if (truncateFrom === "end" && hasSummary) {
-		roots.push({ kind: "summary", text: theme.fg("dim", formatMoreItems(remaining, itemType, theme)) });
+		roots.push({ kind: "summary", text: theme.fg("dim", formatMoreItems(remaining, itemType)) });
 	}
 	return renderTreeListRows(roots, theme, options.flush);
 }
@@ -238,9 +238,9 @@ export function describeTreeList<T>(options: Omit<TreeListOptions<T>, "width">, 
 		: revealLoneHidden(items.length, Math.min(items.length, maxCollapsed), Infinity, loneRow);
 	const hidden = items.length - shown;
 	const start = truncateFrom === "start" ? items.length - shown : 0;
-	if (hidden > 0 && truncateFrom === "start") nodes.push(summaryNode(formatMoreItems(hidden, itemType, theme)));
+	if (hidden > 0 && truncateFrom === "start") nodes.push(summaryNode(formatMoreItems(hidden, itemType)));
 	for (let index = start; index < start + shown; index++) nodes.push(itemNode(index));
-	if (hidden > 0 && truncateFrom === "end") nodes.push(summaryNode(formatMoreItems(hidden, itemType, theme)));
+	if (hidden > 0 && truncateFrom === "end") nodes.push(summaryNode(formatMoreItems(hidden, itemType)));
 	return node("tree", { nodes });
 }
 

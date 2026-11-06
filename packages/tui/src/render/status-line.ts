@@ -68,10 +68,7 @@ export function renderFittedStatusLine(options: StatusLineOptions, theme: Theme,
 	if (overflow <= 0 || !options.description) return line;
 	const description = flattenForHeader(options.description);
 	const budget = Math.max(1, visibleWidth(description) - overflow);
-	return renderStatusLine(
-		{ ...options, description: truncateMiddleToWidth(description, budget, theme.format.ellipsis) },
-		theme,
-	);
+	return renderStatusLine({ ...options, description: truncateMiddleToWidth(description, budget) }, theme);
 }
 
 /**

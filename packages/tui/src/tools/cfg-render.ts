@@ -179,7 +179,7 @@ export function renderCfgWrite(
 		};
 		if (result?.isError)
 			return [header, `  ${formatErrorText(firstText(result) || "Settings write failed.", theme)}`];
-		const arrow = theme.fg("dim", theme.format.arrowRight);
+		const arrow = theme.fg("dim", "→");
 		const next = theme.fg("toolOutput", details?.value ?? content?.trim() ?? "");
 		const change = details ? `  ${theme.fg("dim", details.previous)} ${arrow} ${next}` : `  ${arrow} ${next}`;
 		if (details?.effective === undefined) return [header, change];

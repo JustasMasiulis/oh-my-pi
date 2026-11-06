@@ -117,7 +117,7 @@ function inlinePreview(value: string): string {
 }
 
 /** The header subject: `action target`, e.g. `references src/a.ts:42 (validateToken)`. */
-function lspSubject(args: Partial<LspParams> | undefined, theme: Theme): string {
+function lspSubject(args: Partial<LspParams> | undefined): string {
 	const actionLabel = (args?.action ?? "request").replace(/_/g, " ");
 	const queryPreview = args?.query ? inlinePreview(args.query) : undefined;
 	const symbolPreview = args?.symbol ? inlinePreview(args.symbol) : undefined;
@@ -134,7 +134,7 @@ function lspSubject(args: Partial<LspParams> | undefined, theme: Theme): string 
 
 	const parts = [actionLabel];
 	if (target) parts.push(target);
-	if (args?.new_name) parts.push(theme.format.arrowRight, sanitizeInlineText(args.new_name));
+	if (args?.new_name) parts.push("→", sanitizeInlineText(args.new_name));
 	return parts.join(" ");
 }
 
@@ -150,14 +150,13 @@ function lspCallMeta(args: Partial<LspParams> | undefined): string[] {
 function lspStatus(
 	args: Partial<LspParams> | undefined,
 	icon: ToolUIStatus,
-	theme: Theme,
 	options: { spinnerFrame?: number; meta?: string[] } = {},
 ): StatusLineOptions {
 	return {
 		icon,
 		spinnerFrame: options.spinnerFrame,
 		title: "LSP",
-		description: lspSubject(args, theme),
+		description: lspSubject(args),
 		meta: [...lspCallMeta(args), ...(options.meta ?? [])],
 	};
 }
@@ -165,7 +164,7 @@ function lspStatus(
 /** Render the LSP tool call: the status line, pending until the request runs. */
 export function renderCall(args: LspParams, options: RenderResultOptions, theme: Theme): Component {
 	const icon: ToolUIStatus = options.executionStarted ? "running" : "pending";
-	const status = lspStatus(args, icon, theme, { spinnerFrame: options.spinnerFrame });
+	const status = lspStatus(args, icon, { spinnerFrame: options.spinnerFrame });
 	return plainToolCard(theme, () => ({ status }));
 }
 
@@ -244,11 +243,11 @@ export function renderResult(
 			.split("\n")
 			.filter(line => line.trim().length > 0)
 			.map(line => formatErrorText(line, theme));
-		const status = lspStatus(request, "error", theme);
+		const status = lspStatus(request, "error");
 		return plainToolCard(theme, () => ({ status, phase: "error", body: lines }));
 	}
 	if (!text) {
-		const status = lspStatus(request, "warning", theme, { meta: ["no result"] });
+		const status = lspStatus(request, "warning", { meta: ["no result"] });
 		return plainToolCard(theme, () => ({ status, phase: "warning" }));
 	}
 
@@ -265,7 +264,7 @@ export function renderResult(
 		}
 		const icon: ToolUIStatus = isPartial ? "running" : view.icon;
 		return {
-			status: lspStatus(request, icon, theme, { spinnerFrame, meta: view.meta }),
+			status: lspStatus(request, icon, { spinnerFrame, meta: view.meta }),
 			phase: isPartial ? "partial" : view.icon,
 			body: cached.rows,
 		};
@@ -545,7 +544,7 @@ function locationRows(location: LspLocation, theme: Theme): string[] {
 	const numberWidth = location.context.reduce((width, line) => Math.max(width, String(line.n).length), 0);
 	const frame = renderCodeFrameRun(
 		location.context.map(line => ({
-			gutter: formatCodeFrameLine(line.mark ? "*" : "", line.n, "", numberWidth, ""),
+			gutter: formatCodeFrameLine(line.mark ? "*" : "", line.n, "", numberWidth),
 			source: line.text,
 		})),
 		getLanguageFromPath(location.file),

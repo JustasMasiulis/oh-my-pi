@@ -1,5 +1,3 @@
-import type { BoxSymbols } from "../symbols";
-
 // ============================================================================
 // Symbol Presets
 // ============================================================================
@@ -50,8 +48,6 @@ export type SymbolKey =
 	| "boxRound.bottomRight"
 	| "boxRound.horizontal"
 	| "boxRound.vertical"
-	| "boxRound.teeRight"
-	| "boxRound.teeLeft"
 	// Box Drawing - Dotted (selection outlines)
 	| "boxDotted.horizontal"
 	| "boxDotted.vertical"
@@ -206,9 +202,6 @@ export type SymbolKey =
 	| "format.dash"
 	| "format.bracketLeft"
 	| "format.bracketRight"
-	| "format.ellipsis"
-	| "format.arrowRight"
-	| "format.arrowLeft"
 	// Markdown-specific
 	| "md.quoteBorder"
 	| "md.hrChar"
@@ -414,9 +407,6 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"boxRound.bottomRight": "╯",
 	"boxRound.horizontal": "─",
 	"boxRound.vertical": "│",
-	// Section dividers inside a rounded card or overlay (`├─── Output ───┤`)
-	"boxRound.teeRight": "├",
-	"boxRound.teeLeft": "┤",
 	// Box (dotted)
 	"boxDotted.horizontal": "┄",
 	"boxDotted.vertical": "┆",
@@ -573,9 +563,6 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"format.dash": "—",
 	"format.bracketLeft": "⟦",
 	"format.bracketRight": "⟧",
-	"format.ellipsis": "…",
-	"format.arrowRight": "→",
-	"format.arrowLeft": "←",
 	// Markdown
 	"md.quoteBorder": "▏",
 	"md.hrChar": "─",
@@ -729,8 +716,6 @@ const NERD_SYMBOLS: SymbolMap = {
 	"boxRound.horizontal": "─",
 	// pick: │ | alt: ┃ ║ ▏
 	"boxRound.vertical": "│",
-	"boxRound.teeRight": "├",
-	"boxRound.teeLeft": "┤",
 	// Box Drawing - Dotted (same as unicode)
 	// pick: ┄ | alt: ╌ ┈ ⋯
 	"boxDotted.horizontal": "┄",
@@ -1021,9 +1006,6 @@ const NERD_SYMBOLS: SymbolMap = {
 	"format.bracketLeft": "⟨",
 	// pick: ⟩ | alt: ] ⟧
 	"format.bracketRight": "⟩",
-	"format.ellipsis": "…",
-	"format.arrowRight": "→",
-	"format.arrowLeft": "←",
 	// Markdown-specific
 	// pick: │ | alt: ┃ ║
 	"md.quoteBorder": "│",
@@ -1164,10 +1146,6 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"boxRound.bottomRight": "+",
 	"boxRound.horizontal": "-",
 	"boxRound.vertical": "|",
-	// Divider tees stay on the vertical rail so a card's inner divider
-	// (`|--- Output ---|`) never reads as a closing border (`+------+`).
-	"boxRound.teeRight": "|",
-	"boxRound.teeLeft": "|",
 	// Box Drawing - Dotted (ASCII fallback)
 	"boxDotted.horizontal": "-",
 	"boxDotted.vertical": ":",
@@ -1181,7 +1159,6 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"boxSharp.cross": "+",
 	"boxSharp.teeDown": "+",
 	"boxSharp.teeUp": "+",
-	// Tables keep `+` at every junction, edges included (`+---+---+`).
 	"boxSharp.teeRight": "+",
 	"boxSharp.teeLeft": "+",
 	// Separators
@@ -1322,9 +1299,6 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"format.dash": "-",
 	"format.bracketLeft": "[",
 	"format.bracketRight": "]",
-	"format.ellipsis": "...",
-	"format.arrowRight": "->",
-	"format.arrowLeft": "<-",
 	// Markdown-specific
 	"md.quoteBorder": "|",
 	"md.hrChar": "-",
@@ -1411,44 +1385,6 @@ export const SYMBOL_PRESETS: Record<SymbolPreset, SymbolMap> = {
 	ascii: ASCII_SYMBOLS,
 };
 
-/** Sharp box glyphs from a symbol map. */
-export function sharpBoxSymbols(symbols: SymbolMap): BoxSymbols {
-	return {
-		topLeft: symbols["boxSharp.topLeft"],
-		topRight: symbols["boxSharp.topRight"],
-		bottomLeft: symbols["boxSharp.bottomLeft"],
-		bottomRight: symbols["boxSharp.bottomRight"],
-		horizontal: symbols["boxSharp.horizontal"],
-		vertical: symbols["boxSharp.vertical"],
-		cross: symbols["boxSharp.cross"],
-		teeDown: symbols["boxSharp.teeDown"],
-		teeUp: symbols["boxSharp.teeUp"],
-		teeRight: symbols["boxSharp.teeRight"],
-		teeLeft: symbols["boxSharp.teeLeft"],
-	};
-}
-
-/**
- * Rounded box glyphs from a symbol map. Corners and side tees have rounded-box
- * tokens; the inner junctions have no rounded variant, so they reuse the sharp
- * `boxSharp.*` glyphs.
- */
-export function roundBoxSymbols(symbols: SymbolMap): BoxSymbols {
-	return {
-		topLeft: symbols["boxRound.topLeft"],
-		topRight: symbols["boxRound.topRight"],
-		bottomLeft: symbols["boxRound.bottomLeft"],
-		bottomRight: symbols["boxRound.bottomRight"],
-		horizontal: symbols["boxRound.horizontal"],
-		vertical: symbols["boxRound.vertical"],
-		cross: symbols["boxSharp.cross"],
-		teeDown: symbols["boxSharp.teeDown"],
-		teeUp: symbols["boxSharp.teeUp"],
-		teeRight: symbols["boxRound.teeRight"],
-		teeLeft: symbols["boxRound.teeLeft"],
-	};
-}
-
 export type SpinnerType = "status" | "activity";
 
 export const SPINNER_FRAMES: Record<SymbolPreset, Record<SpinnerType, string[]>> = {
@@ -1461,9 +1397,8 @@ export const SPINNER_FRAMES: Record<SymbolPreset, Record<SpinnerType, string[]>>
 		activity: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
 	},
 	ascii: {
-		// Parenthesised so a live frame never matches a bracketed `status.*`
-		// glyph (`[-]` error, `[/]` shadowed) yet reads as the same family.
-		status: ["(|)", "(/)", "(-)", "(\\)"],
+		// Bracketed like the `status.*` glyphs, so a settling call keeps its column width.
+		status: ["[|]", "[/]", "[-]", "[\\]"],
 		activity: ["-", "\\", "|", "/"],
 	},
 };

@@ -8,45 +8,31 @@ import type { NativeNode } from "../native/node";
 /** SGR dim on / normal intensity — additive, preserves fg/bg colors. */
 const DIM = "\x1b[2m";
 const DIM_OFF = "\x1b[22m";
-/** Printable ASCII only: such indent glyphs are left blank (see {@link indentMarkers}). */
-const PLAIN_ASCII = /^[\x20-\x7e]*$/;
-
-/** Indentation glyphs for one diff render: a dim marker per space and per tab stop. */
-interface IndentMarkers {
-	space: string;
-	tab: string;
-}
 
 /**
- * Indentation markers drawn from the theme: its middle dot for spaces and its
- * right arrow centred in a tab stop. A preset whose glyphs are plain ASCII
- * (`-`, `->`) leaves indentation blank, since a `-` in a diff gutter reads as
- * a removal and a two-column arrow cannot mark a tab stop.
+ * Visualize leading whitespace (indentation) with dim glyphs.
+ * Tabs become ` → ` and spaces become `·`. Only affects whitespace
+ * before the first non-whitespace character; remaining tabs in code
+ * content are replaced with spaces (like replaceTabs).
  */
-function indentMarkers(renderTheme: Theme): IndentMarkers {
-	const tabWidth = DEFAULT_TAB_WIDTH;
-	const dot = renderTheme.sep.dot.trim();
-	const arrow = renderTheme.format.arrowRight;
-	const space = PLAIN_ASCII.test(dot) ? " " : `${DIM}${dot}${DIM_OFF}`;
-	if (PLAIN_ASCII.test(arrow)) return { space, tab: " ".repeat(tabWidth) };
-	const leftPadding = Math.floor(tabWidth / 2);
-	const rightPadding = Math.max(0, tabWidth - leftPadding - 1);
-	const tab = `${DIM}${" ".repeat(leftPadding)}${arrow}${" ".repeat(rightPadding)}${DIM_OFF}`;
-	return { space, tab };
-}
-
-/**
- * Visualize leading whitespace (indentation) with the theme's dim markers.
- * Only affects whitespace before the first non-whitespace character;
- * remaining tabs in code content are replaced with spaces (like replaceTabs).
- */
-function visualizeIndent(text: string, markers: IndentMarkers): string {
+function visualizeIndent(text: string): string {
 	const match = text.match(/^([ \t]+)/);
 	if (!match) return replaceTabs(text);
 	const indent = match[1];
+	const rest = text.slice(indent.length);
+	const tabWidth = DEFAULT_TAB_WIDTH;
+	const leftPadding = Math.floor(tabWidth / 2);
+	const rightPadding = Math.max(0, tabWidth - leftPadding - 1);
+	const tabMarker = `${DIM}${" ".repeat(leftPadding)}→${" ".repeat(rightPadding)}${DIM_OFF}`;
 	let visible = "";
-	for (const ch of indent) visible += ch === "\t" ? markers.tab : markers.space;
-	return `${visible}${replaceTabs(text.slice(indent.length))}`;
+	for (const ch of indent) {
+		if (ch === "\t") {
+			visible += tabMarker;
+		} else {
+			visible += `${DIM}·${DIM_OFF}`;
+		}
+	}
+	return `${visible}${replaceTabs(rest)}`;
 }
 
 /**
@@ -198,7 +184,6 @@ export function renderDiff(diffText: string, options: RenderDiffOptions = {}): s
 	// with full multi-line context. Highlighting is a no-op when no language
 	// can be detected from the file path.
 	const contextHighlights = highlightContextLines(parsedLines, options.filePath, renderTheme);
-	const markers = indentMarkers(renderTheme);
 	// Track the line number rendered on the previous emitted line so we can
 	// blank out duplicate gutters. Two cases trigger this:
 	//  1. Single-line replacement (`-N` followed by `+N`) — the `+N` repeats `N`.
@@ -213,7 +198,7 @@ export function renderDiff(diffText: string, options: RenderDiffOptions = {}): s
 		const trimmed = lineNum.trim();
 		const displayNum = trimmed === prevLineNum ? "" : trimmed;
 		prevLineNum = trimmed;
-		return formatCodeFrameLine(prefix, displayNum, content, lineNumberWidth, renderTheme.boxSharp.vertical);
+		return formatCodeFrameLine(prefix, displayNum, content, lineNumberWidth);
 	};
 
 	let i = 0;
@@ -224,10 +209,11 @@ export function renderDiff(diffText: string, options: RenderDiffOptions = {}): s
 		if (!parsed) {
 			prevLineNum = "";
 			// Blank gap rows (and legacy "..." markers from older transcripts)
-			// mark non-contiguous diff regions; display them as the theme ellipsis.
+			// mark non-contiguous diff regions; display them as a single dim
+			// unicode ellipsis.
 			const trimmed = line.trim();
 			const isGapRow = trimmed.length === 0 || trimmed === "..." || trimmed === "…";
-			result.push(renderTheme.fg("toolDiffContext", isGapRow ? renderTheme.format.ellipsis : replaceTabs(line)));
+			result.push(renderTheme.fg("toolDiffContext", isGapRow ? "…" : replaceTabs(line)));
 			i++;
 			continue;
 		}
@@ -260,41 +246,27 @@ export function renderDiff(diffText: string, options: RenderDiffOptions = {}): s
 				);
 
 				result.push(
-					renderTheme.fg(
-						"toolDiffRemoved",
-						formatLine("-", removed.lineNum, visualizeIndent(removedLine, markers)),
-					),
+					renderTheme.fg("toolDiffRemoved", formatLine("-", removed.lineNum, visualizeIndent(removedLine))),
 				);
-				result.push(
-					renderTheme.fg("toolDiffAdded", formatLine("+", added.lineNum, visualizeIndent(addedLine, markers))),
-				);
+				result.push(renderTheme.fg("toolDiffAdded", formatLine("+", added.lineNum, visualizeIndent(addedLine))));
 			} else {
 				for (const removed of removedLines) {
 					result.push(
-						renderTheme.fg(
-							"toolDiffRemoved",
-							formatLine("-", removed.lineNum, visualizeIndent(removed.content, markers)),
-						),
+						renderTheme.fg("toolDiffRemoved", formatLine("-", removed.lineNum, visualizeIndent(removed.content))),
 					);
 				}
 				for (const added of addedLines) {
 					result.push(
-						renderTheme.fg(
-							"toolDiffAdded",
-							formatLine("+", added.lineNum, visualizeIndent(added.content, markers)),
-						),
+						renderTheme.fg("toolDiffAdded", formatLine("+", added.lineNum, visualizeIndent(added.content))),
 					);
 				}
 			}
 		} else if (parsed.prefix === "+") {
-			result.push(
-				renderTheme.fg("toolDiffAdded", formatLine("+", parsed.lineNum, visualizeIndent(parsed.content, markers))),
-			);
+			result.push(renderTheme.fg("toolDiffAdded", formatLine("+", parsed.lineNum, visualizeIndent(parsed.content))));
 			i++;
 		} else {
 			const highlighted = contextHighlights.get(i);
-			const content =
-				highlighted !== undefined ? replaceTabs(highlighted) : visualizeIndent(parsed.content, markers);
+			const content = highlighted !== undefined ? replaceTabs(highlighted) : visualizeIndent(parsed.content);
 			result.push(renderTheme.fg("toolDiffContext", formatLine(" ", parsed.lineNum, content)));
 			i++;
 		}

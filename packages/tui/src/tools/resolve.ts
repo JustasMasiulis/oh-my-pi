@@ -129,9 +129,7 @@ export const resolveRenderer = {
 			spinnerFrame: options.spinnerFrame,
 			title: "Resolve",
 			description: subject,
-			badge: outcome
-				? { label: `proposed ${uiTheme.format.arrowRight} ${outcome.label}`, color: outcome.color }
-				: undefined,
+			badge: outcome ? { label: `proposed → ${outcome.label}`, color: outcome.color } : undefined,
 		};
 		const rows = reasonRows(uiTheme, args.reason?.trim());
 		return plainToolCard(uiTheme, () => ({

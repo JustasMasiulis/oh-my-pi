@@ -89,7 +89,7 @@ export function createLiveBoard(
 		let lines = render(spinner, width);
 		if (lines.length > maxRows) {
 			const hidden = lines.length - (maxRows - 1);
-			lines = [...lines.slice(0, maxRows - 1), theme.fg("dim", formatMoreItems(hidden, "line", theme))];
+			lines = [...lines.slice(0, maxRows - 1), theme.fg("dim", formatMoreItems(hidden, "line"))];
 		}
 		paint(lines);
 	};

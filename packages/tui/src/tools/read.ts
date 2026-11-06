@@ -545,8 +545,7 @@ export const readToolRenderer = {
 		const offset = args.offset;
 		const limit = args.limit;
 
-		const ellipsis = uiTheme.format.ellipsis;
-		let pathDisplay = formatReadPathLink(rawPath, { offset, fallbackLabel: ellipsis }) || ellipsis;
+		let pathDisplay = formatReadPathLink(rawPath, { offset, fallbackLabel: "…" }) || "…";
 		if (offset !== undefined || limit !== undefined) {
 			const startLine = offset ?? 1;
 			const endLine = limit !== undefined ? startLine + limit - 1 : "";

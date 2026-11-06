@@ -1,12 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { detectMacOSAppearance, Ellipsis, MacAppearanceObserver } from "@oh-my-pi/pi-natives";
+import { detectMacOSAppearance, MacAppearanceObserver } from "@oh-my-pi/pi-natives";
 import type { Terminal, TerminalAppearance } from "../terminal";
 import { colorLuma } from "@oh-my-pi/pi-utils/color";
 import { getCustomThemesDir } from "@oh-my-pi/pi-utils/dirs";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { isTerminalBackgroundQueryTrusted } from "../terminal-multiplexer";
-import { setDefaultEllipsis } from "../utils";
 import { setActiveSymbolTheme } from "./active-symbols";
 import { ansi256ToHex, resolveThemeColors, resolveVarRefs } from "./color";
 import { type CreateThemeOptions, getBuiltinThemes, loadTheme, loadThemeJson, loadThemeSync } from "./loader";
@@ -121,7 +120,6 @@ function assignTheme(value: Theme, previewName?: string): void {
 	theme = value;
 	previewThemeName = previewName;
 	setActiveSymbolTheme(value);
-	setDefaultEllipsis(value.format.ellipsis === "..." ? Ellipsis.Ascii : Ellipsis.Unicode);
 	if (themeBindings) {
 		for (const binding of themeBindings) binding(value);
 	}

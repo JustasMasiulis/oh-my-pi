@@ -175,7 +175,7 @@ describe("globToolRenderer", () => {
 		// Too wide for the row: the scope is cut in its middle so the facts stay on the header row.
 		const narrow = render(120);
 		expect(narrow[0]).toStartWith(`${uiTheme.status.success} Glob: C:/Program Files (x86)/`);
-		expect(narrow[0]).toContain(uiTheme.format.ellipsis);
+		expect(narrow[0]).toContain("…");
 		expect(narrow[0]).toEndWith("vcvars*.bat 1 file");
 		expect(narrow.slice(2)).toEqual(missing.map(item => `  skipped missing: ${item}`));
 	});

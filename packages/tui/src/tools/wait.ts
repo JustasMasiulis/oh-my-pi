@@ -482,7 +482,7 @@ function jobsRenderResult(
 		const badge = agent.live ? formatBadge("agent", "accent", uiTheme) : formatBadge("no turn", "warning", uiTheme);
 		const facts = compact([
 			uiTheme.fg("dim", formatDuration(agent.ageMs)),
-			agent.parentId ? uiTheme.fg("dim", `${uiTheme.format.arrowLeft} ${replaceTabs(agent.parentId)}`) : undefined,
+			agent.parentId ? uiTheme.fg("dim", `← ${replaceTabs(agent.parentId)}`) : undefined,
 			agent.activity
 				? uiTheme.fg("toolOutput", truncateToWidth(replaceTabs(agent.activity), LABEL_MAX_WIDTH))
 				: undefined,
@@ -632,18 +632,17 @@ export interface IrcMessageCard {
 
 /** IRC card subject: the sender, the recipient, or both, joined by direction arrows. */
 function ircCardSubject(card: IrcMessageCard, theme: Theme): string {
-	const { arrowLeft, arrowRight } = theme.format;
 	const from = replaceTabs(card.from?.trim() || "?");
 	const to = replaceTabs(card.to?.trim() || "?");
 	switch (card.kind) {
 		case "incoming":
-			return `${arrowLeft} ${from}`;
+			return `${theme.nav.back} ${from}`;
 		case "autoreply":
-			return `${arrowRight} ${to}`;
+			return `${theme.nav.selected} ${to}`;
 		case "workpool":
-			return `${replaceTabs(card.pool?.trim() || "?")} ${arrowRight} ${to}`;
+			return `${replaceTabs(card.pool?.trim() || "?")} ${theme.nav.selected} ${to}`;
 		case "relay":
-			return `${from} ${arrowRight} ${to}`;
+			return `${from} ${theme.nav.selected} ${to}`;
 	}
 }
 
@@ -845,7 +844,7 @@ export const waitToolRenderer = {
 					{
 						icon: "success",
 						title: "Wait",
-						description: `${uiTheme.format.arrowLeft} ${replaceTabs(waited.from)}`,
+						description: `${uiTheme.nav.back} ${replaceTabs(waited.from)}`,
 						meta: [messageAge(waited.ts), ...(waited.replyTo ? ["reply"] : [])],
 					},
 					bodyLines(waited.body, expanded, uiTheme, width),

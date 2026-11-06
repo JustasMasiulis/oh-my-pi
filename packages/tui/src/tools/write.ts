@@ -200,10 +200,9 @@ function writeStatus(
 	icon: StatusLineOptions["icon"],
 	rawPath: string,
 	linkTarget: string | undefined,
-	uiTheme: Theme,
 ): StatusLineOptions {
 	const filePath = sanitizeText(shortenPath(rawPath));
-	let description = filePath || uiTheme.format.ellipsis;
+	let description = filePath || "…";
 	if (filePath && linkTarget) description = fileHyperlink(linkTarget, filePath);
 	return { icon, title: "Write", description };
 }
@@ -644,7 +643,7 @@ export const writeToolRenderer = {
 		// rather than an archive member or database row selector.
 		const linkTarget = args.content !== undefined ? pendingFileLinkPath(rawPath) : undefined;
 		const icon = options.executionStarted ? "running" : "pending";
-		const status = writeStatus(icon, rawPath, linkTarget, uiTheme);
+		const status = writeStatus(icon, rawPath, linkTarget);
 		// Raw content, not normalizeDisplayText(args.content): the collapsed
 		// streaming path normalizes only its tail window, so a full-payload
 		// normalize on every reveal tick would re-introduce the O(n²) streaming
@@ -722,7 +721,7 @@ export const writeToolRenderer = {
 		if (result.isError) {
 			const errorText = result.content?.find(c => c.type === "text")?.text;
 			return plainToolCard(uiTheme, () => ({
-				status: writeStatus("error", rawPath, linkTarget, uiTheme),
+				status: writeStatus("error", rawPath, linkTarget),
 				phase: "error",
 				body: [formatErrorText(errorText, uiTheme)],
 			}));
@@ -731,7 +730,7 @@ export const writeToolRenderer = {
 		const isPartial = options.isPartial === true;
 		const progressText = result.content?.find(c => c.type === "text")?.text ?? "";
 		const status: StatusLineOptions = {
-			...writeStatus(isPartial ? "running" : "success", rawPath, linkTarget, uiTheme),
+			...writeStatus(isPartial ? "running" : "success", rawPath, linkTarget),
 			badge: !isPartial && result.details?.madeExecutable ? { label: "executable", color: "success" } : undefined,
 		};
 		const diagnostics = isPartial ? undefined : result.details?.diagnostics;

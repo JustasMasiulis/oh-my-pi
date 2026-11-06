@@ -432,14 +432,9 @@ export function formatBadge(label: string, color: ToolUIColor, theme: Theme): st
  * Build a "more items" row for truncated lists: `… N more items`, or
  * `… N earlier items` when the hidden rows precede the visible window.
  */
-export function formatMoreItems(
-	remaining: number,
-	itemType: string,
-	theme: Theme,
-	position: "more" | "earlier" = "more",
-): string {
+export function formatMoreItems(remaining: number, itemType: string, position: "more" | "earlier" = "more"): string {
 	const safeRemaining = Number.isFinite(remaining) ? remaining : 0;
-	return `${theme.format.ellipsis} ${safeRemaining} ${position} ${pluralize(itemType, safeRemaining)}`;
+	return `… ${safeRemaining} ${position} ${pluralize(itemType, safeRemaining)}`;
 }
 
 /**
@@ -452,7 +447,7 @@ export function formatMoreRow(
 	theme: Theme,
 	options: { expanded?: boolean; position?: "more" | "earlier" } = {},
 ): string {
-	const more = theme.fg("dim", formatMoreItems(remaining, itemType, theme, options.position));
+	const more = theme.fg("dim", formatMoreItems(remaining, itemType, options.position));
 	const hint = formatExpandHint(theme, options.expanded);
 	return hint ? `${more} ${hint}` : more;
 }
@@ -581,29 +576,17 @@ export function formatScopedSubject(
 /** Marker displayed in the gutter of a code frame. */
 export type CodeFrameMarker = "" | " " | "*" | "+" | "-" | ">";
 
-/**
- * Canonical code-frame gutter separator. Tools bake it into persisted display
- * text (`details.displayContent`), which renderers parse and redraw with the
- * theme's `boxSharp.vertical`.
- */
-export const CODE_FRAME_GUTTER = "│";
-
-/**
- * Format a code-frame row with a padded line-number gutter. `gutter` is the
- * separator: {@link CODE_FRAME_GUTTER} for persisted text, the theme's
- * `boxSharp.vertical` when drawing directly.
- */
+/** Format a code-frame row with a padded line-number gutter. */
 export function formatCodeFrameLine(
 	marker: CodeFrameMarker,
 	lineNumber: string | number,
 	content: string,
 	lineNumberWidth: number,
-	gutter: string,
 ): string {
 	const markerText = marker.trim();
 	const lineNumberText = String(lineNumber).trim();
 	const gutterText = markerText && lineNumberText ? `${markerText}${lineNumberText}` : lineNumberText || markerText;
-	return `${gutterText.padStart(lineNumberWidth + 1, " ")}${gutter}${content}`;
+	return `${gutterText.padStart(lineNumberWidth + 1, " ")}│${content}`;
 }
 
 // =============================================================================
@@ -1160,13 +1143,13 @@ export function sanitizeDisplayWarning(text: string): string {
 }
 
 /** Sanitize and bound warning text before showing it in TUI. */
-export function sanitizeDisplayWarnings(warnings: readonly string[], theme: Theme): string[] {
+export function sanitizeDisplayWarnings(warnings: readonly string[]): string[] {
 	const visible = warnings
 		// Callers mostly join warnings inline into one message: no own rows, so a plain cap.
 		.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS)
 		.map(warning => truncateToWidth(sanitizeDisplayWarning(warning), TRUNCATE_LENGTHS.LONG));
 	const hidden = warnings.length - visible.length;
-	if (hidden > 0) visible.push(formatMoreItems(hidden, "warning", theme));
+	if (hidden > 0) visible.push(formatMoreItems(hidden, "warning"));
 	return visible;
 }
 
@@ -1363,7 +1346,7 @@ export function appendParseErrorsBulletList(
 		lines.push(bullet(err));
 	}
 	if (fullCount > capped.length) {
-		lines.push(`  ${theme.fg("dim", formatMoreItems(fullCount - capped.length, "parse issue", theme))}`);
+		lines.push(`  ${theme.fg("dim", formatMoreItems(fullCount - capped.length, "parse issue"))}`);
 	}
 }
 

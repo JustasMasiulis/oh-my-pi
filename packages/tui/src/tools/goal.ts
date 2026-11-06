@@ -172,7 +172,7 @@ export const goalToolRenderer = {
 			description,
 			badge: { label: goal.status, color: goalBadgeColor(goal.status) },
 		};
-		const budgetLine = uiTheme.fg("dim", goalUsageParts(goal).join(uiTheme.sep.dot));
+		const budgetLine = uiTheme.fg("dim", goalUsageParts(goal).join(" · "));
 		const report = details?.completionBudgetReport;
 
 		return plainToolCard(uiTheme, ({ contentWidth }) => ({

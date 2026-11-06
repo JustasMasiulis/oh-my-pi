@@ -86,11 +86,11 @@ type TaskRenderOptions = RenderResultOptions & { renderContext?: TaskRenderConte
 const MAX_NESTED_TASK_RENDER_DEPTH = 8;
 
 function renderNestedCycleLine(theme: Theme): string {
-	return theme.fg("dim", `${theme.format.ellipsis} nested task progress already shown`);
+	return theme.fg("dim", "… nested task progress already shown");
 }
 
 function renderNestedDepthLimitLine(theme: Theme): string {
-	return theme.fg("dim", `${theme.format.ellipsis} nested task depth limit reached`);
+	return theme.fg("dim", "… nested task depth limit reached");
 }
 
 function formatFindingSummary(findings: FindingDetails[], theme: Theme): string {
@@ -261,9 +261,7 @@ function renderTypedYieldSections(
 		: cappedRowCount(typedItems.length, 3, maxWidth, () => yieldRow(typedItems[0]));
 	const lines = typedItems.slice(-displayCount).map(yieldRow);
 	if (typedItems.length > displayCount) {
-		lines.push(
-			`${continuePrefix}${theme.fg("dim", formatMoreItems(typedItems.length - displayCount, "yield", theme))}`,
-		);
+		lines.push(`${continuePrefix}${theme.fg("dim", formatMoreItems(typedItems.length - displayCount, "yield"))}`);
 	}
 	return lines;
 }
@@ -429,7 +427,7 @@ function buildOutputSection(
 			if (tree.lines.length > 0) {
 				if (!warning) lines.push(label);
 				for (const line of tree.lines) lines.push(`${indent}${line}`);
-				if (tree.truncated) lines.push(`${indent}${theme.fg("dim", theme.format.ellipsis)}`);
+				if (tree.truncated) lines.push(`${indent}${theme.fg("dim", "…")}`);
 				return { rows: lines, foldRows: 0 };
 			}
 		} catch {
@@ -452,7 +450,7 @@ function buildOutputSection(
 		lines.push(...hangingRows(indent, theme.fg("dim", clipCollapsed(replaceTabs(line), 70, expanded)), maxWidth));
 	}
 	if (outputLines.length <= previewCount) return { rows: lines, foldRows: 0 };
-	lines.push(`${indent}${theme.fg("dim", formatMoreItems(outputLines.length - previewCount, "line", theme))}`);
+	lines.push(`${indent}${theme.fg("dim", formatMoreItems(outputLines.length - previewCount, "line"))}`);
 	return { rows: lines, foldRows: 1 };
 }
 
@@ -476,7 +474,7 @@ function renderTaskSection(
 	const shownTaskLines = cappedRowCount(taskLines.length, maxExpanded, maxWidth, () => taskLines[maxExpanded]);
 	lines.push(...taskLines.slice(0, shownTaskLines));
 	if (taskLines.length > shownTaskLines) {
-		lines.push(`${indent}${theme.fg("dim", formatMoreItems(taskLines.length - shownTaskLines, "line", theme))}`);
+		lines.push(`${indent}${theme.fg("dim", formatMoreItems(taskLines.length - shownTaskLines, "line"))}`);
 	}
 
 	return lines;
@@ -608,7 +606,7 @@ function renderTaskItemLines(tasks: TaskItem[] | undefined, theme: Theme, width:
 	const lines: string[] = [];
 	for (let i = 0; i < cap; i++) lines.push(itemRow(i));
 	if (cap < tasks.length) {
-		lines.push(theme.fg("dim", formatMoreItems(tasks.length - cap, "agent", theme)));
+		lines.push(theme.fg("dim", formatMoreItems(tasks.length - cap, "agent")));
 	}
 	return lines;
 }
@@ -963,9 +961,7 @@ function renderAgentProgress(progress: AgentProgress, options: AgentRowOptions):
 					if (row !== undefined) lines.push(row);
 				}
 				if (items.length > displayCount) {
-					lines.push(
-						`${continuePrefix}${theme.fg("dim", formatMoreItems(items.length - displayCount, "item", theme))}`,
-					);
+					lines.push(`${continuePrefix}${theme.fg("dim", formatMoreItems(items.length - displayCount, "item"))}`);
 				}
 			}
 		}
@@ -1136,9 +1132,7 @@ function renderFindings(
 	}
 
 	if (displayCount === sortedFindings.length) return { rows: lines, foldRows: 0 };
-	lines.push(
-		`${continuePrefix}${theme.fg("dim", formatMoreItems(sortedFindings.length - displayCount, "finding", theme))}`,
-	);
+	lines.push(`${continuePrefix}${theme.fg("dim", formatMoreItems(sortedFindings.length - displayCount, "finding"))}`);
 	return { rows: lines, foldRows: 1 };
 }
 
@@ -1428,7 +1422,7 @@ function formatHiddenProgressMarker(hidden: readonly AgentProgress[], theme: The
 		parts.length > 0
 			? `${theme.fg("dim", " (")}${parts.join(theme.fg("dim", theme.sep.dot))}${theme.fg("dim", ")")}`
 			: "";
-	return `${theme.fg("dim", formatMoreItems(hidden.length, "agent", theme))}${breakdown}`;
+	return `${theme.fg("dim", formatMoreItems(hidden.length, "agent"))}${breakdown}`;
 }
 
 /**
@@ -1692,7 +1686,7 @@ function nestedAgentRows<T>(
 		render(item, nestedMarkers(hidden === 0 && index === visible.length - 1, theme)),
 	);
 	if (hidden > 0) {
-		lines.push(`${nestedMarkers(true, theme).prefix} ${theme.fg("dim", formatMoreItems(hidden, "agent", theme))}`);
+		lines.push(`${nestedMarkers(true, theme).prefix} ${theme.fg("dim", formatMoreItems(hidden, "agent"))}`);
 	}
 	return lines;
 }

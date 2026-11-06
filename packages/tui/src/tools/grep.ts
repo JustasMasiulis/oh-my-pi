@@ -36,7 +36,6 @@ import {
 	groupLineIndicesByBlank,
 	renderSearchPreviewRows,
 	searchSubject,
-	themeCodeFrameGutter,
 } from "./grouped-file-output";
 
 /** Display metadata for grep tool results. */
@@ -236,7 +235,7 @@ function createSearchLineStyler(
 				styled = resolved ? fileHyperlink(resolved, header) : uriHyperlink(raw, header);
 			}
 		} else {
-			const tinted = styleCodeFrame(index) ?? uiTheme.fg("toolOutput", themeCodeFrameGutter(line, uiTheme));
+			const tinted = styleCodeFrame(index) ?? uiTheme.fg("toolOutput", line);
 			const lineNumber = parseSearchDisplayLineNumber(line);
 			const filePath = ctx.filePath ? target(ctx.filePath) : urlFiles[index];
 			styled = filePath && lineNumber !== undefined ? fileHyperlink(filePath, tinted, { line: lineNumber }) : tinted;
