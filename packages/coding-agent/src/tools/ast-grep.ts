@@ -38,6 +38,7 @@ import {
 	toPathList,
 } from "@oh-my-pi/pi-tui/render/render-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { singleLine } from "@oh-my-pi/pi-tui/utils";
 import { toolResult } from "./tool-result";
 
 import { cfgTaskDisabledAgents } from "../task/settings";
@@ -363,7 +364,9 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 							.map(([key, value]) => `${key}=${value}`)
 							.join(", ");
 						modelOut.push(`  meta: ${serializedMeta}`);
-						displayOut.push(`  meta: ${serializedMeta}`);
+						// A capture can span lines; its display row stays one row, so the
+						// renderer can tell it from the match's code frames and file headers.
+						displayOut.push(`  meta: ${singleLine(serializedMeta)}`);
 					}
 					fileMatchCounts.set(relativePath, (fileMatchCounts.get(relativePath) ?? 0) + 1);
 				}

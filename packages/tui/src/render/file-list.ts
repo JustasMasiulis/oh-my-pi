@@ -74,8 +74,7 @@ export function renderFileList(options: FileListOptions, theme: Theme): string[]
 				const isDirectory = entry.isDirectory ?? entry.path.endsWith("/");
 				const displayPath = entry.path;
 				const lang = isDirectory ? undefined : getLanguageFromPath(displayPath);
-				// Type icons stay muted: the dim directory and bronze name beside them
-				// keep ASCII's word labels (`ts`, `c`) apart from the path.
+				// Type icons stay muted beside the dim directory and colored file name.
 				const icon = !showIcons ? "" : theme.fg("muted", isDirectory ? theme.icon.folder : theme.getLangIcon(lang));
 				const meta = entry.meta ? ` ${theme.fg("dim", entry.meta)}` : "";
 				const iconPrefix = icon ? `${icon} ` : "";

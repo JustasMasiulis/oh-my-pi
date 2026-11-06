@@ -9,19 +9,13 @@ import {
 	walkPathTree,
 } from "@oh-my-pi/pi-utils";
 import type { TspTone } from "@oh-my-pi/pi-wire";
-import { code, col, keyed, span, text } from "../native/describe";
+import { code, col, keyed } from "../native/describe";
 import type { NativeNode } from "../native/node";
-import {
-	FILE_NAME_COLOR,
-	formatMoreRow,
-	formatScopedSubject,
-	formatStyledPath,
-	replaceTabs,
-	toDisplayPathList,
-} from "../render/render-utils";
 import { getLanguageFromPath } from "../lang-from-path";
+import { fileHyperlink, uriHyperlink } from "../render/hyperlink";
+import { FILE_NAME_COLOR, formatMoreItems, formatMoreRow, formatStyledPath, replaceTabs } from "../render/render-utils";
 import { highlightCode, isHighlightLanguage, type Theme, type ThemeColor } from "../theme/theme";
-import { formatHashlineHeader } from "./hashline-format";
+import { formatHashlineHeader, HASHLINE_TAG_SUFFIX_RE } from "./hashline-format";
 import { fileRow } from "./native-view";
 
 // =============================================================================
@@ -165,15 +159,22 @@ export function formatFileMatches(
 
 const GROUPED_HEADER_RE = /^(#+)\s+(.*)$/;
 const HEADER_SUFFIX_RE = /\s+\([^)]*\)\s*$/;
-const HEADER_HASH_TAG_RE = /#[0-9a-f]+$/i;
+/** `*12│text`, ` 12|text`, `*12:text`: optional match marker, line number, gutter, content. */
+const GROUPED_NUMBERED_LINE_RE = /^\s*(\*?)(\d+)(?:│|[:|])(.*)$/;
+const GROUPED_MATCH_ROW_RE = /^\s*\*\d+(?:│|[:|])/;
 
-/** Per-line classification of grouped output, used by renderers for header display and hyperlinks. */
+/** Whether a row of grouped output is a code-frame row the search matched (`*12│…`). */
+export function isMatchRow(line: string): boolean {
+	return GROUPED_MATCH_ROW_RE.test(line);
+}
+
+/** Per-line classification of grouped output, used by renderers for file rows and hyperlinks. */
 export interface GroupedLineContext {
 	/** Directory header, file header, or any non-header body/content line. */
 	kind: "dir" | "file" | "content";
 	/** Number of leading `#` for headers; 0 for content lines. */
 	depth: number;
-	/** Resolved absolute path of the dir/file a header points at (when resolvable). */
+	/** Resolved absolute path of the file a header points at (when resolvable). */
 	headerPath?: string;
 	/**
 	 * For file headers, the full display path: the folded directory chain joined
@@ -184,8 +185,11 @@ export interface GroupedLineContext {
 	suffix?: string;
 	/** For content lines, the absolute path of the owning file (line hyperlinks). */
 	filePath?: string;
-	/** Header is an internal/url-like target the caller resolves itself. */
-	isUrl?: boolean;
+	/**
+	 * The internal or url-like target, as written, that a header names or a
+	 * content line belongs to; the caller resolves it (no filesystem path).
+	 */
+	url?: string;
 }
 
 function resolveGroupedPath(parent: string | undefined, name: string): string | undefined {
@@ -194,14 +198,6 @@ function resolveGroupedPath(parent: string | undefined, name: string): string | 
 	// `path.resolve` keeps an absolute `name` intact (out-of-cwd results) while
 	// joining a relative folded chain (`packages/pkg/src`) onto the parent.
 	return path.resolve(parent, name);
-}
-
-/** `# dir/`: a directory header row of grouped output. */
-function isGroupedDirHeader(line: string): boolean {
-	const match = GROUPED_HEADER_RE.exec(line);
-	if (!match) return false;
-	const rest = match[2]!.trimEnd();
-	return rest.endsWith("/") && !isUrlLikePath(rest);
 }
 
 /**
@@ -216,7 +212,9 @@ function isGroupedDirHeader(line: string): boolean {
  * formatted relative to cwd regardless of the (sub)directory the search was
  * scoped to. `fileScope` is the initial owning file for body lines that appear
  * before any header (single-file scopes have no `#` headers); it defaults to
- * `headerBase` and should be passed the scoped file's absolute path.
+ * `headerBase` and should be passed the scoped file's absolute path. A URL base
+ * or scope (`local://…`) is no filesystem path: headerless lines belong to the
+ * URL, and headers under a URL base get no path.
  */
 export function classifyGroupedLines(
 	lines: readonly string[],
@@ -224,97 +222,222 @@ export function classifyGroupedLines(
 	fileScope: string | undefined = headerBase,
 ): GroupedLineContext[] {
 	const result: GroupedLineContext[] = [];
-	const dirAtDepth = new Map<number, string>();
+	const base = headerBase !== undefined && isUrlLikePath(headerBase) ? undefined : headerBase;
+	// Per depth (index `depth - 1`): each directory's absolute path, and its display
+	// name with the trailing `/`, so the `# /` root of absolute paths keeps its separator.
+	const dirAtDepth: (string | undefined)[] = [];
 	const displayDirAtDepth: string[] = [];
-	// Body lines before any header (single-file scopes) link to the scoped file.
-	let currentFile = fileScope;
-
-	const clearDeeper = (depth: number) => {
-		for (const key of dirAtDepth.keys()) {
-			if (key >= depth) dirAtDepth.delete(key);
-		}
-		displayDirAtDepth.length = depth - 1;
-	};
+	// Body lines before any header (single-file scopes) belong to the scoped file or URL.
+	const scopeIsUrl = fileScope !== undefined && isUrlLikePath(fileScope);
+	let currentFile = scopeIsUrl ? undefined : fileScope;
+	let currentUrl = scopeIsUrl ? fileScope : undefined;
 
 	for (const line of lines) {
 		const match = GROUPED_HEADER_RE.exec(line);
 		if (!match) {
-			result.push({ kind: "content", depth: 0, filePath: currentFile });
+			result.push({ kind: "content", depth: 0, filePath: currentFile, url: currentUrl });
 			continue;
 		}
 		const depth = match[1]!.length;
 		const rest = match[2]!.trimEnd();
-		const suffix = HEADER_SUFFIX_RE.exec(rest)?.[0].trim();
-		if (isUrlLikePath(rest)) {
-			clearDeeper(depth);
-			currentFile = undefined;
-			const displayPath = rest.replace(HEADER_SUFFIX_RE, "").replace(HEADER_HASH_TAG_RE, "");
-			result.push({ kind: "file", depth, isUrl: true, displayPath, suffix });
+		const parent = depth > 1 ? dirAtDepth[depth - 2] : base;
+		const url = isUrlLikePath(rest);
+		dirAtDepth.length = displayDirAtDepth.length = depth - 1;
+		currentFile = currentUrl = undefined;
+		if (!url && rest.endsWith("/")) {
+			// Directory headers are always `name/`: a trailing `(…)` is part of the name, not a suffix.
+			const name = rest.slice(0, -1);
+			dirAtDepth.push(resolveGroupedPath(parent, name));
+			displayDirAtDepth.push(`${name}/`);
+			result.push({ kind: "dir", depth });
 			continue;
 		}
-		const parent = depth > 1 ? dirAtDepth.get(depth - 1) : headerBase;
-		if (rest.endsWith("/")) {
-			const name = rest.slice(0, -1).replace(HEADER_SUFFIX_RE, "");
-			const abs = resolveGroupedPath(parent, name);
-			clearDeeper(depth);
-			if (abs !== undefined) dirAtDepth.set(depth, abs);
-			displayDirAtDepth[depth - 1] = name;
-			currentFile = undefined;
-			result.push({ kind: "dir", depth, headerPath: abs });
+		const suffix = HEADER_SUFFIX_RE.exec(rest);
+		const target = suffix ? rest.slice(0, suffix.index) : rest;
+		const name = target.replace(HASHLINE_TAG_SUFFIX_RE, "");
+		const note = suffix?.[0].trim();
+		if (url) {
+			currentUrl = target;
+			result.push({ kind: "file", depth, url: target, displayPath: name, suffix: note });
 			continue;
 		}
-		const name = rest.replace(HEADER_SUFFIX_RE, "").replace(HEADER_HASH_TAG_RE, "");
-		const abs = name ? resolveGroupedPath(parent, name) : undefined;
-		const prefix = displayDirAtDepth
-			.slice(0, depth - 1)
-			.filter(Boolean)
-			.join("/");
-		const displayPath = prefix ? `${prefix}/${name}` : name;
-		currentFile = abs;
-		result.push({ kind: "file", depth, headerPath: abs, displayPath, suffix });
+		currentFile = name ? resolveGroupedPath(parent, name) : undefined;
+		const displayPath = displayDirAtDepth.join("") + name;
+		result.push({ kind: "file", depth, headerPath: currentFile, displayPath, suffix: note });
 	}
 
 	return result;
 }
 
 /**
- * A file header row: the full path with a dim directory and bronze name, then
- * any dim suffix. URL-like headers stay whole in the name color.
+ * Line groups with one file per group, for terminal tree lists: `# dir/`
+ * header rows are dropped (each file row carries its full path), and every
+ * file row starts a group of its own, so each file gets its own branch instead
+ * of hanging under the previous file of its directory. Rows before a group's
+ * first file row (notes, a single-file scope's matches) keep their group.
  */
-export function formatGroupedFileHeader(ctx: GroupedLineContext, theme: Theme): string {
-	const display = replaceTabs(ctx.displayPath ?? "");
-	const styledPath = ctx.isUrl ? theme.fg(FILE_NAME_COLOR, display) : formatStyledPath(display, theme);
-	const suffix = ctx.suffix ? ` ${theme.fg("dim", replaceTabs(ctx.suffix))}` : "";
-	return `${styledPath}${suffix}`;
+export function groupsByFile(
+	groups: readonly (readonly number[])[],
+	contexts: readonly GroupedLineContext[],
+): number[][] {
+	const result: number[][] = [];
+	for (const group of groups) {
+		let current: number[] = [];
+		for (const index of group) {
+			const kind = contexts[index]!.kind;
+			if (kind === "dir") continue;
+			if (kind === "file" && current.length > 0) {
+				result.push(current);
+				current = [];
+			}
+			current.push(index);
+		}
+		if (current.length > 0) result.push(current);
+	}
+	return result;
+}
+
+function stringField(record: Record<string, unknown>, key: string): string | undefined {
+	const value = record[key];
+	return typeof value === "string" ? value : undefined;
+}
+
+function stringRecordField(record: Record<string, unknown>, key: string): Record<string, string> | undefined {
+	const value = record[key];
+	if (!isRecord(value)) return undefined;
+	for (const entry in value) if (typeof value[entry] !== "string") return undefined;
+	return value as Record<string, string>;
+}
+
+/** Details fields a grouped-output tool records for links: the display base paths and resolved URL targets. */
+export interface GroupedLinkDetails {
+	cwd?: string;
+	searchPath?: string;
+	displayTargets?: Record<string, string>;
 }
 
 /**
- * OSC 8 targets for the header rows of sanitized grouped output. Destinations
- * must keep the original path bytes, so when the raw `displayContent` still
- * aligns line-for-line with the sanitized `displayText`, a header links to its
- * raw classification's path. Raw text never creates links the sanitized
- * output lacks.
+ * Link targets for the rows of sanitized grouped output: a file row's file, a
+ * body row's owning file, and for an internal URL the file `displayTargets`
+ * resolves it to. Destinations keep the original path bytes: while the raw
+ * `displayContent` still aligns line-for-line with the sanitized `displayText`,
+ * a row takes its raw classification's target. Raw text never links a row the
+ * sanitized output leaves unlinked.
  */
-export function groupedHeaderLinkTargets(
+export function groupedLinkTargets(
 	contexts: readonly GroupedLineContext[],
 	displayText: string,
+	details: GroupedLinkDetails | undefined,
 	rawDetails: unknown,
 ): (index: number) => string | undefined {
-	const raw: Record<string, unknown> = isRecord(rawDetails) ? rawDetails : {};
-	const rawContent = typeof raw.displayContent === "string" ? raw.displayContent : undefined;
+	const targetOf = (ctx: GroupedLineContext, urlTargets: Record<string, string> | undefined) =>
+		(ctx.kind === "file" ? ctx.headerPath : ctx.filePath) ?? (ctx.url ? urlTargets?.[ctx.url] : undefined);
+	// Detail sanitization keeps record keys raw; the display rows carry sanitized URLs.
+	const displayTargets = details?.displayTargets
+		? Object.fromEntries(Object.entries(details.displayTargets).map(([url, file]) => [sanitizeText(url), file]))
+		: undefined;
+	const raw = rawDetails !== details && isRecord(rawDetails) ? rawDetails : undefined;
+	const rawContent = raw && stringField(raw, "displayContent");
 	const rawLines = rawContent?.split("\n");
-	const rawCwd = typeof raw.cwd === "string" ? raw.cwd : undefined;
-	const rawSearchPath = typeof raw.searchPath === "string" ? raw.searchPath : undefined;
 	const rawContexts =
-		rawContent !== undefined && rawLines?.length === contexts.length && sanitizeText(rawContent) === displayText
-			? classifyGroupedLines(rawLines, rawCwd ?? rawSearchPath, rawSearchPath)
+		raw && rawLines?.length === contexts.length && sanitizeText(rawContent!) === displayText
+			? classifyGroupedLines(
+					rawLines,
+					stringField(raw, "cwd") ?? stringField(raw, "searchPath"),
+					stringField(raw, "searchPath"),
+				)
 			: undefined;
+	const rawTargets = raw && stringRecordField(raw, "displayTargets");
 	return index => {
 		const ctx = contexts[index]!;
+		const target = targetOf(ctx, displayTargets);
 		const rawContext = rawContexts?.[index];
-		if (!ctx.headerPath || rawContext?.kind !== ctx.kind || rawContext.depth !== ctx.depth) return ctx.headerPath;
-		return rawContext.headerPath ?? ctx.headerPath;
+		if (!target || rawContext?.kind !== ctx.kind || rawContext.depth !== ctx.depth) return target;
+		return targetOf(rawContext, rawTargets) ?? target;
 	};
+}
+
+/**
+ * A memoized styler for the rows of grouped output, so a collapsed preview
+ * styles only the rows it shows. A file row is its full path (dim directory,
+ * name in {@link FILE_NAME_COLOR}; a URL whole in that color) and any dim
+ * suffix, linked to `linkTarget`'s file or, for an unresolved URL, the URL.
+ * Body rows come from `styleBody`, tabs expanded; with `linkLines` a numbered
+ * code-frame row links to its line in the owning file.
+ */
+export function createGroupedRowStyler(
+	lines: readonly string[],
+	contexts: readonly GroupedLineContext[],
+	theme: Theme,
+	options: {
+		linkTarget: (index: number) => string | undefined;
+		styleBody: (index: number) => string;
+		linkLines?: boolean;
+	},
+): (index: number) => string {
+	const styled: string[] = [];
+	return index => {
+		const cached = styled[index];
+		if (cached !== undefined) return cached;
+		const ctx = contexts[index]!;
+		const target = options.linkTarget(index);
+		let row: string;
+		if (ctx.kind === "file") {
+			const name = replaceTabs(ctx.displayPath ?? "");
+			const label = ctx.url ? theme.fg(FILE_NAME_COLOR, name) : formatStyledPath(name, theme);
+			const suffix = ctx.suffix ? ` ${theme.fg("dim", replaceTabs(ctx.suffix))}` : "";
+			const linked = target ? fileHyperlink(target, label) : ctx.url ? uriHyperlink(ctx.url, label) : label;
+			row = linked + suffix;
+		} else {
+			row = replaceTabs(options.styleBody(index));
+			const line = options.linkLines && target ? GROUPED_NUMBERED_LINE_RE.exec(lines[index]!)?.[2] : undefined;
+			if (line) row = fileHyperlink(target!, row, { line: Number(line) });
+		}
+		styled[index] = row;
+		return row;
+	};
+}
+
+/**
+ * Fit line groups (one file each) into `budget` rows, the `… N more` summary row
+ * included: whole groups first, then the next group cut short when it can still
+ * show a row under its file row (the first group always shows its head). The
+ * summary counts the `unit`s left out, the rows `isUnit` accepts, out of `total`
+ * when the caller knows it; with none left out it counts hidden lines. `gap`
+ * rows separate shown groups (framed lists put a blank line between files).
+ */
+export function fitGroupsToBudget(
+	groups: readonly (readonly number[])[],
+	budget: number,
+	options: { isUnit: (index: number) => boolean; unit: string; total?: number; gap?: number },
+): { shown: (readonly number[])[]; summary: string } {
+	const gap = options.gap ?? 0;
+	let totalLines = Math.max(groups.length - 1, 0) * gap;
+	for (const group of groups) totalLines += group.length;
+	if (totalLines <= budget) return { shown: [...groups], summary: "" };
+	if (budget <= 0) return { shown: [], summary: "" };
+
+	const room = budget - 1;
+	const shown: (readonly number[])[] = [];
+	let used = 0;
+	let shownUnits = 0;
+	for (const group of groups) {
+		const lead = shown.length > 0 ? gap : 0;
+		const take = Math.min(group.length, room - used - lead);
+		if (take <= 0 || (take < Math.min(group.length, 2) && shown.length > 0)) break;
+		const part = take === group.length ? group : group.slice(0, take);
+		shown.push(part);
+		used += lead + take;
+		for (const index of part) if (options.isUnit(index)) shownUnits++;
+		if (part !== group) break;
+	}
+
+	let allUnits = options.total ?? 0;
+	if (!allUnits) for (const group of groups) for (const index of group) if (options.isUnit(index)) allUnits++;
+	const hiddenUnits = allUnits - shownUnits;
+	if (hiddenUnits > 0) return { shown, summary: formatMoreItems(hiddenUnits, options.unit) };
+	const hiddenLines = totalLines - used;
+	return { shown, summary: hiddenLines > 0 ? formatMoreItems(hiddenLines, "line") : "" };
 }
 
 /**
@@ -350,11 +473,8 @@ export function groupLineIndicesByBlank(rawLines: readonly string[]): number[][]
 }
 
 // =============================================================================
-// Flush search previews (grep / ast-grep TUI renderers)
+// Code frames highlighted in their file's language (TUI renderers)
 // =============================================================================
-
-/** A persisted code-frame row through its `│` rule: optional marker and line number, then the rule. */
-const NUMBERED_CODE_FRAME_RE = /^\s*[*+\->]?\s*(\d+)│/;
 
 /** A code-frame row split after its rule: the gutter (match marker, line number, rule) and the source line. */
 export interface CodeFrameRow {
@@ -377,63 +497,84 @@ export function renderCodeFrameRun(
 	const sources = rows.map(row => replaceTabs(row.source));
 	const highlighted = isHighlightLanguage(lang) ? highlightCode(sources.join("\n"), lang, theme) : undefined;
 	return rows.map((row, index) => {
-		const gutter = theme.fg(color, row.gutter);
-		return `${gutter}${highlighted?.[index] ?? theme.fg(color, sources[index]!)}`;
+		const source = highlighted?.[index] ?? theme.fg(color, sources[index]!);
+		return `${theme.fg(color, row.gutter)}${source}`;
 	});
 }
 
-/** A persisted code-frame row that carries a line number. */
+/** A numbered code-frame row of search output, with its line number. */
 interface NumberedCodeFrame {
 	row: CodeFrameRow;
 	n: number;
 }
 
 function parseNumberedCodeFrame(line: string): NumberedCodeFrame | undefined {
-	const match = NUMBERED_CODE_FRAME_RE.exec(line);
+	const match = GROUPED_NUMBERED_LINE_RE.exec(line);
 	if (!match) return undefined;
-	return { row: { gutter: match[0], source: line.slice(match[0].length) }, n: Number(match[1]) };
+	const source = match[3]!;
+	return { row: { gutter: line.slice(0, line.length - source.length), source }, n: Number(match[2]) };
 }
 
 /**
+ * Source rows highlighted together. A run longer than this (a huge AST match) highlights chunk by chunk as rows
+ * are requested, so a collapsed view never tokenizes source it hides; a string or comment spanning a chunk
+ * boundary loses its continuation there.
+ */
+const CODE_FRAME_CHUNK_ROWS = 64;
+
+/**
  * Styled code-frame rows of grouped search output, highlighted in each owning
- * file's language. A run of consecutive line numbers in one file highlights
- * together on its first request; a gap row, a jump in line numbers or another
- * file starts a new run. Rows without a numbered code frame (headers, gap rows,
- * notes) return undefined, for the caller to style.
+ * file's language (`lang` overrides it when the highlighter knows it). A run of
+ * consecutive line numbers in one file highlights together on its first
+ * request; a gap row, a jump in line numbers or another file starts a new run.
+ * Rows without a numbered code frame (headers, gap rows, notes) return
+ * undefined, for the caller to style.
  */
 export function createCodeFrameStyler(
 	lines: readonly string[],
 	contexts: readonly GroupedLineContext[],
 	color: ThemeColor,
 	theme: Theme,
+	lang?: string,
 ): (index: number) => string | undefined {
-	// The owning file of each body row: its resolved path, else its file header's display path.
-	const owners: (string | undefined)[] = [];
-	let headerPath: string | undefined;
-	for (const ctx of contexts) {
+	// Each body row's language: the override, else its owning file's, from the resolved path or its header's name.
+	const langOverride = isHighlightLanguage(lang) ? lang : undefined;
+	const langs: (string | undefined)[] = [];
+	let headerLang: string | undefined;
+	for (let index = 0; index < lines.length; index++) {
+		const ctx = contexts[index]!;
 		if (ctx.kind === "content") {
-			owners.push(ctx.filePath ?? headerPath);
+			langs.push(langOverride ?? (ctx.filePath ? getLanguageFromPath(ctx.filePath) : headerLang));
 			continue;
 		}
-		headerPath = ctx.kind === "file" && !ctx.isUrl ? ctx.displayPath : undefined;
-		owners.push(undefined);
+		headerLang = ctx.kind === "file" ? getLanguageFromPath(ctx.displayPath ?? "") : undefined;
+		langs.push(undefined);
 	}
 
 	const frames: (NumberedCodeFrame | null)[] = [];
 	const frameAt = (index: number): NumberedCodeFrame | null => {
 		let frame = frames[index];
 		if (frame === undefined) {
-			frame = parseNumberedCodeFrame(lines[index]!) ?? null;
+			frame = contexts[index]!.kind === "content" ? (parseNumberedCodeFrame(lines[index]!) ?? null) : null;
 			frames[index] = frame;
 		}
 		return frame;
 	};
 	// Whether the row at `index` continues the run of the row above it.
 	const continuesRun = (index: number): boolean => {
-		if (index <= 0 || owners[index] !== owners[index - 1]) return false;
+		if (index <= 0 || langs[index] !== langs[index - 1]) return false;
 		const frame = frameAt(index);
 		const above = frameAt(index - 1);
 		return frame !== null && above !== null && frame.n === above.n + 1;
+	};
+	// First row of each row's run, memoized so walking back through a long run happens once.
+	const runStarts: number[] = [];
+	const runStartOf = (index: number): number => {
+		let row = index;
+		while (runStarts[row] === undefined && continuesRun(row)) row--;
+		const start = runStarts[row] ?? row;
+		for (let filled = row; filled <= index; filled++) runStarts[filled] = start;
+		return start;
 	};
 
 	const styled: string[] = [];
@@ -441,35 +582,38 @@ export function createCodeFrameStyler(
 		if (frameAt(index) === null) return undefined;
 		const cached = styled[index];
 		if (cached !== undefined) return cached;
-		let start = index;
-		while (continuesRun(start)) start--;
+		const runStart = runStartOf(index);
+		const start = runStart + Math.floor((index - runStart) / CODE_FRAME_CHUNK_ROWS) * CODE_FRAME_CHUNK_ROWS;
 		let end = index + 1;
-		while (end < lines.length && continuesRun(end)) end++;
-		const owner = owners[index];
-		const runRows: CodeFrameRow[] = [];
-		for (let i = start; i < end; i++) runRows.push(frameAt(i)!.row);
-		const rendered = renderCodeFrameRun(runRows, owner ? getLanguageFromPath(owner) : undefined, color, theme);
-		rendered.forEach((row, offset) => {
+		while (end < start + CODE_FRAME_CHUNK_ROWS && end < lines.length && continuesRun(end)) end++;
+		const chunkRows: CodeFrameRow[] = [];
+		for (let row = start; row < end; row++) chunkRows.push(frameAt(row)!.row);
+		renderCodeFrameRun(chunkRows, langs[index], color, theme).forEach((row, offset) => {
 			styled[start + offset] = row;
 		});
 		return styled[index];
 	};
 }
 
-/** `*12│`, `*12|`, `*12:`: a match row of search display output. */
-const SEARCH_MATCH_LINE_RE = /^\s*\*\d+(?:│|[:|])/;
+// =============================================================================
+// Flush search previews (grep / ast-grep TUI renderers)
+// =============================================================================
 
-function isSearchMatchLine(line: string): boolean {
-	return SEARCH_MATCH_LINE_RE.test(line);
+/** `# dir/`: a directory header row of grouped output. */
+function isGroupedDirHeader(line: string): boolean {
+	const match = GROUPED_HEADER_RE.exec(line);
+	if (!match) return false;
+	const rest = match[2]!.trimEnd();
+	return rest.endsWith("/") && !isUrlLikePath(rest);
 }
 
 function isSearchHeaderLine(line: string): boolean {
 	return /^#+ /.test(line);
 }
 
-/** Headers and match rows only; falls back to the whole group when it has neither. */
-function compactSearchPreviewGroup(group: readonly number[], lines: readonly string[]): readonly number[] {
-	const compact = group.filter(index => isSearchHeaderLine(lines[index]!) || isSearchMatchLine(lines[index]!));
+/** The rows `keep` accepts; falls back to the whole group when it accepts none. */
+function compactSearchPreviewGroup(group: readonly number[], keep: (index: number) => boolean): readonly number[] {
+	const compact = group.filter(keep);
 	return compact.length > 0 ? compact : group;
 }
 
@@ -477,7 +621,7 @@ function countPreviewMatches(group: readonly number[], lines: readonly string[],
 	let count = 0;
 	for (const index of group) {
 		const line = lines[index]!;
-		if (hasMarkedMatches ? isSearchMatchLine(line) : !isSearchHeaderLine(line) && line.length > 0) count++;
+		if (hasMarkedMatches ? isMatchRow(line) : !isSearchHeaderLine(line) && line.length > 0) count++;
 	}
 	return count;
 }
@@ -491,13 +635,19 @@ export interface SearchPreviewOptions {
 	/** Reported match total; used when the display output marks no match rows. */
 	matchCount: number;
 	expanded: boolean;
+	/**
+	 * Rows a collapsed preview keeps (directory headers are always dropped).
+	 * Defaults to file headers and match rows, dropping context rows.
+	 */
+	collapsedRow?: (index: number) => boolean;
 }
 
 /**
  * Flush rows of grouped search output (`## file`, `*18│ line`) within a line
- * budget. Directory headers are dropped: callers style each file header with
- * its full path ({@link formatGroupedFileHeader}). Collapsed, groups keep only
- * their headers and match rows. When rows are cut, the last row is
+ * budget. Directory headers are dropped: callers style each file row with its
+ * full path ({@link createGroupedRowStyler}). Collapsed, groups keep only
+ * the rows `collapsedRow` accepts (by default their headers and match rows).
+ * When rows are cut, the last row is
  * `… N more matches` (or lines) with the expand hint. A collapsed preview
  * whose expansion draws in no more rows (that marker included) renders expanded.
  */
@@ -509,26 +659,32 @@ export function renderSearchPreviewRows(
 	theme: Theme,
 ): string[] {
 	const { matchCount, expanded } = options;
-	const full = searchPreviewRows(groups, lines, styleLine, options.expandedMaxLines, matchCount, true, theme);
+	const full = searchPreviewRows(groups, lines, styleLine, options.expandedMaxLines, matchCount, undefined, theme);
 	if (expanded) return full;
-	const collapsed = searchPreviewRows(groups, lines, styleLine, options.collapsedMaxLines, matchCount, false, theme);
+	const keep =
+		options.collapsedRow ?? ((index: number) => isSearchHeaderLine(lines[index]!) || isMatchRow(lines[index]!));
+	const collapsed = searchPreviewRows(groups, lines, styleLine, options.collapsedMaxLines, matchCount, keep, theme);
 	return full.length <= collapsed.length ? full : collapsed;
 }
 
-/** {@link renderSearchPreviewRows} for one expansion state, its trailing `… N more` row included. */
+/**
+ * {@link renderSearchPreviewRows} for one expansion state, its trailing `… N more` row included:
+ * collapsed when `collapsedRow` picks the rows to keep, else expanded.
+ */
 function searchPreviewRows(
 	groups: readonly (readonly number[])[],
 	lines: readonly string[],
 	styleLine: (index: number) => string,
 	maxLines: number,
 	matchCount: number,
-	expanded: boolean,
+	collapsedRow: ((index: number) => boolean) | undefined,
 	theme: Theme,
 ): string[] {
 	if (maxLines <= 0) return [];
+	const expanded = collapsedRow === undefined;
 	const renderedGroups = groups
 		.map(group => group.filter(index => !isGroupedDirHeader(lines[index]!)))
-		.map(group => (expanded ? group : compactSearchPreviewGroup(group, lines)))
+		.map(group => (collapsedRow ? compactSearchPreviewGroup(group, collapsedRow) : group))
 		.filter(group => group.length > 0);
 	if (renderedGroups.length === 0) return [];
 
@@ -568,20 +724,22 @@ function searchPreviewRows(
 	return rows;
 }
 
+// =============================================================================
+// Search card headers (TUI renderers)
+// =============================================================================
+
 /**
- * Search header subject, `pattern in scope`, the same in the call and the
- * result. A result names the tool's display scope; a call falls back to the
- * requested paths.
+ * Search header subject, `pattern in scope`, with `in` dim so the pattern and
+ * the scope read as two parts of one subject. Counts follow it as status meta.
  */
-export function searchSubject(
-	pattern: string | undefined,
-	pathArg: string | string[] | undefined,
+export function formatScopedSubject(
+	subject: string | undefined,
+	scope: string | undefined,
 	theme: Theme,
-	scope?: string,
 ): string | undefined {
-	if (!pattern) return undefined;
-	const paths = toDisplayPathList(pathArg);
-	return formatScopedSubject(pattern, scope ?? (paths.length > 0 ? paths.join(", ") : undefined), theme);
+	if (!scope) return subject;
+	const keyword = theme.fg("dim", "in");
+	return subject ? `${subject} ${keyword} ${scope}` : `${keyword} ${scope}`;
 }
 
 // =============================================================================
@@ -596,26 +754,27 @@ export type GroupedOutputEvent =
 
 /**
  * Walk grouped output (`# dir/`, `## file.ts (suffix)`, body lines), resolving
- * each file header to its full display path ({@link classifyGroupedLines})
+ * each file header to its full display path (see {@link classifyGroupedLines})
  * and dropping blank separator lines.
  */
 export function* walkGroupedOutput(lines: readonly string[]): Generator<GroupedOutputEvent> {
 	const contexts = classifyGroupedLines(lines, undefined);
-	for (let index = 0; index < lines.length; index++) {
-		const ctx = contexts[index]!;
-		const line = lines[index]!;
-		if (ctx.kind === "dir") yield { kind: "dir" };
-		else if (ctx.kind === "file") yield { kind: "file", path: ctx.displayPath ?? "", suffix: ctx.suffix };
-		else if (line.trim().length > 0) yield { kind: "line", text: line };
+	for (const [index, ctx] of contexts.entries()) {
+		if (ctx.kind === "dir") {
+			yield { kind: "dir" };
+		} else if (ctx.kind === "file") {
+			yield { kind: "file", path: ctx.displayPath ?? "", suffix: ctx.suffix };
+		} else {
+			const text = lines[index]!;
+			if (text.trim().length > 0) yield { kind: "line", text };
+		}
 	}
 }
 
-/** `*12│text`, ` 12|text`, `*12:text`: optional match marker, line number, gutter, content. */
-const GROUPED_NUMBERED_LINE_RE = /^\s*(\*?)(\d+)(?:│|[:|])(.*)$/;
-/** `    │...`: grep's gap between non-adjacent context runs (drawn as {@link numberedCode}'s `…` row). */
+/** `    │...`: grep's gap between non-adjacent context runs (Tern draws it from the jump in {@link numberedCode}'s numbers). */
 const GROUPED_GAP_LINE_RE = /^\s*│\.\.\.$/;
 
-/** One source line for {@link numberedCode}: its number (`null` for an elision marker), text and match mark. */
+/** One source line for {@link numberedCode}: its number (`null` for an elision marker, which adds no line), text and match mark. */
 export interface NumberedLine {
 	n: number | null;
 	text: string;
@@ -623,58 +782,52 @@ export interface NumberedLine {
 }
 
 /**
- * Numbered `code` for possibly non-contiguous source lines: one block per run
- * of consecutive line numbers (`start` = the run's first line, match lines
- * `mark`ed), with a `…` row wherever the numbers jump or an elision marker
- * (`n: null`) sits. `path` is the file the lines come from: Tern picks their
- * grammar from it and draws no header (the row or head above names the file).
- * `wrap` soft-wraps long lines instead of scrolling the block sideways.
+ * One numbered `code` block for possibly non-contiguous source lines (match
+ * lines `mark`ed by their line number): `start` when the numbers run on
+ * consecutively, else `nums` (each line's number), from whose jumps Tern draws
+ * the `…` gap rows in the gutter. Elision markers (`n: null`) add no line; the
+ * numbers jump around them. `path` is the file the lines come from: Tern picks
+ * their grammar from it and draws no header (the row or head above names the
+ * file). `wrap` soft-wraps long lines instead of scrolling the block sideways.
+ * `undefined` when no line is numbered.
  */
 export function numberedCode(
 	lines: readonly NumberedLine[],
 	opts: { path?: string; wrap?: boolean } = {},
-): NativeNode[] {
-	const out: NativeNode[] = [];
-	let run: { start: number; text: string[]; marks: { line: number; tone: TspTone }[] } | undefined;
-	const flush = () => {
-		if (!run) return;
-		// The quiet `…` row between two non-adjacent runs.
-		if (out.length > 0) out.push(keyed(text([span("…", "dim")], { wrap: "none" }), `g${run.start}`));
-		out.push(
-			keyed(
-				code(run.text.join("\n"), {
-					start: run.start,
-					numbers: true,
-					path: opts.path,
-					wrap: opts.wrap,
-					marks: run.marks.length > 0 ? run.marks : undefined,
-				}),
-				`c${run.start}`,
-			),
-		);
-		run = undefined;
-	};
+): NativeNode | undefined {
+	const nums: number[] = [];
+	const body: string[] = [];
+	const marks: { line: number; tone: TspTone }[] = [];
+	let contiguous = true;
 	for (const line of lines) {
-		if (line.n === null) {
-			flush();
-			continue;
-		}
-		if (run && run.start + run.text.length !== line.n) flush();
-		run ??= { start: line.n, text: [], marks: [] };
-		run.text.push(line.text);
-		if (line.mark) run.marks.push({ line: line.n, tone: "accent" });
+		if (line.n === null) continue;
+		if (nums.length > 0 && line.n !== nums[nums.length - 1]! + 1) contiguous = false;
+		nums.push(line.n);
+		body.push(line.text);
+		if (line.mark) marks.push({ line: line.n, tone: "accent" });
 	}
-	flush();
-	return out;
+	if (nums.length === 0) return undefined;
+	return keyed(
+		code(body.join("\n"), {
+			start: contiguous ? nums[0] : undefined,
+			nums: contiguous ? undefined : nums,
+			numbers: true,
+			path: opts.path,
+			wrap: opts.wrap,
+			marks: marks.length > 0 ? marks : undefined,
+		}),
+		`c${nums[0]}`,
+	);
 }
 
 /**
  * Describe grouped search output (grep / ast-grep / ast-edit display content)
  * by file (§7.3 grep): per file a 22px path row (dim dir, strong name, the
  * header's suffix or the match count as a chip), then its lines as
- * {@link numberedCode} with match lines marked and `…` between non-adjacent
- * runs. Unnumbered body lines stay plain `code`. `maxFiles` keeps only the
- * first files (the caller says how many were left out). `file` owns the lines
+ * one {@link numberedCode} block with match lines marked (gaps between
+ * non-adjacent runs drawn in its gutter). Unnumbered body lines stay plain
+ * `code`. `maxFiles` keeps only the first files (the caller says how many
+ * were left out). `file` owns the lines
  * before any header: a single-file search prints none, yet its lines get the
  * same file row as a directory search's.
  */
@@ -692,10 +845,9 @@ export function describeGroupedOutput(
 
 	const flushLines = () => {
 		const target = current?.children ?? loose;
-		if (numbered.length > 0) {
-			target.push(...numberedCode(numbered, { path: current?.path }));
-			numbered = [];
-		}
+		const block = numberedCode(numbered, { path: current?.path });
+		if (block) target.push(block);
+		numbered = [];
 		if (plain.length > 0) {
 			target.push(keyed(code(plain.join("\n")), `p${target.length}`));
 			plain = [];

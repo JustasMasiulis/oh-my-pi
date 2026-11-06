@@ -89,8 +89,17 @@ export function renderAgentTreeRow(
 	const nameColor = live && options.frozen ? "dim" : "accent";
 	const descriptionColor = live && options.frozen ? "dim" : "text";
 	// Task rows sit inside a framed card whose committed rows must not repaint, so they never animate.
-	const animate = !task && live && !options.frozen;
-	const icon = agentStatusIcon(status, theme, animate ? options.spinnerFrame : undefined);
+	const spinnerFrame = !task && live && !options.frozen ? options.spinnerFrame : undefined;
+	// formatStatusIcon colors every glyph except a raw spinner frame, which eval rows paint accent.
+	// A frozen snapshot of a live Task row dims its glyph with its name, so it stops reading as in flight.
+	const icon =
+		!task && status === "completed"
+			? theme.styledSymbol("tool.eval", "accent")
+			: task && live && options.frozen
+				? theme.fg("dim", status === "running" ? theme.status.running : theme.status.pending)
+				: spinnerFrame === undefined || status !== "running"
+					? agentStatusIcon(status, theme)
+					: theme.fg("accent", agentStatusIcon(status, theme, spinnerFrame));
 	const lead = `${options.prefix}${options.prefix ? " " : ""}${icon} `;
 	const statusBadge = options.statusBadge ?? "";
 	const id = Number.isFinite(width)

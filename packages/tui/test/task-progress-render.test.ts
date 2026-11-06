@@ -356,8 +356,8 @@ describe("task progress rendering", () => {
 					"HiddenBadge",
 				),
 			);
-			const icon = details.progress ? theme.status.running : theme.status.success;
-			expect(row).toContain(`${icon} HiddenBadge`);
+			const glyph = details.progress ? theme.status.running : theme.status.success;
+			expect(row).toContain(`${glyph} HiddenBadge`);
 			expect(row).not.toContain("openai/gpt-5");
 			expect(row).not.toContain(theme.icon.advisor);
 		}
@@ -429,13 +429,13 @@ describe("task progress rendering", () => {
 					"LegacyWorker",
 				),
 			);
-			const icon = details.progress ? theme.status.running : theme.status.success;
-			expect(row).toContain(`${icon} custom/model:high LegacyWorker`);
+			const glyph = details.progress ? theme.status.running : theme.status.success;
+			expect(row).toContain(`${glyph} custom/model:high LegacyWorker`);
 			expect(row).not.toContain(theme.thinking.high.split(" ")[0]);
 		}
 	});
 
-	it("renders running task rows static with the running status icon", async () => {
+	it("renders running task rows with a static running glyph", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		expect(theme).toBeDefined();
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
@@ -458,6 +458,7 @@ describe("task progress rendering", () => {
 		const strippedRow = Bun.stripANSI(rawRow0);
 
 		expect(strippedRow).toContain(`${theme.status.running} CountPackages: List workspace packages`);
+		expect(strippedRow).not.toContain(theme.symbol("tool.task"));
 		expect(strippedRow).not.toContain(theme.getSpinnerFrames("status")[0]);
 		expect(rawRow0).toBe(rawRow1);
 	});
@@ -542,7 +543,7 @@ describe("task progress rendering", () => {
 		expect(header).not.toContain("scout, sonic");
 	});
 
-	it("renders pending task rows with the pending status icon", async () => {
+	it("renders pending task rows with the pending glyph", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
 		const progress = runningProgress({
@@ -571,7 +572,7 @@ describe("task progress rendering", () => {
 		expect(rawRow0).toBe(rawRow1);
 	});
 
-	it("settles completed rows to the success status icon", async () => {
+	it("settles completed rows to the success glyph", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
 		const progress = runningProgress({
@@ -921,7 +922,7 @@ describe("task result detail-less state", () => {
 		setFeedModelBadgeEnabled(false);
 	});
 
-	it("renders a validation failure with the error glyph, not a success bullet", async () => {
+	it("renders a validation failure with the error glyph, not the success glyph", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		// The task-brief section renders markdown, which reads the active theme.
 		setThemeInstance(theme);
@@ -943,7 +944,7 @@ describe("task result detail-less state", () => {
 		expect(stripped).toContain("Validation failed");
 	});
 
-	it("renders a detail-less success with the success status, not an error glyph", async () => {
+	it("renders a detail-less success with the success glyph, not an error glyph", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		setThemeInstance(theme);
 		const options: RenderResultOptions = { expanded: false, isPartial: false };

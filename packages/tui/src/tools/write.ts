@@ -657,7 +657,8 @@ export const writeToolRenderer = {
 		return framedToolCard(
 			uiTheme,
 			({ contentWidth }) => ({
-				status,
+				// The streaming spinner animates in the header, as in Edit's call card.
+				status: { ...status, spinnerFrame: options.spinnerFrame },
 				phase: icon,
 				footerMeta: options.argsComplete ? undefined : uiTheme.fg("dim", "streaming"),
 				sections: [

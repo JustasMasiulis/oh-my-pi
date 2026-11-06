@@ -116,7 +116,7 @@ export default function (pi: ExtensionAPI) {
 Core methods:
 
 - `on(event, handler)`
-- `registerTool`, `registerCommand`, `registerShortcut`, `registerFlag`
+- `registerTool`, `registerCommand`, `registerShortcut`, `getShortcutConflict`, `registerFlag`
 - `registerMessageRenderer`, `registerAssistantThinkingRenderer`, `registerAssistantTextRenderer`, `registerLinkScheme`
 - `registerComposerShape`
 - `setLabel`, `getFlag`
@@ -137,6 +137,20 @@ labeling action. `getAllTools()` returns tool schemas and source metadata, while
 `getActiveTools()` returns enabled names.
 
 `getServiceTiers()` returns a detached snapshot of the session's live per-family tier map. `setServiceTier(family, tier)` changes one family for subsequent requests; pass `undefined` to clear that session override. OpenAI accepts `auto`, `default`, `flex`, `scale`, `priority`, or `ultrafast`; Anthropic accepts `priority`; Google accepts `flex` or `priority`. Changes made while a response is streaming do not alter that in-flight request.
+
+### Keyboard shortcuts
+
+Register shortcuts in the extension factory; omp binds them before `session_start`, so a later registration applies on the next start.
+
+`getShortcutConflict(chord)` returns `undefined` for a free chord, otherwise the first holder of:
+
+- `{ kind: "reserved" }`: omp keeps the chord (see [Constraints and pitfalls](#constraints-and-pitfalls)); a shortcut on it is never bound.
+- `{ kind: "keybinding", keybindings }`: `app.*` actions bound to it (Ctrl+Enter counts for approve and follow-up when their bindings are emptied). Where those actions apply, they usually take the key first.
+- `{ kind: "extension", extensionPath }`: another extension's shortcut; only one of them runs.
+
+Chords compare as the TUI matches them: `alt+ctrl+x` is `ctrl+alt+x`, and `?` also covers `shift+?`. The caller's own registrations don't count. Keybindings come from the session's TUI keymap, user remaps included; sessions without a TUI (print, RPC, ACP, SDK) use omp's defaults.
+
+It throws while extensions are loading, so call it from a handler (a command, `session_start`), e.g. to validate a chord the user picks; the factory then registers it on the next start.
 
 ### Provider registration
 
@@ -1349,13 +1363,25 @@ pi.on("link_activate", ({ url }) => {
 ```
 
 - **Drawing.** In a plain terminal, a markdown link using a claimed scheme, in an assistant reply or anywhere else markdown is drawn, shows its label only, with a dotted underline (a plain underline in terminals without styled underlines) that sets it apart from web links: no ` (url)` suffix, and no hyperlink the terminal or a browser could open.
-- **Keyboard.** In a plain terminal, `app.links.hint` (`Alt+O` by default, see [keybindings](./keybindings.md)) tags each claimed link on screen with one or two letters drawn over the start of its label; a label wrapped across rows gets one tag. Typing a whole tag raises `link_activate` for the claiming extension. `Esc` or any key that is not a lowercase letter cancels and is swallowed, except `Ctrl+C` and a paste, which cancel and keep their usual effect. Hint mode works while the prompt editor has focus and ends when an overlay or dialog takes it, or when a repaint moves or removes the tagged labels, as a streaming reply can, so a tag never picks a link no longer under it. With no claimed link on screen the key only shows a status, and with more links on one row than their tags can fit side by side it shows a status instead of tags. The first time a claimed link is drawn omp says which key picks it.
-- **Clicks.** With `tui.mouse` on, a left click on the label in a plain terminal does the same as typing its tag, instead of any other click action. Either way, while a subagent's transcript is focused, the event goes to that subagent's copy of the extension (the one whose renderers drew it), and the handler's `ctx.ui` is the interactive UI, so call `ctx.ui.rerenderMessage` from the handler's own context. Labels already in terminal scrollback cannot be picked.
+- **Keyboard.** In a plain terminal, `app.links.hint` (`Alt+O` by default, see [keybindings](./keybindings.md)) tags each claimed link on screen with one or two letters drawn over the start of its label; a label wrapped across rows gets one tag. A tag prefers the letter it covers: the label's first letter, else its next free one, else the next free home-row letter; when no single letter is free it gets two letters, so no tag is the start of another. Typing a whole tag raises `link_activate` for the claiming extension. `Esc` or any key that is not a lowercase letter cancels and is swallowed, except `Ctrl+C` and a paste, which cancel and keep their usual effect. Hint mode works while the prompt editor has focus and ends when an overlay or dialog takes it, or when a repaint moves or removes the tagged labels, as a streaming reply can, so a tag never picks a link no longer under it. With more links on one row than their tags can fit side by side, the key shows a status instead of tags. Links above the screen are picked in the [link browser](#link-browser).
+- **Clicks.** With `tui.mouse` on, a left click on the label in a plain terminal does the same as typing its tag, instead of any other click action. Either way, while a subagent's transcript is focused, the event goes to that subagent's copy of the extension (the one whose renderers drew it), and the handler's `ctx.ui` is the interactive UI, so call `ctx.ui.rerenderMessage` from the handler's own context. Labels already in terminal scrollback cannot be clicked or tagged in place; pick them in the [link browser](#link-browser).
 - **Untrusted input.** `url` comes from whatever drew the link, not only from your renderer: the model, or tool output it repeats, can write `[Continue](cc-stretch:delete/all)`, and since the URL is hidden the user sees only `Continue`. Validate `url` and treat it like user input: parse it strictly, reject unknown operations, and confirm before anything destructive.
 - **Handler.** A `link_activate` handler runs like a command, without the event-handler timeout, so it may await a dialog (`ctx.ui.confirm`, `ctx.ui.select`, …). A handler that throws is reported as an extension error.
 - **Fallback.** `ctx.ui.getLinkClicksAvailable()` is true only while claimed links can be picked: interactive mode, a plain terminal, `extensionRenderers.assistantText` on, and the hint key bound or `tui.mouse` on. A subagent's copy of the extension gets the same answer, since its links are picked on the same screen. Changing the setting, `tui.mouse` while the hint key is unbound, Tern's native view opening or closing, or suspending or resuming an extension (a live `disabledExtensions` edit) re-runs the assistant text renderers, so a renderer can check it on each call and draw content inline instead of behind a link nobody can pick.
 - **Ownership.** Scheme names are case-insensitive and at least two characters long, so no scheme captures a Windows drive path such as `C:/notes.md`. When two extensions claim one scheme, the first loaded gets its clicks; a suspended extension's schemes are released until it resumes. Web, file and mail schemes (`http`, `https`, `file`, `mailto`, …) and omp's internal URL schemes (`local`, `skill`, `agent`, …) are reserved: claiming one throws and fails the extension's load. Only links omp draws itself are picked: a raw terminal hyperlink of a claimed scheme in tool output stays an ordinary hyperlink.
 - **Tern.** Tern's native view draws such links as its own links and does not route their clicks back to omp; handle them there with a Tern plugin.
+
+### Link browser
+
+The link browser replays the viewed transcript (a focused subagent's too) fullscreen, so claimed links already scrolled into terminal scrollback can be picked as well.
+
+- **Opening.** Press the hint key again, or `Page Up`, while tags are shown, or the hint key with no claimed link on screen. When the transcript draws no claimed link either, it shows a status instead. It opens at the bottom of the transcript; a reply still streaming shows as far as it had come.
+- **Picking.** Links in view are tagged as in hint mode. A link keeps its tag while it stays in view, also when a reply above it is redrawn, and only links scrolling in get new tags. When a new link finds every single letter taken, all links in view are tagged afresh with two letters. Type a tag, or click a label (fullscreen views get clicks even with `tui.mouse` off), to raise `link_activate`.
+- **Keys.** The arrows, `Page Up`/`Page Down`, `Home`/`End` and the wheel scroll, and `Esc` closes. Other keys do nothing.
+- **Redraws.** The browser stays open after a pick, and `ctx.ui.rerenderMessage` redraws its copy of the reply in place, with the rows above it staying put. The main transcript's scrollback is rebuilt once, when the browser closes.
+- **Feedback.** The browser covers the status line, so a handler's `ctx.ui.notify` or status text is only seen once it closes. Show feedback in the redrawn reply, or in `ctx.ui.custom` with `overlay: true`, which draws over the browser and leaves it open.
+- **Long sessions.** Like `/copy`, the browser first replays the recent part of the transcript, and the rest once you scroll to its top, keeping the rows in view where they are; `Home` goes on to the very top.
+- **Closing.** An extension dialog (`ctx.ui.confirm`, `select`, `input`, `editor` or `custom`, or an ask) closes the browser before it shows, so a `link_activate` handler can ask something. Turning `extensionRenderers.assistantText` off, or suspending or resuming an extension, also closes it, since its copy was drawn with the old renderers and links.
 
 ## Tool call/result renderer
 
@@ -1367,7 +1393,7 @@ Provide `renderCall` / `renderResult` on `registerTool` definitions for custom t
 - `tool_call` errors and timeouts block execution (fail-closed). Its budget is `extensionHandlers.toolCallTimeoutMs` (default 30,000 ms), paused during extension UI waits.
 - Most dispatched handlers have a 30-second budget; `session_shutdown` handlers run concurrently with a 2-second budget. Timing out stops waiting and cancels handler UI, but cannot undo arbitrary extension side effects.
 - Command name conflicts with built-ins are skipped with diagnostics.
-- Reserved shortcuts are ignored (`ctrl+c`, `ctrl+d`, `ctrl+z`, `ctrl+k`, `ctrl+p`, `ctrl+l`, `ctrl+o`, `ctrl+t`, `ctrl+g`, `ctrl+q`, `alt+m`, `shift+tab`, `shift+ctrl+p`, `alt+enter`, `escape`, `enter`).
+- Reserved shortcuts are ignored (`ctrl+c`, `ctrl+d`, `ctrl+z`, `ctrl+k`, `ctrl+p`, `ctrl+l`, `ctrl+o`, `ctrl+t`, `ctrl+g`, `ctrl+q`, `alt+m`, `shift+tab`, `shift+ctrl+p`, `alt+enter`, `escape`, `enter`); `getShortcutConflict` reports them as `reserved`.
 - Treat `ctx.reload()` as terminal for the current command handler frame.
 - Module globals are shared by parent/child bindings. Keep session-specific state in the factory closure or persisted session entries.
 

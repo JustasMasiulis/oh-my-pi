@@ -469,7 +469,7 @@ describe("read and write route xd:// device URLs", () => {
 		const rendered = Bun.stripANSI(lines.join("\n"));
 
 		expect(rendered).toContain("Weather");
-		expect(rendered).toContain('query="Tokyo"');
+		expect(rendered).toContain('query: "Tokyo"');
 		expect(rendered).toContain("Tokyo: 22°C");
 	});
 

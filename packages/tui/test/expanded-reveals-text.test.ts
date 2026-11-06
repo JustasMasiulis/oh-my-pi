@@ -130,7 +130,7 @@ describe("expanded tool results reveal clipped rows", () => {
 
 describe("lsp expand hint", () => {
 	const references = (count: number) =>
-		`${count} reference(s)\n${Array.from({ length: count }, (_, i) => `  src/a.ts:${i + 1}:1`).join("\n")}`;
+		`Found ${count} reference(s):\n${Array.from({ length: count }, (_, i) => `  src/a.ts:${i + 1}:1`).join("\n")}`;
 
 	it("lists every reference location once expanded", () => {
 		const text = plain(
@@ -140,7 +140,7 @@ describe("lsp expand hint", () => {
 				theme,
 			),
 		);
-		expect(text).toContain("5:1");
+		expect(text).toContain("└─ 5:1");
 		expect(text).not.toContain("more");
 	});
 
@@ -159,21 +159,17 @@ describe("lsp expand hint", () => {
 	});
 });
 
-describe("expanded lsp tree rows", () => {
+describe("expanded lsp detail rows", () => {
 	it("keep the active preset's tree rail on wrapped continuation rows", async () => {
 		const ascii = await loadTheme("dark", { symbolPresetOverride: "ascii" });
-		const text = [
-			"Symbols in src/a.ts:",
-			"class Alpha @ line 1",
-			`  method ${long} @ line 2`,
-			"  method two @ line 5",
-		].join("\n");
+		const text = `2 error(s)\nsrc/a.ts:3:5 [error] [ts] ${long} (1)\nsrc/b.ts:9:1 [error] [ts] short (2)`;
 		const rows = renderLspResult({ content: [{ type: "text", text }] }, { expanded: true, isPartial: false }, ascii)
 			.render(70)
 			.map(row => Bun.stripANSI(row));
-		const first = rows.findIndex(row => row.includes("method wide-content"));
+		const first = rows.findIndex(row => row.includes("[ts] wide-content"));
 		const last = rows.findIndex(row => row.includes(MARK));
 		expect(last).toBeGreaterThan(first);
-		for (const row of rows.slice(first + 1, last + 1)) expect(row).toStartWith(`  ${ascii.tree.vertical}   `);
+		// The flush card indents its body two columns ahead of the tree rail.
+		for (const row of rows.slice(first, last + 1)) expect(row).toStartWith(`  ${ascii.tree.vertical}  `);
 	});
 });

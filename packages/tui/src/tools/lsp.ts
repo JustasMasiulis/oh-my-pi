@@ -10,19 +10,20 @@
 import type { TspSpan, TspText, TspTone, TspTreeNode } from "@oh-my-pi/pi-wire";
 import type { NativeToolHead, NativeToolView, RenderResultOptions, ToolRenderer, ToolRenderResult } from "./renderer";
 import type { Component } from "../tui";
-import { highlightCode as highlightThemeCode, isHighlightLanguage, type Theme } from "../theme/theme";
+import { getLanguageFromPath } from "../lang-from-path";
+import { highlightCode as highlightThemeCode, isHighlightLanguage, type Theme, type ThemeColor } from "../theme/theme";
 import {
 	cappedRowCount,
+	expandHintLabel,
 	expansionFits,
 	fitsOneRow,
 	formatCodeFrameLine,
 	formatCount,
-	formatErrorText,
 	formatExpandHint,
-	formatMoreRow,
+	formatMoreItems,
 	formatStyledPath,
-	type ParsedDiagnostic,
 	PREVIEW_LIMITS,
+	type ParsedDiagnostic,
 	parseDiagnosticMessage,
 	replaceTabs,
 	sanitizeDiagnosticDisplayText,
@@ -31,17 +32,16 @@ import {
 	type ToolUIStatus,
 	truncateToWidth,
 } from "../render/render-utils";
+import { renderTreeList } from "../render";
 import type { StatusLineOptions } from "../render/status-line";
 import { plainToolCard } from "../render/tool-card";
-import { nestRows } from "../render/utils";
 import { visibleWidth } from "../utils";
 import { ansi, code, col, compact, keyed, md, node, row, span, text } from "../native/describe";
 import type { NativeNode } from "../native/node";
 import { OwnerMemo } from "../native/memo";
 import { plainText } from "../native/spans";
-import { numberedCode, renderCodeFrameRun, walkGroupedOutput } from "./grouped-file-output";
-import { getLanguageFromPath } from "../lang-from-path";
-import { diagnosticGlyph, fileHref, fileRow, inlineErrorView } from "./native-view";
+import { type NumberedLine, numberedCode, renderCodeFrameRun, walkGroupedOutput } from "./grouped-file-output";
+import { diagnosticGlyph, displayPath, fileHref, fileRow, inlineErrorView } from "./native-view";
 import { activeThemeSymbol } from "../theme/active-symbols";
 
 /** Display arguments for an LSP tool request. */
@@ -111,57 +111,62 @@ function sanitizeInlineText(value: string): string {
 	return replaceTabs(value).replaceAll(/\r?\n/g, " ");
 }
 
-/** A short single-line preview of a user-supplied argument. */
-function inlinePreview(value: string): string {
-	return truncateToWidth(sanitizeInlineText(value), TRUNCATE_LENGTHS.SHORT);
-}
-
-/** The header subject: `action target`, e.g. `references src/a.ts:42 (validateToken)`. */
-function lspSubject(args: Partial<LspParams> | undefined): string {
-	const actionLabel = (args?.action ?? "request").replace(/_/g, " ");
-	const queryPreview = args?.query ? inlinePreview(args.query) : undefined;
-	const symbolPreview = args?.symbol ? inlinePreview(args.symbol) : undefined;
+/**
+ * The request half of the LSP status line: `action target` as the description
+ * (`references src/a.ts:42 (validateToken)`) and the call facts as meta.
+ * `fallbackAction` names the action when the request is unknown.
+ */
+function lspRequestStatus(
+	args: Partial<LspParams> | undefined,
+	fallbackAction = "request",
+): { description: string; meta: string[] } {
+	const actionLabel = (args?.action ?? fallbackAction).replace(/_/g, " ");
+	const queryPreview = args?.query ? truncateToWidth(args.query, TRUNCATE_LENGTHS.SHORT) : undefined;
+	const symbolPreview = args?.symbol
+		? truncateToWidth(sanitizeInlineText(args.symbol), TRUNCATE_LENGTHS.SHORT)
+		: undefined;
 
 	let target: string | undefined;
 	if (args?.file) {
 		target = shortenPath(args.file);
-		if (args.line !== undefined) target += `:${args.line}`;
+		if (args.line !== undefined) {
+			target += `:${args.line}`;
+			if (symbolPreview) target += ` (${symbolPreview})`;
+		}
 	} else if (args?.line !== undefined) {
 		target = `line ${args.line}`;
+		if (symbolPreview) target += ` (${symbolPreview})`;
 	}
-	if (target && args?.line !== undefined && symbolPreview) target += ` (${symbolPreview})`;
-	if (!target) target = queryPreview;
 
-	const parts = [actionLabel];
-	if (target) parts.push(target);
-	if (args?.new_name) parts.push("→", sanitizeInlineText(args.new_name));
-	return parts.join(" ");
-}
-
-/** Call facts not already in the subject. */
-function lspCallMeta(args: Partial<LspParams> | undefined): string[] {
 	const meta: string[] = [];
-	if (args?.query && (args.file || args.line !== undefined)) meta.push(`query:${inlinePreview(args.query)}`);
+	if (queryPreview && target) meta.push(`query:${queryPreview}`);
+	if (args?.new_name) meta.push(`new:${args.new_name}`);
 	if (args?.apply !== undefined) meta.push(`apply:${args.apply ? "true" : "false"}`);
-	return meta;
+
+	const subject = target ?? queryPreview;
+	return { description: subject ? `${actionLabel} ${subject}` : actionLabel, meta };
 }
 
-/** The LSP status line: the request subject, its call facts, then any result `meta`. */
+/**
+ * The LSP status line: the request (`fallbackAction` naming the action when the
+ * request is unknown), then any result `meta`.
+ */
 function lspStatus(
 	args: Partial<LspParams> | undefined,
 	icon: ToolUIStatus,
-	options: { spinnerFrame?: number; meta?: string[] } = {},
+	options: { fallbackAction?: string; spinnerFrame?: number; meta?: readonly string[] } = {},
 ): StatusLineOptions {
+	const { description, meta } = lspRequestStatus(args, options.fallbackAction);
 	return {
 		icon,
 		spinnerFrame: options.spinnerFrame,
 		title: "LSP",
-		description: lspSubject(args),
-		meta: [...lspCallMeta(args), ...(options.meta ?? [])],
+		description,
+		meta: [...meta, ...(options.meta ?? [])],
 	};
 }
 
-/** Render the LSP tool call: the status line, pending until the request runs. */
+/** Render the LSP tool call: `LSP: <action> <file:line (symbol)>`, pending until the request runs. */
 export function renderCall(args: LspParams, options: RenderResultOptions, theme: Theme): Component {
 	const icon: ToolUIStatus = options.executionStarted ? "running" : "pending";
 	const status = lspStatus(args, icon, { spinnerFrame: options.spinnerFrame });
@@ -180,52 +185,89 @@ const COLLAPSED_REFERENCE_FILES = 3;
 const COLLAPSED_REFERENCE_LOCATIONS = 2;
 /** Diagnostics shown while collapsed. */
 const COLLAPSED_DIAGNOSTICS = 3;
+/** Top-level symbols shown while collapsed. */
+const COLLAPSED_SYMBOLS = 3;
 /** Output lines shown while a generic response is collapsed. */
 const COLLAPSED_GENERIC_LINES = 4;
-/** Locations shown while a definition, type definition or implementation result is collapsed. */
-const COLLAPSED_LOCATIONS = 2;
 
 /**
- * Body rows for one expansion state. Rows are unclipped; collapsed rows are
- * clipped to the width afterwards. `more` is the trailing `… N more <items>`
- * row (with its expand hint); `markerLast` says the last row is already a
- * hinted (nested) truncation marker.
+ * Whether a line is one of the LSP tool's per-file status rows (`<glyph> <path>: …`).
+ * Only a row's start counts: response text such as source or hover content can hold
+ * the same characters (ASCII `[-]`).
  */
-interface LspRows {
+function isStatusRow(line: string, glyph: string): boolean {
+	return line.startsWith(`${glyph} `);
+}
+
+/**
+ * Whether a result holds a status row drawn with `glyph`. Only the diagnostics action
+ * writes status rows; any other action's text is the server's (a `request` response
+ * verbatim), so a glyph there is content even at a line start. A result whose action
+ * is unknown keeps the inference.
+ */
+function hasStatusRow(action: string | undefined, lines: readonly string[], glyph: string): boolean {
+	if (action !== undefined && action !== "diagnostics") return false;
+	return lines.some(line => isStatusRow(line, glyph));
+}
+
+/**
+ * Body rows for one expansion state. Collapsed rows are clipped to the width
+ * afterwards; `hidden` says the rows hold something back, and `markerLast`
+ * that the last row is a `… N more` marker already carrying the expand hint.
+ */
+interface LspBodyRows {
 	rows: string[];
-	more?: string;
+	hidden: boolean;
 	markerLast?: boolean;
 }
 
-/** A parsed LSP response: the header outcome and meta, and the body rows per expansion. */
+/** A parsed LSP response: the header outcome and counts, and the body rows per expansion state. */
 interface LspResultView {
-	icon: "success" | "warning";
+	/** The action the response answers (`references`, `type definition`); names the header when the request is unknown. */
+	action: string;
+	/** The header's status; `success` shows the LSP icon. */
+	icon: "success" | "warning" | "error";
+	/** Counts appended to the header after the request facts. */
 	meta: string[];
+	/** Rows wrap while collapsed too (hover code) instead of clipping to one row each. */
+	wrapCollapsed?: boolean;
 	/** `width` is the width each row draws in. */
-	rows(expanded: boolean, width: number): LspRows;
+	rows(expanded: boolean, width: number): LspBodyRows;
+}
+
+/** Columns a tree list's branch connector takes, with the space after it. */
+function treePrefixWidth(theme: Theme): number {
+	return Math.max(visibleWidth(theme.tree.branch), visibleWidth(theme.tree.last)) + 1;
+}
+
+/** A tree list's `… N more <items>` marker; `hinted` appends the expand hint (the body's last row only). */
+function moreSummary(remaining: number, itemType: string, theme: Theme, hinted: boolean): string {
+	const more = formatMoreItems(remaining, itemType);
+	return hinted ? `${more} ${expandHintLabel(theme)}` : more;
 }
 
 /**
  * Lay out a view's rows: expanded rows stay whole (the flush card wraps them
- * under their tree guides); collapsed rows clip to one line each, and the
- * expand hint closes the body whenever the collapsed view hides anything (a
- * truncation marker or a clipped row). A collapsed view whose expansion draws
- * in no more rows, its markers and hint included, renders expanded instead.
+ * under their tree guides); collapsed rows clip to one row each, and the expand
+ * hint closes the body whenever the collapsed view hides rows or clips one. A
+ * collapsed view whose expansion draws in no more rows, its markers and hint
+ * included, renders expanded instead.
  */
-function layoutRows(view: LspResultView, expanded: boolean, width: number, theme: Theme): string[] {
+function layoutBody(view: LspResultView, expanded: boolean, width: number, theme: Theme): string[] {
 	if (expanded) return view.rows(true, width).rows;
-	const { rows, more, markerLast } = view.rows(false, width);
-	const clipped = rows.some(row => visibleWidth(row) > width);
-	const fitted = rows.map(row => truncateToWidth(row, width));
-	if (more) fitted.push(more);
-	else if (clipped && !markerLast) fitted.push(formatExpandHint(theme));
+	const { rows, hidden, markerLast } = view.rows(false, width);
+	const fitted = view.wrapCollapsed ? rows : rows.map(row => truncateToWidth(row, width));
+	const clipped = fitted.some((row, index) => row !== rows[index]);
+	if (!hidden && !clipped) return fitted;
+	if (!markerLast) fitted.push(formatExpandHint(theme));
 	const full = view.rows(true, width).rows;
 	return expansionFits(fitted, full, width, theme) ? full : fitted;
 }
 
 /**
- * Render LSP tool result as a flush card: the status line (outcome and counts)
- * over the result list. Detects hover, diagnostics, references and symbols.
+ * Render an LSP result flush: one status line carrying the request and the
+ * result counts, over the result rows. Detects locations, hover, diagnostics,
+ * references and symbols; anything else is listed line by line.
  */
 export function renderResult(
 	result: { content: Array<{ type: string; text?: string }>; details?: LspToolDetails; isError?: boolean },
@@ -233,78 +275,89 @@ export function renderResult(
 	theme: Theme,
 	args?: LspParams,
 ): Component {
-	const fallbackAction = (result.details?.action ?? "request") as LspParams["action"];
-	const request = args ?? result.details?.request ?? { action: fallbackAction };
+	const request = args ?? result.details?.request;
 	const content = result.content?.[0];
 	const text = content?.type === "text" ? (content.text ?? "") : "";
+	const fallbackAction = result.details?.action;
 
 	if (result.isError) {
-		const lines = (text.trim() || "LSP request failed")
-			.split("\n")
-			.filter(line => line.trim().length > 0)
-			.map(line => formatErrorText(line, theme));
-		const status = lspStatus(request, "error");
-		return plainToolCard(theme, () => ({ status, phase: "error", body: lines }));
+		const status = lspStatus(request, "error", { fallbackAction });
+		const messageLines = (text.trim() || "LSP request failed").split("\n").filter(line => line.trim().length > 0);
+		// The message hangs under the title, like a Grep or AST Grep error's, and wraps in full.
+		const body = messageLines.map(line => theme.fg("error", replaceTabs(line)));
+		return plainToolCard(theme, () => ({ status, phase: "error", body }));
 	}
 	if (!text) {
-		const status = lspStatus(request, "warning", { meta: ["no result"] });
+		const status = lspStatus(request, "warning", { fallbackAction, meta: ["No result"] });
 		return plainToolCard(theme, () => ({ status, phase: "warning" }));
 	}
 
-	const view = parseLspResult(text, result.details?.action ?? request.action, theme);
-	// The rows depend only on the (immutable) text, theme, width and `expanded`.
-	const cache: Array<{ width: number; rows: string[] } | undefined> = [undefined, undefined];
+	const view = parseLspResult(text, request, fallbackAction, theme);
+	// The body depends only on the (immutable) text, theme, width and `expanded`;
+	// lay it out once per expanded state instead of on every spinner frame.
+	const layouts: Array<{ width: number; rows: string[] } | undefined> = [undefined, undefined];
 	return plainToolCard(theme, ({ contentWidth }) => {
+		// Read mutable state at render time
 		const { expanded, isPartial, spinnerFrame } = options;
 		const slot = expanded ? 1 : 0;
-		let cached = cache[slot];
-		if (!cached || cached.width !== contentWidth) {
-			cached = { width: contentWidth, rows: layoutRows(view, expanded, contentWidth, theme) };
-			cache[slot] = cached;
+		let layout = layouts[slot];
+		if (!layout || layout.width !== contentWidth) {
+			layout = { width: contentWidth, rows: layoutBody(view, expanded, contentWidth, theme) };
+			layouts[slot] = layout;
 		}
-		const icon: ToolUIStatus = isPartial ? "running" : view.icon;
+		const status = lspStatus(request, isPartial ? "running" : view.icon, {
+			fallbackAction: fallbackAction ?? view.action,
+			spinnerFrame,
+			meta: view.meta,
+		});
+		if (!isPartial && view.icon === "success") status.iconOverride = theme.styledSymbol("tool.lsp", "accent");
 		return {
-			status: lspStatus(request, icon, { spinnerFrame, meta: view.meta }),
+			status,
 			phase: isPartial ? "partial" : view.icon,
-			body: cached.rows,
+			body: layout.rows.length > 0 ? layout.rows : undefined,
 		};
 	});
 }
 
 /** Detect the response kind and build its view. */
-function parseLspResult(text: string, action: string, theme: Theme): LspResultView {
+function parseLspResult(
+	text: string,
+	request: Partial<LspParams> | undefined,
+	detailsAction: string | undefined,
+	theme: Theme,
+): LspResultView {
 	const lines = text.split("\n");
-	// Anchored at the response's first line, so it runs before the checks a source snippet could trip.
+	const action = request?.action ?? detailsAction;
+	// Locations and references are anchored at the response's first line, so they win over
+	// hover and diagnostics checks that their source context could trip.
 	const locations = parseLspLocations(lines);
+	if (locations?.noun === "reference") return referencesView(locations, theme);
 	if (locations) return locationsView(locations, theme);
+
+	// A diagnostics request answers with diagnostics whatever its rows hold: `OK`, a partial
+	// server failure, a summary. Without a known action, the rows themselves decide.
+	if (action === "diagnostics") return diagnosticsView(lines, theme);
 
 	const codeBlockMatch = text.match(/```(\w*)\n([\s\S]*?)```/);
 	if (codeBlockMatch) return hoverView(codeBlockMatch, text, theme);
 
-	const errorMatch = text.match(/(\d+)\s+error\(s\)/);
-	const warningMatch = text.match(/(\d+)\s+warning\(s\)/);
-	const unreportedCount = lines.filter(line => UNREPORTED_LINE_RE.test(line)).length;
-	if (errorMatch || warningMatch || text.includes(theme.status.error) || unreportedCount > 0) {
-		return diagnosticsView(errorMatch, warningMatch, lines, theme);
+	const summarized = /\d+\s+(?:error|warning)\(s\)/.test(text);
+	const unreported = lines.some(line => UNREPORTED_LINE_RE.test(line));
+	if (summarized || hasStatusRow(action, lines, theme.status.error) || unreported) {
+		return diagnosticsView(lines, theme);
 	}
 
-	const refMatch = text.match(/(\d+)\s+reference\(s\)/);
-	if (refMatch) return referencesView(Number.parseInt(refMatch[1], 10), lines, theme);
+	const symbolsMatch = text.match(/Symbols in (.+):/);
+	if (symbolsMatch) return symbolsView(symbolsMatch[1], request?.file === undefined, lines, theme);
 
-	const symbolsMatch = /Symbols in (.+):/.exec(text);
-	if (symbolsMatch) return symbolsView(lines, getLanguageFromPath(symbolsMatch[1]), theme);
-
-	if (action === "diagnostics" && text.trim() === "OK") {
-		return { icon: "success", meta: ["no issues"], rows: () => ({ rows: [] }) };
-	}
-	return genericView(text, lines, theme);
+	return genericView(text, lines, action, theme);
 }
 
 // =============================================================================
 // Hover Rendering
 // =============================================================================
 
-/** Hover: the highlighted signature, framed by any surrounding documentation. */
+/** Hover: the highlighted signature between any documentation around it; collapsed, its first line. */
 function hoverView(codeBlockMatch: RegExpMatchArray, fullText: string, theme: Theme): LspResultView {
 	const lang = codeBlockMatch[1] || "";
 	const codeStart = codeBlockMatch.index ?? 0;
@@ -312,23 +365,23 @@ function hoverView(codeBlockMatch: RegExpMatchArray, fullText: string, theme: Th
 	const afterCode = fullText.slice(codeStart + codeBlockMatch[0].length).trim();
 	const codeLines = highlightThemeCode(codeBlockMatch[2].trim(), lang, theme);
 	const docLines = (doc: string) => (doc ? doc.split("\n").map(line => theme.fg("muted", replaceTabs(line))) : []);
+	const full = [...docLines(beforeCode), ...codeLines, ...docLines(afterCode)];
+	const first = codeLines[0] ?? full[0] ?? "";
+	const hiddenLines = full.length - 1;
 
 	return {
+		action: "hover",
 		icon: "success",
 		meta: [],
+		wrapCollapsed: true,
 		rows(expanded, width) {
-			const before = docLines(beforeCode);
-			const after = docLines(afterCode);
-			const full = [...before, ...codeLines, ...after];
-			if (expanded || full.length <= 1) return { rows: full };
+			if (expanded || hiddenLines <= 0) return { rows: full, hidden: false };
 			// A single hidden line that draws as one row renders in place of its own `… 1 more line` row.
-			const loneRow = before.length > 0 ? full[0] : full[1];
-			if (full.length === 2 && fitsOneRow(loneRow, width)) return { rows: full };
-			const hidden = full.length - 1;
-			return {
-				rows: [codeLines[0] ?? ""],
-				more: hidden > 0 ? formatMoreRow(hidden, "line", theme) : undefined,
-			};
+			if (hiddenLines === 1 && fitsOneRow(full[0] === first ? full[1] : full[0], width)) {
+				return { rows: full, hidden: false };
+			}
+			const more = `${theme.fg("muted", formatMoreItems(hiddenLines, "line"))} ${formatExpandHint(theme)}`;
+			return { rows: [first, more], hidden: true, markerLast: true };
 		},
 	};
 }
@@ -337,8 +390,10 @@ function hoverView(codeBlockMatch: RegExpMatchArray, fullText: string, theme: Th
 // Diagnostics Rendering
 // =============================================================================
 
+/** A status or unparsed line of a diagnostics response, shown verbatim in `color`. */
 interface RawDiagnostic {
 	raw: string;
+	color: ThemeColor;
 }
 
 type DiagnosticItem = ParsedDiagnostic | RawDiagnostic;
@@ -362,136 +417,94 @@ function severityToColor(severity: ParsedDiagnostic["severity"]): "error" | "war
 	}
 }
 
-/** Diagnostics as flush rows: `file:line:col [severity] message`, unverified files first. */
-function diagnosticsView(
-	errorMatch: RegExpMatchArray | null,
-	warningMatch: RegExpMatchArray | null,
-	lines: string[],
-	theme: Theme,
-): LspResultView {
-	const errorCount = errorMatch ? Number.parseInt(errorMatch[1], 10) : 0;
-	const warnCount = warningMatch ? Number.parseInt(warningMatch[1], 10) : 0;
-	const unreportedLines = lines.filter(line => UNREPORTED_LINE_RE.test(line));
+/** A diagnostic's location: the muted file-type icon, the styled path and the muted `:line:col`. */
+function formatDiagnosticLocation(file: string, line: number, col: number, theme: Theme): string {
+	const lang = getLanguageFromPath(file);
+	const icon = theme.fg("muted", theme.getLangIcon(lang));
+	return `${icon} ${formatStyledPath(file, theme)}${theme.fg("muted", `:${line}:${col}`)}`;
+}
+
+/** The `[severity]` tag in its severity's color: the path no longer carries it. */
+function formatSeverityTag(severity: ParsedDiagnostic["severity"], theme: Theme): string {
+	return theme.fg(severityToColor(severity), `[${severity}]`);
+}
+
+/**
+ * Diagnostics: the counts in the header, then one branch per row. Server failures
+ * and unverified files lead, since a reader must not miss them among diagnostics
+ * (`file:line:col [severity] message`); partial-failure warnings and unparsed
+ * lines follow. Expanded, a diagnostic's message moves to its own row beneath
+ * the location.
+ */
+function diagnosticsView(lines: string[], theme: Theme): LspResultView {
+	const parsed = parseLspDiagnostics(lines);
+	// Counted from the rows, not the tool's summary lines: a multi-file response carries one
+	// summary per file, and the native view counts the same rows.
+	const counts: Record<ParsedDiagnostic["severity"], number> = { error: 0, warning: 0, info: 0, hint: 0 };
+	for (const diagnostic of parsed.diagnostics) counts[diagnostic.severity]++;
 
 	const meta: string[] = [];
-	if (errorCount > 0) meta.push(formatCount("error", errorCount));
-	if (warnCount > 0) meta.push(formatCount("warning", warnCount));
-	if (unreportedLines.length > 0) meta.push(formatCount("unverified file", unreportedLines.length));
-	if (meta.length === 0) meta.push("no issues");
+	for (const severity of ["error", "warning", "info", "hint"] as const) {
+		if (counts[severity] > 0) meta.push(formatCount(severity, counts[severity]));
+	}
+	if (parsed.failures.length > 0) meta.push(formatCount("server failure", parsed.failures.length));
+	if (parsed.unreported.length > 0) meta.push(formatCount("unverified file", parsed.unreported.length));
 
-	const diagLines = lines.filter(l => l.includes(theme.status.error) || /:\d+:\d+/.test(l));
-	const parsedDiagnostics = diagLines
-		.map(line => parseDiagnosticMessage(line.trim()))
-		.filter((diag): diag is ParsedDiagnostic => diag !== null);
-	// Unverified files lead: they are the rows a reader must not miss among diagnostics.
+	const raw = (color: ThemeColor) => (line: string) => ({ raw: sanitizeDiagnosticDisplayText(line), color });
 	const items: DiagnosticItem[] = [
-		...unreportedLines.map(line => ({ raw: sanitizeDiagnosticDisplayText(line.trim()) })),
-		...(parsedDiagnostics.length > 0
-			? parsedDiagnostics
-			: diagLines.map(line => ({ raw: sanitizeDiagnosticDisplayText(line.trim()) }))),
+		...parsed.failures.map(raw("error")),
+		...parsed.unreported.map(raw("warning")),
+		...parsed.diagnostics,
+		...parsed.warnings.map(raw("warning")),
+		...parsed.other.map(raw("muted")),
 	];
-
-	const renderItem = (item: DiagnosticItem): string => {
-		if ("raw" in item) return theme.fg("warning", item.raw);
-		const location = `${formatStyledPath(item.filePath, theme)}${theme.fg("muted", `:${item.line}:${item.col}`)}`;
-		const head = `${location} ${theme.fg(severityToColor(item.severity), `[${item.severity}]`)}`;
-		const message = formatDiagnosticMessage(item);
-		return message ? `${head} ${theme.fg("muted", message)}` : head;
-	};
+	// Only a response with nothing to count and nothing to show claims a clean file.
+	if (meta.length === 0 && items.length === 0) meta.push("No issues");
 
 	return {
-		// Unverified files are a partial delivery; diagnostics themselves are the result.
-		icon: unreportedLines.length > 0 ? "warning" : "success",
+		action: "diagnostics",
+		// Errors and failed servers are an error state; warnings, unverified files and partial
+		// server failures a warning one, like the native view's tone.
+		icon:
+			counts.error > 0 || parsed.failures.length > 0
+				? "error"
+				: counts.warning > 0 || parsed.unreported.length > 0 || parsed.warnings.length > 0
+					? "warning"
+					: "success",
 		meta,
 		rows(expanded, width) {
-			const shown = expanded
-				? items
-				: items.slice(
-						0,
-						cappedRowCount(items.length, COLLAPSED_DIAGNOSTICS, width, () =>
-							renderItem(items[COLLAPSED_DIAGNOSTICS]),
-						),
-					);
-			const remaining = items.length - shown.length;
-			return {
-				rows: shown.map(renderItem),
-				more: remaining > 0 ? formatMoreRow(remaining, "diagnostic", theme) : undefined,
+			const renderItem = (item: DiagnosticItem): string | string[] => {
+				if ("raw" in item) return theme.fg(item.color, item.raw);
+				const location = formatDiagnosticLocation(item.filePath, item.line, item.col, theme);
+				const head = `${location} ${formatSeverityTag(item.severity, theme)}`;
+				const message = formatDiagnosticMessage(item);
+				if (!message) return head;
+				return expanded ? [head, theme.fg("muted", message)] : `${head} ${theme.fg("muted", message)}`;
 			};
-		},
-	};
-}
-
-// =============================================================================
-// References Rendering
-// =============================================================================
-
-/** `file:line:col` response lines grouped by file, in first-seen order, as `line:col` locations. */
-function groupReferencesByFile(lines: readonly string[]): Map<string, string[]> {
-	const byFile = new Map<string, string[]>();
-	for (const loc of lines) {
-		const match = loc.trim().match(/^(.+):(\d+):(\d+)$/);
-		if (!match) continue;
-		const [, file, line, col] = match;
-		let locs = byFile.get(file);
-		if (!locs) {
-			locs = [];
-			byFile.set(file, locs);
-		}
-		locs.push(`${line}:${col}`);
-	}
-	return byFile;
-}
-
-/** References grouped by file: `file (N)` rows with their `line:col` locations as children. */
-function referencesView(refCount: number, lines: string[], theme: Theme): LspResultView {
-	const byFile = groupReferencesByFile(lines);
-	const files = Array.from(byFile.keys());
-
-	return {
-		icon: refCount > 0 ? "success" : "warning",
-		meta:
-			files.length > 0
-				? [formatCount("reference", refCount), formatCount("file", files.length)]
-				: [formatCount("reference", refCount)],
-		rows(expanded, width) {
-			const maxLocs = expanded ? Number.POSITIVE_INFINITY : COLLAPSED_REFERENCE_LOCATIONS;
-			// A file group spans its header and locations: a lone hidden one keeps its `… 1 more file` row.
-			const shownFiles = files.slice(0, expanded ? files.length : COLLAPSED_REFERENCE_FILES);
-			const hiddenFiles = files.length - shownFiles.length;
-			const rows: string[] = [];
-			let markerLast = false;
-			shownFiles.forEach((file, fileIndex) => {
-				const locs = byFile.get(file)!;
-				rows.push(`${formatStyledPath(replaceTabs(file), theme)} ${theme.fg("dim", `(${locs.length})`)}`);
-				const locCount = cappedRowCount(
-					locs.length,
-					maxLocs,
+			if (expanded) return { rows: renderTreeList({ items, expanded, width, renderItem }, theme), hidden: false };
+			const shown = cappedRowCount(items.length, COLLAPSED_DIAGNOSTICS, width - treePrefixWidth(theme), () =>
+				[renderItem(items[COLLAPSED_DIAGNOSTICS])].flat().join("\n"),
+			);
+			const hidden = items.length - shown;
+			const rows = renderTreeList(
+				{
+					items: items.slice(0, shown),
 					width,
-					() => nestRows([theme.fg("muted", locs[COLLAPSED_REFERENCE_LOCATIONS])], theme)[0],
-				);
-				const children = locs.slice(0, locCount).map(loc => theme.fg("muted", loc));
-				const hiddenLocs = locs.length - children.length;
-				// Only the body's final row carries the expand hint.
-				markerLast = hiddenLocs > 0 && fileIndex === shownFiles.length - 1 && hiddenFiles === 0;
-				if (hiddenLocs > 0) {
-					children.push(formatMoreRow(hiddenLocs, "location", theme, { expanded: !markerLast }));
-				}
-				rows.push(...nestRows(children, theme));
-			});
-			return {
-				rows,
-				more: hiddenFiles > 0 ? formatMoreRow(hiddenFiles, "file", theme) : undefined,
-				markerLast,
-			};
+					trailingSummary: hidden > 0 ? moreSummary(hidden, "diagnostic", theme, true) : "",
+					renderItem,
+				},
+				theme,
+			);
+			return { rows, hidden: hidden > 0, markerLast: hidden > 0 };
 		},
 	};
 }
 
 // =============================================================================
-// Locations Rendering
+// Locations
 // =============================================================================
 
-/** One location of a definition-style response, with its numbered source context. */
+/** One location of a definition-style or references response, with its numbered source context. */
 interface LspLocation {
 	file: string;
 	line: number;
@@ -500,77 +513,212 @@ interface LspLocation {
 	context: { n: number; text: string; mark: boolean }[];
 }
 
-/** A definition, type definition or implementation response. */
+/**
+ * `  file:line:col`, the path from column 2 on (it may itself start with whitespace). Context rows are
+ * `    N: source`; a row matching both is context of the current location.
+ */
+const LOCATION_RE = /^ {2}(.+):(\d+):(\d+)$/;
+const LOCATION_CONTEXT_RE = /^ {4}(\d+): ?(.*)$/;
+
+/** The `  file:line:col` rows of a locations or references response, each with the `    N: source` lines after it. */
+function parseLocationRows(lines: readonly string[]): LspLocation[] {
+	const locations: LspLocation[] = [];
+	for (const line of lines) {
+		const current = locations.at(-1);
+		const context = current ? LOCATION_CONTEXT_RE.exec(line) : null;
+		if (current && context) {
+			const n = Number(context[1]);
+			current.context.push({ n, text: context[2].trimEnd(), mark: n === current.line });
+			continue;
+		}
+		const location = LOCATION_RE.exec(line);
+		if (location) {
+			const [, file, lineNumber, column] = location;
+			locations.push({ file, line: Number(lineNumber), col: Number(column), context: [] });
+		}
+	}
+	return locations;
+}
+
+/** A definition, type definition, implementation or references response. */
 interface LspLocations {
-	/** `definition`, `type definition` or `implementation`. */
+	/** `definition`, `type definition`, `implementation` or `reference`. */
 	noun: string;
 	count: number;
 	locations: LspLocation[];
 }
 
-const LOCATIONS_HEADER_RE = /^Found (\d+) (definition|type definition|implementation)\(s\):$/;
-/** `  file:line:col`; context rows indent further, so the path starts at column 2. */
-const LOCATION_RE = /^ {2}(\S.*):(\d+):(\d+)$/;
-const LOCATION_CONTEXT_RE = /^ {4}(\d+): ?(.*)$/;
+const LOCATIONS_HEADER_RE = /^Found (\d+) (definition|type definition|implementation|reference)\(s\):$/;
 
 /**
- * Parse a `Found N definition(s):` response (also type definitions and
- * implementations): `  file:line:col` rows, each followed by its
- * `    N: source` context lines.
+ * Parse a `Found N definition(s):` response (also type definitions,
+ * implementations and references): `  file:line:col` rows, each followed by
+ * its `    N: source` context lines.
  */
 function parseLspLocations(lines: readonly string[]): LspLocations | undefined {
 	const header = LOCATIONS_HEADER_RE.exec(lines[0] ?? "");
 	if (!header) return undefined;
-	const locations: LspLocation[] = [];
-	for (const line of lines.slice(1)) {
-		const location = LOCATION_RE.exec(line);
-		if (location) {
-			const [, file, lineNumber, col] = location;
-			locations.push({ file, line: Number(lineNumber), col: Number(col), context: [] });
-			continue;
-		}
-		const context = LOCATION_CONTEXT_RE.exec(line);
-		const current = locations.at(-1);
-		if (!context || !current) continue;
-		const n = Number(context[1]);
-		current.context.push({ n, text: context[2].trimEnd(), mark: n === current.line });
+	return { noun: header[2], count: Number(header[1]), locations: parseLocationRows(lines.slice(1)) };
+}
+
+/** One source line in its file's language, or in `fallback` when the highlighter doesn't know the language. */
+function highlightSourceLine(source: string, lang: string | undefined, fallback: ThemeColor, theme: Theme): string {
+	const plain = replaceTabs(source);
+	if (!isHighlightLanguage(lang)) return theme.fg(fallback, plain);
+	return highlightThemeCode(plain, lang, theme)[0] ?? plain;
+}
+
+// =============================================================================
+// References Rendering
+// =============================================================================
+
+/** Reference locations grouped by file, in first-seen order. */
+function groupReferencesByFile(references: readonly LspLocation[]): Map<string, LspLocation[]> {
+	const byFile = new Map<string, LspLocation[]>();
+	for (const location of references) {
+		const locations = byFile.get(location.file);
+		if (locations) locations.push(location);
+		else byFile.set(location.file, [location]);
 	}
-	return { noun: header[2], count: Number(header[1]), locations };
+	return byFile;
 }
 
-/** A location's `file:line:col` row over its source context, framed like a grep match and highlighted in its language. */
-function locationRows(location: LspLocation, theme: Theme): string[] {
-	const head = `${formatStyledPath(replaceTabs(location.file), theme)}${theme.fg("muted", `:${location.line}:${location.col}`)}`;
-	const numberWidth = location.context.reduce((width, line) => Math.max(width, String(line.n).length), 0);
-	const frame = renderCodeFrameRun(
-		location.context.map(line => ({
-			gutter: formatCodeFrameLine(line.mark ? "*" : "", line.n, "", numberWidth),
-			source: line.text,
-		})),
-		getLanguageFromPath(location.file),
-		"toolOutput",
-		theme,
-	);
-	return [head, ...frame];
+function formatPosition(location: LspLocation): string {
+	return `${location.line}:${location.col}`;
 }
 
-/** Definitions, type definitions and implementations: each location with its source context. */
+/**
+ * One reference: its `line:col` right-aligned to `positionWidth` and a rule, then its
+ * source line in the file's language. References past the tool's context limit arrive
+ * without source and show the position alone.
+ */
+function referenceRow(location: LspLocation, positionWidth: number, lang: string | undefined, theme: Theme): string {
+	const position = formatPosition(location).padStart(positionWidth);
+	const source = location.context.find(line => line.mark)?.text.trim();
+	if (!source) return theme.fg("muted", position);
+	return `${theme.fg("muted", `${position}│`)} ${highlightSourceLine(source, lang, "toolOutput", theme)}`;
+}
+
+/**
+ * References: the counts in the header, then one branch per file (`file (N)`) over its
+ * locations, each previewing its source line. All positions share one width, so the
+ * rules line up across files and stay put when the view expands.
+ */
+function referencesView(parsed: LspLocations, theme: Theme): LspResultView {
+	const refCount = parsed.count;
+	const byFile = groupReferencesByFile(parsed.locations);
+	const files = Array.from(byFile.keys());
+	const meta = [formatCount("reference", refCount)];
+	if (files.length > 0) meta.push(formatCount("file", files.length));
+	const lastFile = files.at(-1);
+	let positionWidth = 0;
+	for (const locations of byFile.values()) {
+		for (const location of locations) positionWidth = Math.max(positionWidth, formatPosition(location).length);
+	}
+
+	return {
+		action: "references",
+		icon: refCount > 0 ? "success" : "warning",
+		meta,
+		rows(expanded, width) {
+			// A file group spans its header and locations: a lone hidden one keeps its `… 1 more file` row.
+			const shownFiles = expanded ? files : files.slice(0, COLLAPSED_REFERENCE_FILES);
+			const hiddenFiles = files.length - shownFiles.length;
+			const groupWidth = width - treePrefixWidth(theme);
+			let hidden = hiddenFiles > 0;
+			let markerLast = hiddenFiles > 0;
+			const groups = shownFiles.map(file => {
+				const locations = byFile.get(file)!;
+				const lang = getLanguageFromPath(file);
+				const shown = expanded
+					? locations.length
+					: cappedRowCount(
+							locations.length,
+							COLLAPSED_REFERENCE_LOCATIONS,
+							groupWidth - treePrefixWidth(theme),
+							() => referenceRow(locations[COLLAPSED_REFERENCE_LOCATIONS], positionWidth, lang, theme),
+						);
+				const hiddenLocations = locations.length - shown;
+				// Only the body's final row carries the expand hint.
+				const last = file === lastFile && hiddenFiles === 0;
+				if (hiddenLocations > 0) {
+					hidden = true;
+					if (last) markerLast = true;
+				}
+				const header = `${formatStyledPath(replaceTabs(shortenPath(file)), theme)} ${theme.fg("dim", `(${locations.length})`)}`;
+				const locationRows = renderTreeList(
+					{
+						items: locations.slice(0, shown),
+						width: groupWidth,
+						trailingSummary: hiddenLocations > 0 ? moreSummary(hiddenLocations, "location", theme, last) : "",
+						renderItem: location => referenceRow(location, positionWidth, lang, theme),
+					},
+					theme,
+				);
+				return [header, ...locationRows];
+			});
+			const rows = renderTreeList(
+				{
+					items: groups,
+					expanded,
+					width,
+					trailingSummary: hiddenFiles > 0 ? moreSummary(hiddenFiles, "file", theme, true) : "",
+					renderItem: group => group,
+				},
+				theme,
+			);
+			return { rows, hidden, markerLast };
+		},
+	};
+}
+
+// =============================================================================
+// Locations Rendering
+// =============================================================================
+
+/**
+ * Definitions, type definitions and implementations: the count in the header,
+ * then one branch per `file:line:col` over its source context, the location's
+ * line marked like a grep match.
+ */
 function locationsView(parsed: LspLocations, theme: Theme): LspResultView {
 	const { noun, count, locations } = parsed;
+	const locationRows = (location: LspLocation): string[] => {
+		const position = theme.fg("muted", `:${location.line}:${location.col}`);
+		const file = formatStyledPath(replaceTabs(shortenPath(location.file)), theme);
+		const numberWidth = location.context.reduce((width, line) => Math.max(width, String(line.n).length), 0);
+		const frame = renderCodeFrameRun(
+			location.context.map(line => ({
+				gutter: formatCodeFrameLine(line.mark ? "*" : "", line.n, "", numberWidth),
+				source: line.text,
+			})),
+			getLanguageFromPath(location.file),
+			"toolOutput",
+			theme,
+		);
+		return [`${file}${position}`, ...frame];
+	};
 	return {
+		action: noun,
 		icon: count > 0 ? "success" : "warning",
 		meta: [formatCount(noun, count)],
 		rows(expanded, width) {
 			const shown = expanded
 				? locations.length
-				: cappedRowCount(locations.length, COLLAPSED_LOCATIONS, width, () =>
-						locationRows(locations[COLLAPSED_LOCATIONS], theme).join("\n"),
+				: cappedRowCount(locations.length, PREVIEW_LIMITS.LOCATIONS_COLLAPSED, width - treePrefixWidth(theme), () =>
+						locationRows(locations[PREVIEW_LIMITS.LOCATIONS_COLLAPSED]).join("\n"),
 					);
 			const hidden = locations.length - shown;
-			return {
-				rows: locations.slice(0, shown).flatMap(location => locationRows(location, theme)),
-				more: hidden > 0 ? formatMoreRow(hidden, noun, theme) : undefined,
-			};
+			const rows = renderTreeList(
+				{
+					items: locations.slice(0, shown),
+					width,
+					trailingSummary: hidden > 0 ? moreSummary(hidden, noun, theme, true) : "",
+					renderItem: locationRows,
+				},
+				theme,
+			);
+			return { rows, hidden: hidden > 0, markerLast: hidden > 0 };
 		},
 	};
 }
@@ -599,14 +747,17 @@ function parseSymbols(lines: readonly string[]): SymbolInfo[] {
 	return symbols;
 }
 
-/** Document symbols: top-level symbols flush, nested symbols as tree children, names highlighted in `lang`. */
-function symbolsView(lines: string[], lang: string | undefined, theme: Theme): LspResultView {
+/**
+ * Document symbols: the count in the header (and the file, when the request
+ * does not name it), then a tree of symbols. Collapsed, the first top-level
+ * symbols; expanded, every symbol with its line beneath it.
+ */
+function symbolsView(fileName: string, showFile: boolean, lines: string[], theme: Theme): LspResultView {
 	const symbols = parseSymbols(lines);
-	const topLevelIndent = symbols.reduce((min, sym) => Math.min(min, sym.indent), Number.POSITIVE_INFINITY);
 
 	// One linear pass each: `isLast[i]` — the next symbol at indent <= mine is
 	// not a sibling (monotonic stack, right to left); `prefixes[i]` — per
-	// nesting level below the top, the nearest ancestor decides the rail.
+	// ancestor level, the nearest earlier symbol at that indent decides the rail.
 	const isLast = Array.from({ length: symbols.length }, () => false);
 	const pending: number[] = [];
 	for (let i = symbols.length - 1; i >= 0; i--) {
@@ -621,44 +772,60 @@ function symbolsView(lines: string[], lang: string | undefined, theme: Theme): L
 	for (let i = 0; i < symbols.length; i++) {
 		const myIndent = symbols[i].indent;
 		let prefix = "";
-		if (myIndent > topLevelIndent) {
-			// Ancestor rails for levels strictly between the top level and my parent.
-			for (let level = topLevelIndent + 2; level < myIndent; level += 2) {
-				const ancestorIdx = lastAtIndent.get(level);
-				prefix += ancestorIdx !== undefined && isLast[ancestorIdx] ? "   " : `${theme.tree.vertical}  `;
-			}
-			prefix = `${theme.fg("dim", prefix)}${theme.fg("dim", isLast[i] ? theme.tree.last : theme.tree.branch)} `;
+		for (let level = 2; level <= myIndent; level += 2) {
+			const ancestorIdx = lastAtIndent.get(level - 2);
+			prefix += ancestorIdx !== undefined && isLast[ancestorIdx] ? "   " : `${theme.tree.vertical}  `;
 		}
-		prefixes.push(prefix);
+		prefixes.push(theme.fg("dim", prefix));
 		lastAtIndent.set(myIndent, i);
 	}
-	// The glyph keeps the accent; the name and signature read as code in the file's language.
-	const symbolName = (name: string): string => {
-		const plain = replaceTabs(name);
-		if (!isHighlightLanguage(lang)) return theme.fg("toolOutput", plain);
-		return highlightThemeCode(plain, lang, theme)[0] ?? plain;
-	};
-	const symbolLabel = (sym: SymbolInfo) =>
-		`${theme.fg("accent", sym.icon)} ${symbolName(sym.name)} ${theme.fg("dim", `line ${sym.line}`)}`;
-	const topLevel = symbols.filter(sym => sym.indent === topLevelIndent);
 
+	const topLevel = symbols.filter(s => s.indent === 0);
+	// The glyph keeps the accent; the name and signature read as code in the file's language.
+	const lang = getLanguageFromPath(fileName);
+	const symbolLabel = (sym: SymbolInfo) =>
+		`${theme.fg("accent", sym.icon)} ${highlightSourceLine(sym.name, lang, "accent", theme)}`;
+
+	const meta = [formatCount("symbol", symbols.length)];
+	if (showFile) meta.push(`in ${fileName}`);
 	return {
+		action: "symbols",
 		icon: symbols.length > 0 ? "success" : "warning",
-		meta: [formatCount("symbol", symbols.length)],
+		meta,
 		rows(expanded, width) {
-			const fullRows = symbols.map((sym, i) => `${prefixes[i]}${symbolLabel(sym)}`);
-			if (expanded) return { rows: fullRows };
-			const shown = topLevel.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS);
-			const hidden = symbols.length - shown.length;
-			// One hidden symbol that draws as one row renders instead of a `… 1 more symbol` row.
-			if (hidden === 1) {
-				const loneIndex = symbols.findIndex(sym => !shown.includes(sym));
-				if (fitsOneRow(fullRows[loneIndex], width)) return { rows: fullRows };
+			if (expanded) {
+				const rows: string[] = [];
+				for (let i = 0; i < symbols.length; i++) {
+					const sym = symbols[i];
+					const branch = isLast[i] ? theme.tree.last : theme.tree.branch;
+					const detail = isLast[i] ? "   " : `${theme.tree.vertical}  `;
+					rows.push(`${prefixes[i]}${theme.fg("dim", branch)} ${symbolLabel(sym)}`);
+					rows.push(`${prefixes[i]}${theme.fg("dim", detail)}${theme.fg("muted", `line ${sym.line}`)}`);
+				}
+				return { rows, hidden: false };
 			}
-			return {
-				rows: shown.map(symbolLabel),
-				more: hidden > 0 ? formatMoreRow(hidden, "symbol", theme) : undefined,
-			};
+			const collapsedRow = (sym: SymbolInfo) => `${symbolLabel(sym)} ${theme.fg("muted", `line ${sym.line}`)}`;
+			let shown = topLevel.slice(0, COLLAPSED_SYMBOLS);
+			// One hidden top-level symbol that draws as one row renders instead of a `… 1 more symbol` row.
+			if (
+				symbols.length === shown.length + 1 &&
+				topLevel.length === symbols.length &&
+				fitsOneRow(collapsedRow(topLevel[COLLAPSED_SYMBOLS]), width - treePrefixWidth(theme))
+			) {
+				shown = topLevel;
+			}
+			// The marker counts every hidden symbol, nested ones included, so it adds up to the header's count.
+			const hidden = symbols.length - shown.length;
+			const rows = renderTreeList(
+				{
+					items: shown,
+					width,
+					trailingSummary: hidden > 0 ? moreSummary(hidden, "symbol", theme, true) : "",
+					renderItem: collapsedRow,
+				},
+				theme,
+			);
+			return { rows, hidden: hidden > 0, markerLast: hidden > 0 };
 		},
 	};
 }
@@ -667,30 +834,39 @@ function symbolsView(lines: string[], lang: string | undefined, theme: Theme): L
 // Generic Rendering
 // =============================================================================
 
-/** Any other response (rename, code actions, status…): its lines, capped while collapsed. */
-function genericView(text: string, lines: string[], theme: Theme): LspResultView {
-	const hasError = text.includes("Error:") || text.includes(theme.status.error);
-	const hasSuccess = text.includes(theme.status.success) || text.includes("Applied");
-	const outputLines = lines.filter(line => line.trim().length > 0).map(line => replaceTabs(line));
+/** Any other response (rename, code actions, status…): one branch per output line, capped while collapsed. */
+function genericView(text: string, lines: string[], action: string | undefined, theme: Theme): LspResultView {
+	const hasError = text.includes("Error:") || hasStatusRow(action, lines, theme.status.error);
+	const hasSuccess = hasStatusRow(action, lines, theme.status.success) || text.includes("Applied");
+	const outputLines = lines.map(line => theme.fg("toolOutput", replaceTabs(line)));
 	return {
+		action: "request",
 		// The call completed; an error reported inside its output, or an empty
 		// answer ("No definition found"), needs attention.
 		icon: (hasError && !hasSuccess) || /^no\b.*\bfound\b/i.test(text.trim()) ? "warning" : "success",
 		meta: [],
 		rows(expanded, width) {
-			const shown = expanded
-				? outputLines
-				: outputLines.slice(
-						0,
-						cappedRowCount(outputLines.length, COLLAPSED_GENERIC_LINES, width, () =>
-							theme.fg("toolOutput", outputLines[COLLAPSED_GENERIC_LINES]),
-						),
-					);
-			const remaining = outputLines.length - shown.length;
-			return {
-				rows: shown.map(line => theme.fg("toolOutput", line)),
-				more: remaining > 0 ? formatMoreRow(remaining, "line", theme) : undefined,
-			};
+			if (expanded) {
+				const rows = renderTreeList({ items: outputLines, expanded, width, renderItem: line => line }, theme);
+				return { rows, hidden: false };
+			}
+			const shown = cappedRowCount(
+				outputLines.length,
+				COLLAPSED_GENERIC_LINES,
+				width - treePrefixWidth(theme),
+				() => outputLines[COLLAPSED_GENERIC_LINES],
+			);
+			const hidden = outputLines.length - shown;
+			const rows = renderTreeList(
+				{
+					items: outputLines.slice(0, shown),
+					width,
+					trailingSummary: hidden > 0 ? moreSummary(hidden, "line", theme, true) : "",
+					renderItem: line => line,
+				},
+				theme,
+			);
+			return { rows, hidden: hidden > 0, markerLast: hidden > 0 };
 		},
 	};
 }
@@ -853,9 +1029,10 @@ function statusRow(message: string, tone: "error" | "warning", key: string): Nat
 }
 
 /**
- * Diagnostics view: a card when there are diagnostics, failures or unverified files
- * (rows of severity icon · `file:line:col` · source · message), an inline `No issues`
- * otherwise. A failed server or a missing report is a row, never "No issues".
+ * Diagnostics view: a card when there are diagnostics, failed or partly failed servers,
+ * or unverified files (rows of severity icon · `file:line:col` · source · message), inline otherwise.
+ * Only a response with nothing to show reads `No issues`; a failed server or a missing
+ * report is a row, never "No issues".
  */
 function describeLspDiagnostics(request: Partial<LspParams> | undefined, fallbackAction: string, lines: string[]) {
 	const parsed = parseLspDiagnostics(lines);
@@ -874,9 +1051,11 @@ function describeLspDiagnostics(request: Partial<LspParams> | undefined, fallbac
 	];
 	if (parsed.other.length > 0) rows.push(keyed(code(parsed.other.join("\n"), { wrap: true }), "other"));
 	const hasErrors = parsed.failures.length > 0 || parsed.diagnostics.some(d => d.severity === "error");
-	const meta = compact<TspText>([counts, failed, unverified, !counts && !failed && !unverified && "No issues"]);
+	const meta = compact<TspText>([counts, failed, unverified, rows.length === 0 && "No issues"]);
 	const head = lspNativeHead(request, fallbackAction, meta);
-	if (parsed.diagnostics.length === 0 && parsed.failures.length === 0 && parsed.unreported.length === 0) {
+	const flagged =
+		parsed.diagnostics.length + parsed.failures.length + parsed.unreported.length + parsed.warnings.length;
+	if (flagged === 0) {
 		return { tool: head, inline: true, body: rows.length > 0 ? rows : undefined } satisfies NativeToolView;
 	}
 	return {
@@ -887,18 +1066,32 @@ function describeLspDiagnostics(request: Partial<LspParams> | undefined, fallbac
 	} satisfies NativeToolView;
 }
 
-/** References grouped by file (§7.3): a file row with the count, then the `line:col` positions. */
-function describeLspReferences(lines: string[]): NativeNode[] {
+/**
+ * References grouped by file (§7.3): a file row with the count, then each referencing
+ * line as numbered source, which Tern highlights by the file's path. References past
+ * the tool's context limit come without source and list as `line:col` positions.
+ */
+function describeLspReferences(references: readonly LspLocation[]): NativeNode[] {
 	const nodes: NativeNode[] = [];
-	for (const [file, locs] of groupReferencesByFile(lines)) {
+	for (const [file, locations] of groupReferencesByFile(references)) {
 		const name = plainText(file);
+		const sourceLines: NumberedLine[] = [];
+		const positions: string[] = [];
+		for (const location of locations) {
+			const line = location.context.find(context => context.mark);
+			if (!line) positions.push(formatPosition(location));
+			// Two references on one line share its source row.
+			else if (sourceLines.at(-1)?.n !== line.n) sourceLines.push({ ...line, text: plainText(line.text) });
+		}
+		const chip = { text: String(locations.length), title: formatCount("reference", locations.length) };
 		nodes.push(
 			keyed(
 				col(
-					[
-						fileRow(name, { chip: { text: String(locs.length), title: formatCount("reference", locs.length) } }),
-						text([span(locs.join("  "), "mono muted")], { wrap: "word" }),
-					],
+					compact([
+						fileRow(name, { chip }),
+						numberedCode(sourceLines, { path: name }),
+						positions.length > 0 && text([span(positions.join("  "), "mono muted")], { wrap: "word" }),
+					]),
 					{ gap: "xs" },
 				),
 				name,
@@ -906,34 +1099,6 @@ function describeLspReferences(lines: string[]): NativeNode[] {
 		);
 	}
 	return nodes;
-}
-
-/** Definition-style locations (§7.3): a file row with `:line:col`, then the numbered source context. */
-function describeLspLocations(
-	request: Partial<LspParams> | undefined,
-	fallbackAction: string,
-	parsed: LspLocations,
-): NativeToolView {
-	const body = parsed.locations.map(location => {
-		const file = plainText(location.file);
-		const context = location.context.map(line => ({ ...line, text: plainText(line.text) }));
-		return keyed(
-			col(
-				[fileRow(file, { range: `:${location.line}:${location.col}` }), ...numberedCode(context, { path: file })],
-				{
-					gap: "xs",
-				},
-			),
-			`${file}:${location.line}:${location.col}`,
-		);
-	});
-	return {
-		tool: lspNativeHead(request, fallbackAction, [formatCount(parsed.noun, parsed.count)]),
-		tone: parsed.count > 0 ? undefined : "warning",
-		inline: true,
-		body: body.length > 0 ? body : undefined,
-		preview: { lines: 8 },
-	};
 }
 
 function describeLspSymbols(lines: string[]): NativeNode | undefined {
@@ -959,9 +1124,33 @@ function describeLspSymbols(lines: string[]): NativeNode | undefined {
 	return roots.length > 0 ? node("tree", { nodes: roots }) : undefined;
 }
 
+/** Definition-style locations: a file row with `:line:col`, then the numbered source context. */
+function describeLspLocations(
+	request: Partial<LspParams> | undefined,
+	fallbackAction: string,
+	parsed: LspLocations,
+): NativeToolView {
+	const body = parsed.locations.map(location => {
+		const file = plainText(location.file);
+		const context = location.context.map(line => ({ ...line, text: plainText(line.text) }));
+		const range = `:${location.line}:${location.col}`;
+		const code = numberedCode(context, { path: file });
+		const header = fileRow(displayPath(file), { range, title: file });
+		return keyed(col(code ? [header, code] : [header], { gap: "xs" }), `${file}${range}`);
+	});
+	return {
+		tool: lspNativeHead(request, fallbackAction, [formatCount(parsed.noun, parsed.count)]),
+		tone: parsed.count > 0 ? undefined : "warning",
+		inline: true,
+		body: body.length > 0 ? body : undefined,
+		preview: { lines: PREVIEW_LIMITS.COLLAPSED_ITEMS },
+	};
+}
+
 function describeLspResult(result: ToolRenderResult<LspToolDetails>, args: LspParams | undefined): NativeToolView {
 	const request = args ?? result.details?.request;
 	const fallbackAction = result.details?.action ?? "request";
+	const action = request?.action ?? result.details?.action;
 	const content = result.content?.[0];
 	const text = content?.type === "text" ? (content.text ?? "") : "";
 	if (result.isError) return inlineErrorView(lspNativeHead(request, fallbackAction), text || "LSP request failed");
@@ -969,10 +1158,19 @@ function describeLspResult(result: ToolRenderResult<LspToolDetails>, args: LspPa
 
 	const lines = text.split("\n");
 	const locations = parseLspLocations(lines);
+	if (locations?.noun === "reference") {
+		const body = describeLspReferences(locations.locations);
+		return {
+			tool: lspNativeHead(request, fallbackAction, [formatCount("reference", locations.count)]),
+			tone: locations.count > 0 ? undefined : "warning",
+			inline: true,
+			body: body.length > 0 ? body : undefined,
+			preview: { lines: 8 },
+		};
+	}
 	if (locations) return describeLspLocations(request, fallbackAction, locations);
 
 	const statusError = activeThemeSymbol("status.error");
-	const refMatch = text.match(/(\d+)\s+reference\(s\)/);
 	const symbolsMatch = text.match(/Symbols in (.+):/);
 
 	if (/```(\w*)\n([\s\S]*?)```/.test(text)) {
@@ -980,21 +1178,10 @@ function describeLspResult(result: ToolRenderResult<LspToolDetails>, args: LspPa
 	}
 	if (
 		/\d+\s+(?:error|warning)\(s\)/.test(text) ||
-		text.includes(statusError) ||
+		hasStatusRow(action, lines, statusError) ||
 		(request?.action ?? fallbackAction) === "diagnostics"
 	) {
 		return describeLspDiagnostics(request, fallbackAction, lines);
-	}
-	if (refMatch) {
-		const refCount = Number.parseInt(refMatch[1], 10);
-		const body = describeLspReferences(lines);
-		return {
-			tool: lspNativeHead(request, fallbackAction, [formatCount("reference", refCount)]),
-			tone: refCount > 0 ? undefined : "warning",
-			inline: true,
-			body: body.length > 0 ? body : undefined,
-			preview: { lines: 8 },
-		};
 	}
 	if (symbolsMatch) {
 		const body = describeLspSymbols(lines);
@@ -1005,8 +1192,8 @@ function describeLspResult(result: ToolRenderResult<LspToolDetails>, args: LspPa
 			preview: { lines: 8 },
 		};
 	}
-	const hasError = text.includes("Error:") || text.includes(statusError);
-	const hasSuccess = text.includes(activeThemeSymbol("status.success")) || text.includes("Applied");
+	const hasError = text.includes("Error:") || hasStatusRow(action, lines, statusError);
+	const hasSuccess = hasStatusRow(action, lines, activeThemeSymbol("status.success")) || text.includes("Applied");
 	return {
 		tool: lspNativeHead(request, fallbackAction),
 		tone: hasError && !hasSuccess ? "error" : undefined,

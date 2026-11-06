@@ -3,7 +3,8 @@
  *
  *     <status> <Title>: <subject> [badge] <meta · meta>
  *
- * The status slot carries a `status.*` lifecycle glyph. The title is the fixed
+ * The status slot carries a `status.*` lifecycle glyph, or the caller's
+ * `iconOverride` (a per-tool icon). The title is the fixed
  * tool name and the subject the call's primary argument, identical across the
  * call, success, and failure.
  */
@@ -17,6 +18,9 @@ import { formatStatusIcon, type ToolUIStatus, truncateMiddleToWidth, wrapBracket
 /** Status icon, title, description, and metadata for a single header row. */
 export interface StatusLineOptions {
 	icon?: ToolUIStatus;
+	/** Pre-rendered glyph that replaces the status icon (e.g. a magnifier for
+	 * search-family tools). Takes precedence over `icon`. */
+	iconOverride?: string;
 	spinnerFrame?: number;
 	title: string;
 	description?: string;
@@ -37,7 +41,9 @@ function flattenForHeader(text: string): string {
 
 /** Render a single-line status header, flattening multiline fields. */
 export function renderStatusLine(options: StatusLineOptions, theme: Theme): string {
-	const icon = options.icon ? `${formatStatusIcon(options.icon, theme, options.spinnerFrame)} ` : "";
+	const glyph =
+		options.iconOverride ?? (options.icon ? formatStatusIcon(options.icon, theme, options.spinnerFrame) : "");
+	const icon = glyph ? `${glyph} ` : "";
 	let line = `${icon}${theme.fg("accent", flattenForHeader(options.title))}`;
 
 	if (options.description) {
@@ -73,14 +79,17 @@ export function renderFittedStatusLine(options: StatusLineOptions, theme: Theme,
 
 /**
  * The native form of {@link renderStatusLine}: header spans without the status
- * glyph, which the native card draws as its status chip.
+ * glyph, which the native card draws as its status chip; an `iconOverride`
+ * stays in the spans ahead of the title.
  */
 export function statusLineSpans(options: StatusLineOptions, theme: Theme): TspSpan[] {
 	// Callers may pre-style parts of a subject or meta (a dim `in`, a warning
 	// fact); convert those escapes to spans instead of passing them through.
 	const part = (text: string, color: ThemeColor): TspSpan[] =>
 		text.includes("\x1b") ? styledSpans(theme.fg(color, text)) : [span(text, color)];
-	const spans: TspSpan[] = [span(flattenForHeader(options.title), "accent")];
+	const spans: TspSpan[] = [];
+	if (options.iconOverride) spans.push(...styledSpans(options.iconOverride), span(" "));
+	spans.push(span(flattenForHeader(options.title), "accent"));
 	if (options.description) spans.push(span(": "), ...part(flattenForHeader(options.description), "muted"));
 	if (options.badge) {
 		spans.push(span(" "), span(wrapBrackets(flattenForHeader(options.badge.label), theme), options.badge.color));

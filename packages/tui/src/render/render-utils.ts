@@ -104,6 +104,8 @@ export const PREVIEW_LIMITS = {
 	EXPANDED_LINES: 12,
 	/** Items (files, results) shown in collapsed view */
 	COLLAPSED_ITEMS: 8,
+	/** Definition, type-definition and implementation locations shown in collapsed view */
+	LOCATIONS_COLLAPSED: 2,
 	/** Output preview lines in collapsed view */
 	OUTPUT_COLLAPSED: 3,
 	/** Output preview lines in expanded view */
@@ -381,10 +383,9 @@ export { formatAge, formatBytes, formatCount, formatDuration, formatNumber, plur
  */
 export function formatStatusIcon(status: ToolUIStatus, theme: Theme, spinnerFrame?: number): string {
 	switch (status) {
-		// Success is the common case: neutral gray keeps a transcript of settled
-		// calls from turning green; failures and warnings keep their colors.
 		case "success":
-			return theme.styledSymbol("status.success", "muted");
+		case "done":
+			return theme.styledSymbol("status.success", "success");
 		case "error":
 			return theme.styledSymbol("status.error", "error");
 		case "warning":
@@ -537,36 +538,31 @@ export function formatMissingPathRows(paths: readonly string[], theme: Theme): s
 }
 
 /**
- * Color of a file's name, or a whole URL, in tool bodies: bronze keeps paths
- * apart from the blue tool titles above them.
+ * Color of a file's name, or a whole URL, in tool bodies: it keeps paths apart
+ * from the tool titles above them (bronze in titanium).
  */
 export const FILE_NAME_COLOR = "customMessageLabel" satisfies ThemeColor;
 
 /**
- * A file path in a tool body: the directory dim, the final segment (file or
- * folder name) in {@link FILE_NAME_COLOR}. Headers keep paths in their plain
- * subject color instead.
+ * Where a display path's final segment (file or folder name) starts, past its
+ * last `/` or `\` separator; a trailing-slash directory keeps its slash on the
+ * name. Shared by the terminal ({@link formatStyledPath}) and Tern file rows.
  */
-export function formatStyledPath(filePath: string, theme: Theme): string {
-	const end = filePath.replace(/[/\\]+$/, "").length;
-	const slash = Math.max(filePath.lastIndexOf("/", end - 1), filePath.lastIndexOf("\\", end - 1));
-	if (end === 0 || slash < 0) return theme.fg(FILE_NAME_COLOR, filePath);
-	const dir = theme.fg("dim", filePath.slice(0, slash + 1));
-	return `${dir}${theme.fg(FILE_NAME_COLOR, filePath.slice(slash + 1))}`;
+export function pathNameStart(filePath: string): number {
+	let end = filePath.length;
+	while (end > 0 && (filePath[end - 1] === "/" || filePath[end - 1] === "\\")) end--;
+	return end === 0 ? 0 : Math.max(filePath.lastIndexOf("/", end - 1), filePath.lastIndexOf("\\", end - 1)) + 1;
 }
 
 /**
- * A search header subject, `subject in scope`, with `in` dim so the pattern
- * and the scope read as two parts of the muted subject.
+ * A file path in a tool body: the directory (with its trailing separator) dim,
+ * the final segment in {@link FILE_NAME_COLOR}. Tool headers keep paths in
+ * their plain subject color instead.
  */
-export function formatScopedSubject(
-	subject: string | undefined,
-	scope: string | undefined,
-	theme: Theme,
-): string | undefined {
-	if (!scope) return subject;
-	const keyword = theme.fg("dim", "in");
-	return subject ? `${subject} ${keyword} ${scope}` : `${keyword} ${scope}`;
+export function formatStyledPath(filePath: string, theme: Theme): string {
+	const cut = pathNameStart(filePath);
+	const name = theme.fg(FILE_NAME_COLOR, filePath.slice(cut));
+	return cut > 0 ? `${theme.fg("dim", filePath.slice(0, cut))}${name}` : name;
 }
 
 // =============================================================================
@@ -593,8 +589,11 @@ export function formatCodeFrameLine(
 // Tool UI Helpers
 // =============================================================================
 
-/** Status states supported by shared tool renderer icons. */
-export type ToolUIStatus = "success" | "error" | "warning" | "info" | "pending" | "running" | "aborted";
+/**
+ * Status states supported by shared tool renderer icons. `done` is a deprecated
+ * alias of `success`, kept for extension renderers.
+ */
+export type ToolUIStatus = "success" | "done" | "error" | "warning" | "info" | "pending" | "running" | "aborted";
 /** Semantic foreground colors used by tool renderer labels. */
 export type ToolUIColor = "success" | "error" | "warning" | "accent" | "muted";
 

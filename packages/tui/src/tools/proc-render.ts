@@ -195,7 +195,7 @@ function daemonMeta(daemon: DaemonSnapshot, theme: Theme): string[] {
 function jobRow(job: JobSnapshot, theme: Theme, outcome?: string): string {
 	const facts = jobRowFacts(job, theme);
 	if (outcome) facts.push(theme.fg("dim", outcome));
-	const label = safe(job.label);
+	const label = safe(job.intent || job.label);
 	if (label && label !== job.id) facts.push(theme.fg("muted", label));
 	return itemRow(jobStatusIcon(job.status), job.id, facts, theme);
 }
@@ -390,7 +390,7 @@ function jobItem(job: JobSnapshot, badge?: { text: string; tone: TspTone }): Nat
 		"item",
 		{
 			label: [span(job.type, "accent"), span(" "), span(safe(job.id), "toolOutput")],
-			detail: [span(safe(job.label), "muted")],
+			detail: [span(safe(job.intent || job.label), "muted")],
 			value: badge ? [span(badge.text, badge.tone)] : [span(formatDuration(job.durationMs), "muted")],
 			tone: badge?.tone ?? jobTone(job.status),
 		},

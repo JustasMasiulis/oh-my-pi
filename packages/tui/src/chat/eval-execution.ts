@@ -207,7 +207,6 @@ export class EvalExecutionComponent extends Container {
 		}
 		return super.render(width);
 	}
-
 	#updateDisplay(): void {
 		// Only the collapsed preview hides lines; when expanded the footer must
 		// not keep advertising hidden lines / ctrl+o.

@@ -12,7 +12,7 @@ import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Terminal as XtermTerminalType } from "@oh-my-pi/pi-utils/vterm";
 import { theme } from "../theme/theme";
 import type { OutputArtifactError } from "../tools/streaming-output";
-import type { TruncationMeta } from "../tools/output-meta";
+import type { MinimizedMeta, TruncationMeta } from "../tools/output-meta";
 import { resolveImageOptions } from "../render/render-utils";
 import { OutputPane, type OutputRowRange } from "../render/output-pane";
 import { createShellOutputStyler, inferShellOutputHints, type ShellOutputHints } from "../render/shell-output";
@@ -66,6 +66,7 @@ export class BashExecutionComponent extends Container {
 	readonly #bottomBorder: DynamicBorder;
 	#truncation?: TruncationMeta;
 	#artifactError?: OutputArtifactError;
+	#minimized?: MinimizedMeta;
 	#expanded = false;
 	// Post-finalize mutation counter (FinalizableBlock.getTranscriptBlockVersion):
 	// a completed command's block still mutates on expansion toggles, and the
@@ -209,6 +210,7 @@ export class BashExecutionComponent extends Container {
 				exitCode: this.#exitCode,
 				truncation: this.#truncation,
 				artifactError: this.#artifactError,
+				minimized: this.#minimized,
 			};
 			return dataFirst
 				? describeExecutionTool({
@@ -367,6 +369,7 @@ export class BashExecutionComponent extends Container {
 			output?: string;
 			truncation?: TruncationMeta;
 			artifactError?: OutputArtifactError;
+			minimized?: MinimizedMeta;
 			images?: readonly ImageContent[];
 			showImages?: boolean;
 		},
@@ -376,6 +379,7 @@ export class BashExecutionComponent extends Container {
 		this.#endedAt ??= performance.now();
 		this.#truncation = options?.truncation;
 		this.#artifactError = options?.artifactError;
+		this.#minimized = options?.minimized;
 		this.#images = options?.images ?? [];
 		this.#showImages = options?.showImages ?? true;
 		if (options?.output !== undefined && !this.#ptyMode) {
@@ -474,6 +478,7 @@ export class BashExecutionComponent extends Container {
 			const footer = buildStatusFooter({
 				truncation: this.#truncation,
 				artifactError: this.#artifactError,
+				minimized: this.#minimized,
 				hiddenLineCount,
 				suppressHiddenCount: hasSixelOutput,
 			});

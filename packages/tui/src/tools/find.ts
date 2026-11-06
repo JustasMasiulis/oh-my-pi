@@ -17,7 +17,6 @@ import {
 	formatErrorText,
 	formatExpandHint,
 	formatMoreRow,
-	formatScopedSubject,
 	formatStyledPath,
 	PREVIEW_LIMITS,
 	replaceTabs,
@@ -38,6 +37,7 @@ import type { TspTone } from "@oh-my-pi/pi-wire";
 import { code, col, compact, keyed, node, span, text } from "../native/describe";
 import type { NativeChild, NativeNode } from "../native/node";
 import { fileHref, fileRow, inlineErrorView } from "./native-view";
+import { formatScopedSubject } from "./grouped-file-output";
 import { splitUrlScheme } from "./url-scheme-host";
 
 /** A verified line range with its yes-probability and a one-line preview. */
@@ -177,6 +177,7 @@ function renderHit(hit: FindHit, rangeLimit: number, cwd: string | undefined, ra
 		return absPath === undefined ? text : fileHyperlink(absPath, text, { line });
 	};
 	const coverage = hit.truncated ? `${hit.linesSeen} lines judged, partial` : `${hit.linesSeen} lines judged`;
+	// URL hits show whole in the file-name color; file hits get the dim directory.
 	const label = isUrlHit ? theme.fg(FILE_NAME_COLOR, hit.rel) : formatStyledPath(hit.rel, theme);
 	const score = theme.fg(scoreColor(hit.contentScore), hit.contentScore.toFixed(2));
 	const head = `${gauge(hit.contentScore, theme)} ${score} ${link(label)} ${theme.fg("dim", coverage)}`;

@@ -42,6 +42,7 @@ type GithubToolRenderArgs = {
 const SUCCESS_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
 const FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "action_required", "startup_failure"]);
 const RUNNING_STATUSES = new Set(["in_progress"]);
+const PENDING_STATUSES = new Set(["queued", "requested", "waiting", "pending"]);
 /** Error lines shown under a failed call's header. */
 const MAX_ERROR_LINES = 5;
 
@@ -183,20 +184,22 @@ function getRunMeta(run: GhRunWatchRunDetails): string[] {
 	return parts;
 }
 
-/** The lifecycle of a workflow run or job, as a status icon state. */
-function workflowStatus(entry: { status?: string; conclusion?: string }): ToolUIStatus {
+/** The lifecycle of a workflow run or job, as its status glyph. */
+function workflowStatusIcon(entry: { status?: string; conclusion?: string }, theme: Theme): string {
 	if (entry.conclusion) {
-		if (SUCCESS_CONCLUSIONS.has(entry.conclusion)) return "success";
-		if (entry.conclusion === "cancelled") return "aborted";
-		if (FAILURE_CONCLUSIONS.has(entry.conclusion)) return "error";
+		if (SUCCESS_CONCLUSIONS.has(entry.conclusion)) return formatStatusIcon("success", theme);
+		if (entry.conclusion === "cancelled") return formatStatusIcon("aborted", theme);
+		if (FAILURE_CONCLUSIONS.has(entry.conclusion)) return formatStatusIcon("error", theme);
 	}
-	if (entry.status && RUNNING_STATUSES.has(entry.status)) return "running";
-	return "pending";
+	if (entry.status && RUNNING_STATUSES.has(entry.status)) return formatStatusIcon("running", theme);
+	if (entry.status && PENDING_STATUSES.has(entry.status)) return formatStatusIcon("pending", theme);
+	// An unrecognized state (e.g. a finished job with a new conclusion) claims neither queued nor settled.
+	return theme.styledSymbol("status.shadowed", "muted");
 }
 
 /** One run row (`<icon> <workflow> <branch> · #id`) with its jobs as tree children. */
 function renderRunRows(run: GhRunWatchRunDetails, theme: Theme): string[] {
-	const icon = formatStatusIcon(workflowStatus(run), theme);
+	const icon = workflowStatusIcon(run, theme);
 	const runMeta = theme.fg("dim", getRunMeta(run).join(theme.sep.dot));
 	const head = `${icon} ${theme.fg("accent", getRunLabel(run))} ${runMeta}`;
 	if (run.jobs.length === 0) {
@@ -205,7 +208,7 @@ function renderRunRows(run: GhRunWatchRunDetails, theme: Theme): string[] {
 	const jobRows = run.jobs.map(job => {
 		const duration = job.durationSeconds !== undefined ? ` ${theme.fg("dim", `${job.durationSeconds}s`)}` : "";
 		const name = theme.fg("toolOutput", replaceTabs(job.name));
-		return `${formatStatusIcon(workflowStatus(job), theme)} ${name}${duration}`;
+		return `${workflowStatusIcon(job, theme)} ${name}${duration}`;
 	});
 	return [head, ...nestRows(jobRows, theme)];
 }

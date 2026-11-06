@@ -7,6 +7,7 @@ import "@oh-my-pi/pi-coding-agent/internal-urls/router";
 
 import { ReadToolGroupComponent, readArgsCollapseIntoGroup } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import * as themeModule from "@oh-my-pi/pi-tui/theme";
+import { FILE_NAME_COLOR } from "@oh-my-pi/pi-tui/render/render-utils";
 import { cfgReadToolResultPreview } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { cfgTuiHyperlinks } from "@oh-my-pi/pi-coding-agent/modes/settings";
 
@@ -57,6 +58,24 @@ describe("ReadToolGroupComponent", () => {
 		expect(rendered.toLowerCase()).not.toContain("ctrl+o");
 	});
 
+	it("marks a completed read with the green success glyph", () => {
+		const component = new ReadToolGroupComponent();
+		const examplePath = path.resolve("/tmp/example.ts");
+		component.updateArgs({ path: examplePath }, "read-success");
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "line 1" }],
+			},
+			false,
+			"read-success",
+		);
+
+		const rendered = component.render(120).join("\n");
+		const plain = Bun.stripANSI(rendered);
+
+		expect(plain).toContain(`${themeModule.theme.status.success} Read`);
+		expect(rendered).toContain(themeModule.theme.fg("success", themeModule.theme.status.success));
+	});
 	it("nests one usage row beneath the last path from each read-only turn", () => {
 		const component = new ReadToolGroupComponent();
 		const onePath = path.resolve("/tmp/one.ts");
@@ -154,6 +173,21 @@ describe("ReadToolGroupComponent", () => {
 		expect(pathMatches).toBe(1);
 		expect(plain).toContain(`${renderPath}:507-605,1070-1194,…,1270-1274`);
 		expect(plain).not.toContain("1210-1240");
+	});
+
+	it("styles grouped rows' paths and mutes their selectors, merged lists included", () => {
+		const { theme } = themeModule;
+		const component = new ReadToolGroupComponent();
+		const renderPath = path.resolve("/tmp/render.ts");
+		component.updateArgs({ path: `${renderPath}:507-605` }, "read-one");
+		component.updateArgs({ path: `${renderPath}:1070-1194,1210-1240,1270-1274` }, "read-more");
+		// A second file keeps the reads as group rows rather than one header line.
+		component.updateArgs({ path: path.resolve("/tmp/other.ts") }, "read-other");
+
+		const rendered = component.render(120).join("\n");
+
+		expect(rendered).toContain(theme.fg(FILE_NAME_COLOR, "render.ts"));
+		expect(rendered).toContain(theme.fg("muted", ":507-605,1070-1194,…,1270-1274"));
 	});
 
 	it("uses result-provided recovered targets for delimited reads", () => {

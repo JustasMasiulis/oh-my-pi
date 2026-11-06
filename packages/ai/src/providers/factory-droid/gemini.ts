@@ -1,3 +1,4 @@
+import { resolveFactoryDroidPolicy } from "@oh-my-pi/pi-catalog/compat/factory-droid";
 import type { RequestPolicy } from "@oh-my-pi/pi-catalog/compat/types";
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
@@ -25,7 +26,8 @@ import {
 } from "../google-shared";
 import type { GenerateContentResponse, Part } from "../google-types";
 import { transformMessages } from "../transform-messages";
-import { factoryDroidToolNamesByWire, sanitizeFactoryDroidToolName } from "./tool-names";
+import { toolNamesByWire } from "../../utils/tool-names";
+import { sanitizeFactoryDroidToolName } from "./tool-names";
 
 /** Factory's Gemini endpoint speaks native generateContent SSE at `/api/llm/g/v1/generate`. */
 
@@ -85,6 +87,19 @@ const GOOGLE_APIS: Record<string, true> = {
 	"google-gemini-cli": true,
 };
 
+/** Whether Factory serves `model` on this Gemini generate wire rather than through an inner Anthropic or OpenAI model. */
+export function isFactoryDroidGeminiWire(model: Pick<Model, "id" | "requestModelId">): boolean {
+	return resolveFactoryDroidPolicy(model)?.wire === "google-generate";
+}
+
+/**
+ * Whether {@link adoptFactoryReplay} may keep `turn`'s opaque reasoning payload
+ * (thinking and call signatures): only a Google-origin turn's survive.
+ */
+export function keepsFactoryGeminiReasoning(turn: Pick<AssistantMessage, "api">): boolean {
+	return GOOGLE_APIS[turn.api] === true;
+}
+
 /**
  * Apply Factory's replay provenance before canonical normalization: only
  * signed, Google-origin thinking and Google-origin call signatures survive;
@@ -104,9 +119,9 @@ const GOOGLE_APIS: Record<string, true> = {
  * Responses-origin call), and with its reasoning already gone there is
  * nothing left for a cross-model pass to demote.
  */
-function adoptFactoryReplay(message: Message, model: Model<"factory-droid-agent">): Message {
+export function adoptFactoryReplay(message: Message, model: Model<"factory-droid-agent">): Message {
 	if (message.role !== "assistant") return message;
-	const googleOrigin = GOOGLE_APIS[message.api] === true;
+	const googleOrigin = keepsFactoryGeminiReasoning(message);
 	const sameModel = googleOrigin && message.provider === model.provider && message.model === model.id;
 	const content: AssistantMessage["content"] = [];
 	for (const block of message.content) {
@@ -250,7 +265,7 @@ function toGeminiContents(
 	};
 }
 
-function toGeminiTools(tools: Tool[] | undefined): Array<{ functionDeclarations: unknown[] }> | undefined {
+export function toGeminiTools(tools: Tool[] | undefined): Array<{ functionDeclarations: unknown[] }> | undefined {
 	if (!tools || tools.length === 0) return undefined;
 	return [
 		{
@@ -333,7 +348,7 @@ export function streamFactoryDroidGemini(
 								},
 				},
 			};
-			const toolNamesByWire = factoryDroidToolNamesByWire(context.tools);
+			const wireNames = toolNamesByWire(context.tools, sanitizeFactoryDroidToolName);
 			const tools = toGeminiTools(context.tools);
 			if (tools) body.tools = tools;
 			const replacement = await options.onPayload?.(body, model, options.signal);
@@ -420,7 +435,7 @@ export function streamFactoryDroidGemini(
 						const toolCall: ToolCall = {
 							type: "toolCall",
 							id: nextToolCallId(wireName || "tool"),
-							name: toolNamesByWire.get(wireName) ?? wireName,
+							name: wireNames.get(wireName) ?? wireName,
 							arguments: part.functionCall.args ?? {},
 							...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}),
 						};

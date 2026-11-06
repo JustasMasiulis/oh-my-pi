@@ -19,6 +19,8 @@ export type SymbolKey =
 	| "status.running"
 	| "status.shadowed"
 	| "status.aborted"
+	/** @deprecated Alias of `status.success`; kept so extensions and theme overrides that name it keep working. */
+	| "status.done"
 	// Navigation
 	| "nav.cursor"
 	| "nav.selected"
@@ -107,6 +109,8 @@ export type SymbolKey =
 	| "icon.job"
 	| "icon.cache"
 	| "icon.cacheMiss"
+	| "icon.cacheWarm"
+	| "icon.cacheCold"
 	| "icon.input"
 	| "icon.output"
 	| "icon.throughput"
@@ -211,6 +215,8 @@ export type SymbolKey =
 	| "advisor.rail"
 	// Skill callout rail (user turn that opened with a skill chip)
 	| "skill.rail"
+	// /btw steering-prompt rail (the <inject> block a side answer drafted)
+	| "btw.rail"
 	// Language/file type icons
 	| "lang.default"
 	| "lang.typescript"
@@ -264,6 +270,31 @@ export type SymbolKey =
 	| "tab.memory"
 	| "tab.tasks"
 	| "tab.providers"
+	// Tool identity icons
+	| "tool.write"
+	| "tool.edit"
+	| "tool.bash"
+	| "tool.ssh"
+	| "tool.lsp"
+	| "tool.gh"
+	| "tool.webSearch"
+	| "tool.exa"
+	| "tool.browser"
+	| "tool.eval"
+	| "tool.debug"
+	| "tool.mcp"
+	| "tool.job"
+	| "tool.launch"
+	| "tool.task"
+	| "tool.todo"
+	| "tool.memory"
+	| "tool.ask"
+	| "tool.resolve"
+	| "tool.review"
+	| "tool.goal"
+	| "tool.irc"
+	| "tool.delete"
+	| "tool.move"
 	// Keyboard keys (rendered by formatKeyHint). `*Mac` variants replace the
 	// generic modifier on macOS, whose keycaps are labelled with ⌃ ⌥ ⌘.
 	| "key.ctrl"
@@ -378,6 +409,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"status.running": "⟳",
 	"status.shadowed": "○",
 	"status.aborted": "⏹",
+	"status.done": "✔",
 	// Navigation
 	"nav.cursor": "❯",
 	"nav.selected": "➤",
@@ -467,6 +499,8 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"icon.job": "⚙",
 	"icon.cache": "💾",
 	"icon.cacheMiss": "⊘",
+	"icon.cacheWarm": "●",
+	"icon.cacheCold": "⊘",
 	"icon.input": "⤵",
 	"icon.output": "⤴",
 	"icon.throughput": "⚡",
@@ -571,6 +605,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	// Advisor note rail (heavier than md.quoteBorder so notes read as a distinct voice)
 	"advisor.rail": "▎",
 	"skill.rail": "▎",
+	"btw.rail": "▎",
 	// Language/file icons (emoji-centric, no Nerd Font required)
 	"lang.default": "⌘",
 	"lang.typescript": "🟦",
@@ -626,6 +661,31 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"tab.memory": "🧠",
 	"tab.tasks": "📦",
 	"tab.providers": "🌐",
+	// Tool identity icons (per-tool signature glyph on the success header)
+	"tool.write": "✎",
+	"tool.edit": "✎",
+	"tool.bash": "❯",
+	"tool.ssh": "⇄",
+	"tool.lsp": "💡",
+	"tool.gh": "⎇",
+	"tool.webSearch": "⌕",
+	"tool.exa": "🔭",
+	"tool.browser": "🌐",
+	"tool.eval": "▶",
+	"tool.debug": "🐞",
+	"tool.mcp": "🔌",
+	"tool.job": "⚙",
+	"tool.launch": "🚀",
+	"tool.task": "⇶",
+	"tool.todo": "☑",
+	"tool.memory": "🧠",
+	"tool.ask": "?",
+	"tool.resolve": "✓",
+	"tool.review": "◉",
+	"tool.goal": "◎",
+	"tool.irc": "✉",
+	"tool.delete": "🗑",
+	"tool.move": "➜",
 	// Keys: word modifiers off macOS (⌃/⌥/⌘ name no key on a PC keyboard)
 	"key.ctrl": "Ctrl",
 	"key.ctrlMac": "⌃",
@@ -669,6 +729,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"status.shadowed": "\uf10c",
 	// pick:  | alt:  
 	"status.aborted": "\uf04d",
+	// alias of status.success
+	"status.done": "\uf00c",
 	// Navigation
 	// pick:  | alt:  
 	"nav.cursor": "\uf054",
@@ -833,6 +895,10 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.cache": "\uf1c0",
 	// pick:  (fa-ban) | alt: ⊘
 	"icon.cacheMiss": "\uf05e",
+	// pick: 󱘲 (nf-md-database_outline) | alt: 
+	"icon.cacheWarm": "\u{f1632}",
+	// pick: 󱘱 (nf-md-database_off_outline): the warm glyph struck through | alt: 
+	"icon.cacheCold": "\u{f1631}",
 	// pick:  | alt:  →
 	"icon.input": "\uf090",
 	// pick:  | alt:  →
@@ -1018,6 +1084,7 @@ const NERD_SYMBOLS: SymbolMap = {
 	// pick: ▎ | alt: ┃ │
 	"advisor.rail": "▎",
 	"skill.rail": "▎",
+	"btw.rail": "▎",
 	// Language icons (nerd font devicons)
 	"lang.default": "",
 	"lang.typescript": "\u{E628}",
@@ -1074,6 +1141,31 @@ const NERD_SYMBOLS: SymbolMap = {
 	"tab.memory": "󰧑",
 	"tab.tasks": "󰐱",
 	"tab.providers": "󰖟",
+	// Tool identity icons (per-tool signature glyph on the success header)
+	"tool.write": "\uEA7F",
+	"tool.edit": "\uEA73",
+	"tool.bash": "\uEBCA",
+	"tool.ssh": "\uEB3A",
+	"tool.lsp": "\uEA61",
+	"tool.gh": "\uEA84",
+	"tool.webSearch": "\uEB01",
+	"tool.exa": "\uEB68",
+	"tool.browser": "\uEAAE",
+	"tool.eval": "\uEBAF",
+	"tool.debug": "\uEAD8",
+	"tool.mcp": "\uEB2D",
+	"tool.job": "\uEBA2",
+	"tool.launch": "\uF135",
+	"tool.task": "\uf4a0",
+	"tool.todo": "\uEAB3",
+	"tool.memory": "\uEACE",
+	"tool.ask": "\uEAC7",
+	"tool.resolve": "\uEBB1",
+	"tool.review": "\uEA70",
+	"tool.goal": "\uEBF8",
+	"tool.irc": "\uF086",
+	"tool.delete": "\uf12d",
+	"tool.move": "\uf061",
 	// Keys: word modifiers off macOS; arrows stay Unicode (nerd arrows add nothing)
 	"key.ctrl": "Ctrl",
 	// pick: 󰘴 (nf-md-apple_keyboard_control) | alt: ⌃
@@ -1117,15 +1209,18 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"status.running": "[~]",
 	"status.shadowed": "[/]",
 	"status.aborted": "[#]",
+	"status.done": "[+]",
 	// Navigation
 	"nav.cursor": ">",
 	"nav.selected": "->",
 	"nav.expand": "+",
 	"nav.collapse": "-",
 	"nav.back": "<-",
-	// Tree Connectors
-	"tree.branch": "|--",
-	"tree.last": "'--",
+	// Tree Connectors: branches are two columns, like the Unicode `├─`, so a
+	// branch and its space match the three-column continuation (`|  `) that
+	// child rows hang under.
+	"tree.branch": "|-",
+	"tree.last": "'-",
 	"tree.vertical": "|",
 	"tree.horizontal": "-",
 	"tree.hook": "`-",
@@ -1210,6 +1305,8 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"icon.intelligence": "IQ",
 	"icon.cache": "cache",
 	"icon.cacheMiss": "!",
+	"icon.cacheWarm": "cache",
+	"icon.cacheCold": "!cache",
 	"icon.input": "in:",
 	"icon.host": "host",
 	"icon.session": "id",
@@ -1306,6 +1403,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"md.colorSwatch": "[]",
 	"advisor.rail": "|",
 	"skill.rail": "|",
+	"btw.rail": "|",
 	// Language icons (ASCII uses abbreviations)
 	"lang.default": "code",
 	"lang.typescript": "ts",
@@ -1359,6 +1457,31 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"tab.memory": "[Y]",
 	"tab.tasks": "[K]",
 	"tab.providers": "[P]",
+	// Tool identity icons (per-tool signature glyph on the success header)
+	"tool.write": "+f",
+	"tool.edit": "~",
+	"tool.bash": "$",
+	"tool.ssh": "ssh",
+	"tool.lsp": "lsp",
+	"tool.gh": "gh",
+	"tool.webSearch": "web",
+	"tool.exa": "exa",
+	"tool.browser": "[w]",
+	"tool.eval": ">_",
+	"tool.debug": "dbg",
+	"tool.mcp": "<>",
+	"tool.job": "job",
+	"tool.launch": "run",
+	"tool.task": ">>>",
+	"tool.todo": "[x]",
+	"tool.memory": "mem",
+	"tool.ask": "[?]",
+	"tool.resolve": "[v]",
+	"tool.review": "rev",
+	"tool.goal": "(o)",
+	"tool.irc": "#",
+	"tool.delete": "rm",
+	"tool.move": "mv",
 	"key.ctrl": "Ctrl",
 	"key.ctrlMac": "Ctrl",
 	"key.shift": "Shift",

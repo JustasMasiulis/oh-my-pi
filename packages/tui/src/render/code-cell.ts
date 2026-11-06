@@ -62,6 +62,7 @@ export interface MarkdownCellOptions extends CellOptions {
 function getState(header: StatusLineOptions): State | undefined {
 	switch (header.icon) {
 		case "success":
+		case "done":
 			return "success";
 		case "error":
 		case "aborted":

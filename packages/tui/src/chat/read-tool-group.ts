@@ -3,7 +3,7 @@ import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
 import { type Component } from "../tui";
 import { Container } from "../tui";
 import { Text } from "../components/text";
-import { getLanguageFromPath, theme } from "../theme";
+import { getLanguageFromPath, theme, type ThemeColor } from "../theme";
 import { parseLineRanges, selectorLineRanges } from "../tools/line-ranges";
 import {
 	type ReadRenderArgs,
@@ -12,6 +12,7 @@ import {
 	readResultIsMarkdown,
 	readSourceFsPath,
 	splitPathAndSel,
+	splitReadQuery,
 } from "../tools/read";
 import {
 	cappedRowCount,
@@ -31,11 +32,13 @@ import {
 	renderFittedStatusLine,
 	renderMarkdownCell,
 	type StatusLineOptions,
+	urlHyperlinkAlways,
 } from "../render";
 import { wrapPrefixedLine, wrapTreeLine } from "../render/hanging-wrap";
 import { replaceTabs, visibleWidth } from "../utils";
 import { canonicalizeMessage } from "./thinking-display";
 import { internalUrlSchemeSpec, splitUrlScheme } from "../tools/url-scheme-host";
+import { SpotlightNotices } from "./spotlight";
 import type { ToolExecutionHandle } from "./tool-execution";
 import { formatUsageRow } from "../overlays/usage-row";
 import { formatCount, isUrlLikePath, sanitizeText, sanitizeTextDeep } from "@oh-my-pi/pi-utils";
@@ -51,7 +54,7 @@ import {
 } from "../native/node";
 import { plainText } from "../native/spans";
 import { Memo } from "../native/memo";
-import { fileHref, fileRow, inlineErrorView } from "../tools/native-view";
+import { fileHref, fileRow, inlineErrorView, resultText, urlHref } from "../tools/native-view";
 
 /**
  * Extract the read call's target path. `path` is the canonical arg; `file_path`
@@ -174,6 +177,21 @@ const COLLAPSED_PREVIEW_LINES = PREVIEW_LIMITS.OUTPUT_COLLAPSED;
  * source line and Markdown is clamped by each file's native card after rendering.
  */
 const TRIMMED_BODY_PREVIEW = { lines: 1000 } as const;
+
+/** How a read path is painted: its path (`isUrl` for a whole URL) and its selectors' color (plain when unset). */
+interface PathPaint {
+	path(filePath: string, isUrl: boolean): string;
+	selectors?: ThemeColor;
+}
+
+/** Header paths stay plain so they take the status line's subject color. */
+const HEADER_PATH_PAINT: PathPaint = { path: filePath => filePath };
+
+/** Group rows share the tool-body path style with muted selectors. */
+const ROW_PATH_PAINT: PathPaint = {
+	path: (filePath, isUrl) => (isUrl ? theme.fg(FILE_NAME_COLOR, filePath) : formatStyledPath(filePath, theme)),
+	selectors: "muted",
+};
 
 /** Native item tone per read status; successful reads stay neutral. */
 const READ_STATUS_TONE: Record<ReadEntry["status"], "pending" | "warning" | "error" | undefined> = {
@@ -432,6 +450,8 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	#blockVersion = 0;
 	#displayVersion = 0;
 	readonly #native = new Memo();
+	// The reads' Spotlight notices, drawn after the group in a native transcript (see nativeTrailers).
+	readonly #spotlight = new SpotlightNotices();
 	/** Content previews toggled in the terminal, by tool call id. */
 	#previewCollapsed = new Map<string, boolean>();
 
@@ -521,6 +541,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	/** Remove one call without discarding successful siblings in the shared group. */
 	removeEntry(toolCallId: string): boolean {
 		if (!this.#entries.delete(toolCallId)) return this.#entries.size === 0;
+		this.#spotlight.set(toolCallId, undefined, "");
 		this.#updateDisplay();
 		return this.#entries.size === 0;
 	}
@@ -535,6 +556,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		if (!entry) return;
 		if (isPartial) return;
 		this.#blockVersion++;
+		this.#spotlight.set(toolCallId, result.details, resultText(result));
 		// `details` can contain raw file text and filesystem paths. Keep the
 		// latter for links while only the sanitized copy supplies display labels.
 		const rawDetails = result.details as ReadToolDetails | undefined;
@@ -624,7 +646,13 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	setToolActivityVisible(visible: boolean): void {
 		this.#toolActivityVisible = visible;
+		this.#spotlight.setHidden(!visible);
 		super.invalidate();
+	}
+
+	/** The reads' Spotlight notices, in order: blocks of their own right after the group's card. */
+	nativeTrailers(): readonly Component[] {
+		return this.#spotlight.list();
 	}
 
 	getComponent(): Component {
@@ -747,7 +775,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		return {
 			target: filePath ? `${filePath}${split.sel ? `:${split.sel}` : ""}` : "…",
 			targetKind: "path",
-			href: fileHref(linkPathForTargets(row.targets)),
+			href: fileHref(linkPathForTargets(row.targets)) ?? urlHref(split.path),
 			meta: correctedFrom ? [`corrected from ${shortenPath(correctedFrom)}`] : undefined,
 			badges: conflicts ? [{ text: formatCount("conflict", conflicts), tone: "warning" }] : undefined,
 		};
@@ -768,7 +796,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 					: undefined;
 		return fileRow(shortenPath(split.sel ? split.path : row.targetPath), {
 			range: split.sel ? `:${split.sel}` : undefined,
-			href: fileHref(linkPathForTargets(row.targets)),
+			href: fileHref(linkPathForTargets(row.targets)) ?? urlHref(split.path),
 			icon: status === "error" ? "x-circle" : undefined,
 			tone: READ_STATUS_TONE[status],
 			chip: conflicts ? { text: formatCount("conflict", conflicts) } : undefined,
@@ -967,7 +995,9 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			const row = displayRows[0]!;
 			if (!this.#shouldRenderPreviewRow(row)) {
 				const icon = this.#statusForTargets(row.targets);
-				this.addChild(fittedHeader({ icon, title: "Read", description: this.#formatRowPath(row, true) }));
+				this.addChild(
+					fittedHeader({ icon, title: "Read", description: this.#formatRowPath(row, HEADER_PATH_PAINT) }),
+				);
 				this.#appendUsageRows(lines, this.#usageRowsBySummaryRow(displayRows).get(0) ?? [], "  ");
 				body.setText(lines.join("\n"));
 				this.addChild(body);
@@ -1129,13 +1159,13 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	}
 
 	/** A row's path: styled in the body, or plain in a header so it takes the subject color. */
-	#formatRowPath(row: ReadSummaryRow, header = false): string {
-		return this.#formatPathValue(row.targetPath, {
+	#formatRowPath(row: ReadSummaryRow, paint = ROW_PATH_PAINT): string {
+		return this.#formatPathValue(row.targetPath, paint, {
 			correctedFrom: this.#correctedFromForTargets(row.targets),
 			conflictCount: this.#conflictCountForTargets(row.targets),
 			line: firstSelectorLineForTargets(row.targets),
 			linkPath: linkPathForTargets(row.targets),
-			header,
+			basePath: row.basePath,
 		});
 	}
 
@@ -1183,47 +1213,39 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	#formatPathValue(
 		value: string,
+		paint: PathPaint,
 		options: {
 			correctedFrom?: string;
 			conflictCount?: number;
 			line?: number;
 			linkPath?: string;
-			header?: boolean;
+			/** The path `value` selects from; merged selectors (`1-5,…,9`) do not parse back out of it. */
+			basePath?: string;
 		} = {},
 	): string {
-		const split = splitPathAndSel(value);
-		const base = split.sel ? split.path : value;
-		const isUrl = isUrlLikePath(base);
-		// `?q=…` queries read like selectors: muted after the path, outside its link.
-		const queryIndex = isUrl ? -1 : base.indexOf("?");
-		const hasQuery = queryIndex > 0;
-		const filePath = shortenPath(hasQuery ? base.slice(0, queryIndex) : base);
-		const query = hasQuery ? base.slice(queryIndex) : "";
-		const selectors = split.sel ? `${query}:${split.sel}` : query;
-		let pathDisplay: string;
-		if (!filePath) {
-			pathDisplay = theme.fg("toolOutput", "…");
-		} else if (options.header) {
-			// Headers keep the plain subject color.
-			pathDisplay = filePath;
-		} else if (isUrl) {
-			// Body rows show URLs whole in the file-name color.
-			pathDisplay = theme.fg(FILE_NAME_COLOR, filePath);
-		} else {
-			pathDisplay = formatStyledPath(filePath, theme);
-		}
+		const { basePath } = options;
+		const split =
+			basePath !== undefined && value.startsWith(`${basePath}:`)
+				? { path: basePath, sel: value.slice(basePath.length + 1) }
+				: splitPathAndSel(value);
+		// `?q=…` queries read like selectors: they follow the path, outside its link.
+		const target = splitReadQuery(split.sel ? split.path : value);
+		const filePath = shortenPath(target.path);
+		const selectors = split.sel ? `${target.query ?? ""}:${split.sel}` : (target.query ?? "");
+		let pathDisplay = filePath ? paint.path(filePath, isUrlLikePath(target.path)) : theme.fg("toolOutput", "…");
 		if (filePath && options.linkPath) {
 			const linkOptions = options.line !== undefined ? { line: options.line } : undefined;
 			pathDisplay = fileHyperlink(options.linkPath, pathDisplay, linkOptions);
+		} else if (filePath && isUrlLikePath(target.path)) {
+			// Text mode needs the same URL fallback as the native head, or a
+			// transcript without native rendering keeps the URL unclickable.
+			pathDisplay = urlHyperlinkAlways(urlHref(target.path) ?? target.path, pathDisplay);
 		}
-		if (selectors) {
-			pathDisplay += options.header ? selectors : theme.fg("muted", selectors);
-		}
+		if (selectors) pathDisplay += paint.selectors ? theme.fg(paint.selectors, selectors) : selectors;
 		if (options.correctedFrom) {
 			pathDisplay += theme.fg("dim", ` (corrected from ${shortenPath(options.correctedFrom)})`);
 		}
-		pathDisplay += this.#formatConflictBadge(options.conflictCount);
-		return pathDisplay;
+		return pathDisplay + this.#formatConflictBadge(options.conflictCount);
 	}
 
 	#formatConflictBadge(conflictCount: number | undefined): string {
@@ -1242,12 +1264,11 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		const lang = getLanguageFromPath(split.path);
 		const pathValue = shortenPath(entry.path);
 		const pathDisplay = pathValue
-			? this.#formatPathValue(entry.path, {
+			? this.#formatPathValue(entry.path, HEADER_PATH_PAINT, {
 					correctedFrom: entry.correctedFrom,
 					conflictCount: entry.conflictCount,
 					line: firstSelectorLine(split.sel),
 					linkPath: readTargetLinkPath(split.path, entry.linkPath),
-					header: true,
 				})
 			: "";
 		const header: StatusLineOptions = {

@@ -310,7 +310,7 @@ export function getMarkdownTheme(): MarkdownTheme {
 					})
 			: undefined,
 		highlightCode: (code: string, lang?: string): string[] => {
-			const validLang = lang && nativeSupportsLanguage(lang) ? lang : undefined;
+			const validLang = isHighlightLanguage(lang) ? lang : undefined;
 			const highlighted = highlightCached(code, validLang, theme);
 			if (highlighted !== null) return highlighted.split("\n");
 			return code.split("\n").map(line => theme.fg("mdCodeBlock", line));

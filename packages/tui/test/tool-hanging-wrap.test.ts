@@ -160,7 +160,7 @@ describe("prefixed tool rows", () => {
 		}
 	});
 
-	it("hangs Ask option descriptions and LSP hover code beneath their prefix", async () => {
+	it("hangs Ask option descriptions beneath their prefix and wraps LSP hover code", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		const ask = plain(
 			askToolRenderer
@@ -185,16 +185,18 @@ describe("prefixed tool rows", () => {
 		expect(ask[description + 1]).toContain("card.");
 		expect(ask[description + 1].search(/[^│\s]/)).toBe(ask[description].indexOf("This detailed"));
 
-		const hover = plain(
-			renderLspResult(
-				{ content: [{ type: "text", text: `\`\`\`ts\nconst note = "${"long text ".repeat(12)}";\n\`\`\`` }] },
-				{ expanded: true, isPartial: false },
-				theme,
-			).render(width),
-		);
-		const codeRow = hover.findIndex(row => row.includes("const note"));
-		expect(codeRow).toBeGreaterThan(0);
-		expect(hover[codeRow + 1]).toContain("long text");
-		expect(hover[codeRow + 1].search(/\S/)).toBe(hover[codeRow].indexOf("const note"));
+		for (const expanded of [true, false]) {
+			const hover = plain(
+				renderLspResult(
+					{ content: [{ type: "text", text: `\`\`\`ts\nconst note = "${"long text ".repeat(12)}";\n\`\`\`` }] },
+					{ expanded, isPartial: false },
+					theme,
+				).render(width),
+			);
+			// The flush card indents its body two columns.
+			const codeRow = hover.findIndex(row => row.startsWith("  const note"));
+			expect(codeRow).toBeGreaterThan(0);
+			expect(hover[codeRow + 1]).toContain("long text");
+		}
 	});
 });
